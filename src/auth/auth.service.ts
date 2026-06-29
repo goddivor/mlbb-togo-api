@@ -28,6 +28,8 @@ const EMPTY_GAME_PROFILE = {
   country: null,
   stats: {},
   frequentHeroes: [],
+  seasons: [],
+  currentSeason: null,
 };
 
 @Injectable()
@@ -102,22 +104,67 @@ export class AuthService {
 
   // ============ Connexion / liaison MLBB (code de vérification) ============
 
+  /** Mappe les héros fréquents bruts de l'API MLBB vers notre format. */
+  private mapFrequentHeroes(result: any): any[] {
+    return (Array.isArray(result) ? result : []).map((h: any) => ({
+      heroId: h.hid,
+      name: h.hid_e?.n ?? `#${h.hid}`,
+      image: h.hid_e?.ix ?? null,
+      image2x: h.hid_e?.i2x ?? null,
+      matches: h.tc ?? 0,
+      wins: h.wc ?? 0,
+      winRate: h.tc ? Math.round(((h.wc ?? 0) / h.tc) * 1000) / 10 : 0,
+      power: h.p ?? 0,
+    }));
+  }
+
+  /** Liste des saisons du joueur (sids), la plus récente en tête. */
+  private async fetchSeasons(token: string): Promise<number[]> {
+    try {
+      const res = await fetch(`${MLBB_API}/user/season`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json: any = await res.json();
+      const sids = json?.data?.sids;
+      return Array.isArray(sids) ? sids : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Héros fréquents du joueur pour une saison donnée (sid OBLIGATOIRE côté API). */
+  private async fetchFrequentHeroes(token: string, sid: number, limit = 8): Promise<any[]> {
+    try {
+      const res = await fetch(
+        `${MLBB_API}/user/heroes/frequent?sid=${sid}&limit=${limit}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const json: any = await res.json();
+      return this.mapFrequentHeroes(json?.data?.result);
+    } catch {
+      return [];
+    }
+  }
+
   /**
-   * Récupère le profil de jeu complet (identité + statistiques + héros favoris)
-   * via l'API MLBB. Tolérant aux pannes : renvoie ce qui a pu être obtenu.
+   * Récupère le profil de jeu complet : identité + statistiques globales
+   * (« tous modes », `/user/stats` ne segmente pas par mode) + saisons +
+   * héros favoris de la saison courante. Tolérant aux pannes.
    */
   private async fetchGameProfile(token: string) {
     const headers = { Authorization: `Bearer ${token}` };
-    const [infoR, statsR, freqR] = await Promise.allSettled([
-      fetch(`${MLBB_API}/user/info`, { headers }).then((r) => r.json()),
-      fetch(`${MLBB_API}/user/stats`, { headers }).then((r) => r.json()),
-      fetch(`${MLBB_API}/user/heroes/frequent?limit=8`, { headers }).then((r) => r.json()),
+    const [infoR, statsR, seasons] = await Promise.all([
+      fetch(`${MLBB_API}/user/info`, { headers }).then((r) => r.json()).catch(() => null),
+      fetch(`${MLBB_API}/user/stats`, { headers }).then((r) => r.json()).catch(() => null),
+      this.fetchSeasons(token),
     ]);
 
-    const info = infoR.status === 'fulfilled' ? infoR.value?.data ?? {} : {};
-    const st = statsR.status === 'fulfilled' ? statsR.value?.data ?? {} : {};
-    const freq =
-      freqR.status === 'fulfilled' ? freqR.value?.data?.result ?? [] : [];
+    const info = infoR?.data ?? {};
+    const st = statsR?.data ?? {};
+    // Les héros favoris exigent un sid : on prend la saison la plus récente.
+    const currentSeason = seasons.length ? seasons[0] : null;
+    const frequentHeroes =
+      currentSeason != null ? await this.fetchFrequentHeroes(token, currentSeason) : [];
 
     const wins = st.wc ?? 0;
     const total = st.tc ?? 0;
@@ -132,17 +179,6 @@ export class AuthService {
       winStreak: st.wsc ?? 0,
     };
 
-    const frequentHeroes = (Array.isArray(freq) ? freq : []).map((h: any) => ({
-      heroId: h.hid,
-      name: h.hid_e?.n ?? `#${h.hid}`,
-      image: h.hid_e?.ix ?? null,
-      image2x: h.hid_e?.i2x ?? null,
-      matches: h.tc ?? 0,
-      wins: h.wc ?? 0,
-      winRate: h.tc ? Math.round(((h.wc ?? 0) / h.tc) * 1000) / 10 : 0,
-      power: h.p ?? 0,
-    }));
-
     return {
       nickname: info.name || null,
       avatar: info.avatar || null,
@@ -151,7 +187,18 @@ export class AuthService {
       country: info.reg_country || null,
       stats,
       frequentHeroes,
+      seasons,
+      currentSeason,
     };
+  }
+
+  /** Héros favoris du compte connecté pour une saison donnée (sélecteur de saison). */
+  async gameHeroes(userId: string, sid: number) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user?.mlbbToken) {
+      throw new BadRequestException('Aucun compte de jeu lié.');
+    }
+    return this.fetchFrequentHeroes(user.mlbbToken, sid);
   }
 
   /** Valide un code de vérification et renvoie le jeton de l'API MLBB. */
@@ -187,6 +234,7 @@ export class AuthService {
       gameCountry: profile.country,
       gameStats: toJson(profile.stats),
       gameFrequentHeroes: toJson(profile.frequentHeroes),
+      gameSeasons: toJson(profile.seasons),
       gameSyncedAt: new Date(),
     };
   }

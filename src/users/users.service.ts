@@ -51,6 +51,7 @@ export function serializeUser(user: any) {
     // Données de jeu prêtes à l'emploi
     gameStats: parseJson<any>(user.gameStats, {}),
     gameFrequentHeroes: parseJson<any[]>(user.gameFrequentHeroes, []),
+    gameSeasons: parseJson<number[]>(user.gameSeasons, []),
   };
 }
 

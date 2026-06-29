@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -78,5 +78,12 @@ export class AuthController {
   @Post('sync-game')
   syncGame(@CurrentUser() user: { id: string }) {
     return this.authService.syncGame(user.id);
+  }
+
+  /** Héros favoris du compte connecté pour une saison donnée (sélecteur de saison). */
+  @UseGuards(JwtAuthGuard)
+  @Get('game/heroes')
+  gameHeroes(@CurrentUser() user: { id: string }, @Query('sid') sid: string) {
+    return this.authService.gameHeroes(user.id, Number(sid));
   }
 }

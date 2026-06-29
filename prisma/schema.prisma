@@ -53,8 +53,9 @@ model User {
   gameLevel      Int? // niveau du joueur
   gameRankLevel  Int? // rang actuel (rank_level)
   gameCountry    String? // pays enregistré en jeu
-  gameStats      String    @default("{}") // JSON: victoires, parties, MVP, série...
-  gameFrequentHeroes String @default("[]") // JSON: héros favoris (parties, winrate)
+  gameStats      String    @default("{}") // JSON: stats cumulées « tous modes » (victoires, parties, MVP...)
+  gameFrequentHeroes String @default("[]") // JSON: héros favoris de la saison courante
+  gameSeasons    String    @default("[]") // JSON: number[] — saisons disponibles (sids, plus récente en tête)
   gameSyncedAt   DateTime? // dernière synchronisation des données de jeu
   // Préférence d'affichage du profil
   profileSource  String    @default("game") // google | game
