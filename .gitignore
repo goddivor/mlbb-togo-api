@@ -1,9 +1,8 @@
 node_modules
 dist
 *.log
-.env
-.env.local
+.env*
+!.env.example
 prisma/*.db
 prisma/*.db-journal
-prisma/migrations/dev.db
 .DS_Store

@@ -224,7 +224,8 @@ export class AuthService {
       : { nickname: null, avatar: null, level: null, rankLevel: null, country: null, stats: {}, frequentHeroes: [] };
 
     // Crée ou met à jour notre utilisateur lié à ce compte MLBB.
-    let user = await this.prisma.user.findUnique({ where: { mlbbRoleId: roleId } });
+    // (findFirst car mlbbRoleId n'est plus @unique côté Prisma — cf. index partiel.)
+    let user = await this.prisma.user.findFirst({ where: { mlbbRoleId: roleId } });
     if (!user) {
       user = await this.prisma.user.create({
         data: {
@@ -283,7 +284,7 @@ export class AuthService {
     const profile = mlbbToken ? await this.fetchGameProfile(mlbbToken) : EMPTY_GAME_PROFILE;
 
     // Le compte de jeu appartient-il déjà à un autre profil ? Si oui : fusion.
-    const owner = await this.prisma.user.findUnique({ where: { mlbbRoleId: roleId } });
+    const owner = await this.prisma.user.findFirst({ where: { mlbbRoleId: roleId } });
     let carry: any = {};
     if (owner && owner.id !== userId) {
       if (owner.googleId && current.googleId) {
@@ -364,7 +365,7 @@ export class AuthService {
 
     // Cherche par googleId, sinon par email (lie un compte local existant).
     let user =
-      (await this.prisma.user.findUnique({ where: { googleId: g.googleId } })) ||
+      (await this.prisma.user.findFirst({ where: { googleId: g.googleId } })) ||
       (await this.prisma.user.findUnique({ where: { email: g.googleEmail } }));
 
     if (!user) {
@@ -402,7 +403,7 @@ export class AuthService {
     }
 
     // Le compte Google appartient-il déjà à un autre profil ? Si oui : fusion.
-    const owner = await this.prisma.user.findUnique({ where: { googleId: g.googleId } });
+    const owner = await this.prisma.user.findFirst({ where: { googleId: g.googleId } });
     let carry: any = {};
     if (owner && owner.id !== userId) {
       if (owner.mlbbRoleId && current.mlbbRoleId) {
