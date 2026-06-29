@@ -35,6 +35,12 @@ model User {
   isOnline       Boolean   @default(false)
   isBanned       Boolean   @default(false)
   roleUser       String    @default("user") // user | moderator | admin
+  // Identité de connexion
+  provider       String    @default("local") // local | mlbb | google
+  mlbbRoleId     Int?      @unique // identifiant de jeu MLBB (role_id)
+  mlbbZoneId     Int? // serveur MLBB (zone_id)
+  mlbbToken      String? // jeton de l'API MLBB (stats, matchs...)
+  googleId       String?   @unique // identifiant Google (sub)
   teamId         String?
   team           Team?     @relation("TeamMembers", fields: [teamId], references: [id])
   posts          Post[]
