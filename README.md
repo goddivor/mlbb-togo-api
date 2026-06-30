@@ -5,7 +5,9 @@ API REST de la plateforme MLBB Togo, construite avec NestJS 10, Prisma et **Mong
 ## Prérequis
 
 - Node.js 20+
-- **MongoDB** installé (`mongod` + `mongosh`). Prisma exige un **replica set** (même mono-nœud) ; les scripts s'en chargent automatiquement.
+- **MongoDB** installé, avec `mongod` et `mongosh` accessibles dans le `PATH`. Prisma exige un **replica set** (même mono-nœud) ; les scripts s'en chargent automatiquement.
+
+Les scripts de base de données sont écrits en **Node.js** (`scripts/*.js`) et fonctionnent donc sur **Linux, macOS et Windows** (pas de `.sh` à exécuter). Sous Windows : assure-toi que le dossier `bin` de MongoDB est dans le `PATH`. Si tu as installé MongoDB en tant que **service Windows** (mode standalone, sans replica set), arrête-le d'abord — le script démarre sa propre instance en replica set sur le port 27017, requis par Prisma.
 
 ## Démarrage (après un clone)
 
