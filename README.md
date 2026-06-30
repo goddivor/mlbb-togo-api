@@ -1,28 +1,35 @@
 # MLBB Togo — Backend (NestJS)
 
-API REST de la plateforme MLBB Togo, construite avec NestJS 10, Prisma et SQLite.
+API REST de la plateforme MLBB Togo, construite avec NestJS 10, Prisma et **MongoDB**.
 
-## Démarrage
+## Prérequis
+
+- Node.js 20+
+- **MongoDB** installé (`mongod` + `mongosh`). Prisma exige un **replica set** (même mono-nœud) ; les scripts s'en chargent automatiquement.
+
+## Démarrage (après un clone)
 
 ```bash
 npm install
-npx prisma generate
-npx prisma migrate dev      # crée le schéma + seed
-npm run start:dev           # http://localhost:3006/api
+cp .env.example .env        # puis renseigne JWT_SECRET et, si besoin, les clés Google
+npm run db:setup            # démarre MongoDB + schéma + index + données de référence
+npm run dev                 # démarre MongoDB (si besoin) + NestJS en watch → http://localhost:3006/api
 ```
 
-Variables d'environnement (`.env`, voir `.env.example`) : `DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `PORT`, `FRONTEND_URL`.
+`npm run db:setup` rend la base **identique** pour tout le monde : il pousse le schéma, crée les index uniques partiels, puis injecte les **données de référence versionnées** (133 héros, l'organisation e-sport et ses équipes, la MTL, les sponsors). Ces données vivent dans `prisma/heroes.json` et `prisma/seed.ts` — donc un clone du repo + `npm run db:setup` reproduit exactement la même base de référence. Les comptes utilisateurs ne sont pas versionnés (chacun crée le sien à la connexion).
+
+Variables d'environnement (`.env`, voir `.env.example`) : `DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `GOOGLE_CLIENT_ID/SECRET`, `PORT`, `FRONTEND_URL`.
 
 ## Scripts
 
-- `npm run start:dev` : démarrage en mode watch
+- `npm run dev` : démarre MongoDB (si besoin) puis NestJS en watch
+- `npm run db:setup` : prépare la base à l'identique (schéma + index + seed)
+- `npm run seed` : (re)injecte les données de référence (`SEED_DEMO=1` pour des comptes de démo)
 - `npm run build` puis `npm run start:prod` : build et exécution de production
-- `npm run seed` : (re)peuple la base
-- `npm run db:reset` : réinitialise la base puis seed
 
 ## Modèle de données
 
-Schéma Prisma : `prisma/schema.prisma`. Les listes et objets (héros favoris, badges, membres, brackets, champs de formulaire, etc.) sont stockés en colonnes TEXT au format JSON pour rester portables sur SQLite ; ils sont désérialisés en tableaux/objets dans les réponses de l'API.
+Schéma Prisma : `prisma/schema.prisma` (provider **mongodb**). MongoDB n'utilise pas de migrations SQL : on synchronise le schéma avec `prisma db push`. Les identifiants optionnels uniques (`googleId`, `mlbbRoleId`) sont protégés par des **index uniques partiels** créés via `prisma/mongo-indexes.js` (un index unique simple refuserait plusieurs comptes sans ces champs). Les listes et objets (héros favoris, badges, stats de jeu, brackets, etc.) sont stockés en chaînes JSON et désérialisés dans les réponses de l'API.
 
 ## Endpoints principaux (préfixe `/api`)
 

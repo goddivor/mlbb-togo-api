@@ -13,6 +13,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:push": "prisma db push",
+    "db:setup": "bash scripts/db-setup.sh",
     "seed": "ts-node prisma/seed.ts",
     "db:reset": "prisma migrate reset --force"
   },
