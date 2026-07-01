@@ -147,13 +147,14 @@ export class AuthService {
     }));
   }
 
-  /** Liste des saisons du joueur (sids), la plus récente en tête. */
-  private async fetchSeasons(token: string): Promise<number[]> {
+  /** Liste des saisons du joueur (sids) + drapeau de succès de l'appel. */
+  private async fetchSeasons(token: string): Promise<{ ok: boolean; sids: number[] }> {
     const json = await this.mlbbFetch('/user/season', {
       headers: { Authorization: `Bearer ${token}` },
     });
+    const ok = !!(json && json.code === 0 && json.data);
     const sids = json?.data?.sids;
-    return Array.isArray(sids) ? sids : [];
+    return { ok, sids: Array.isArray(sids) ? sids : [] };
   }
 
   /** Héros fréquents du joueur pour une saison donnée (sid OBLIGATOIRE côté API). */
@@ -172,21 +173,25 @@ export class AuthService {
    */
   private async fetchGameProfile(token: string) {
     const headers = { Authorization: `Bearer ${token}` };
-    const [infoR, statsR, seasons] = await Promise.all([
+    const [infoR, statsR, seasonRes] = await Promise.all([
       this.mlbbFetch('/user/info', { headers }),
       this.mlbbFetch('/user/stats', { headers }),
       this.fetchSeasons(token),
     ]);
 
-    // Session valide seulement si l'API renvoie code 0 avec des données.
-    // Sinon (token expiré, SERVICE_UNAVAILABLE, panne...), on NE doit PAS
-    // écraser les données déjà stockées.
+    // Chaque section n'est « ok » que si l'API répond code 0 avec des données.
+    // Les endpoints peuvent être indisponibles indépendamment (ex. le miroir
+    // sert /user/info mais renvoie « endpoint hors ligne » pour /user/stats).
+    // On ne met à jour QUE les sections réussies (cf. gameFields), pour ne pas
+    // écraser des données existantes par des vides.
     const infoOk = !!(infoR && infoR.code === 0 && infoR.data);
     const statsOk = !!(statsR && statsR.code === 0 && statsR.data);
-    const valid = infoOk || statsOk;
+    const seasonsOk = seasonRes.ok;
+    const valid = infoOk || statsOk || seasonsOk;
 
     const info = infoR?.data ?? {};
     const st = statsR?.data ?? {};
+    const seasons = seasonRes.sids;
     // Les héros favoris exigent un sid : on prend la saison la plus récente.
     const currentSeason = seasons.length ? seasons[0] : null;
     const frequentHeroes =
@@ -220,6 +225,9 @@ export class AuthService {
       roles,
       seasons,
       currentSeason,
+      infoOk,
+      statsOk,
+      seasonsOk,
       valid,
     };
   }
@@ -272,22 +280,34 @@ export class AuthService {
     return (json.data.jwt || json.data.token || null) as string | null;
   }
 
-  /** Champs Prisma dérivés d'un profil de jeu, prêts pour create/update. */
+  /**
+   * Champs Prisma dérivés d'un profil de jeu. Mise à jour GRANULAIRE : on ne
+   * touche qu'aux sections dont l'appel API a réussi, pour ne jamais écraser des
+   * données existantes par des valeurs vides (endpoint temporairement indispo).
+   * (Les drapeaux `*Ok` sont absents lors d'un premier lien : on écrit alors tout.)
+   */
   private gameFields(zoneId: number, token: string | null, profile: any) {
-    return {
+    const data: any = {
       mlbbZoneId: zoneId,
       mlbbToken: token,
-      gameNickname: profile.nickname,
-      gameAvatar: profile.avatar,
-      gameLevel: profile.level,
-      gameRankLevel: profile.rankLevel,
-      gameCountry: profile.country,
-      gameStats: toJson(profile.stats),
-      gameFrequentHeroes: toJson(profile.frequentHeroes),
-      gameRoles: toJson(profile.roles),
-      gameSeasons: toJson(profile.seasons),
       gameSyncedAt: new Date(),
     };
+    if (profile.infoOk !== false) {
+      data.gameNickname = profile.nickname;
+      data.gameAvatar = profile.avatar;
+      data.gameLevel = profile.level;
+      data.gameRankLevel = profile.rankLevel;
+      data.gameCountry = profile.country;
+    }
+    if (profile.statsOk !== false) {
+      data.gameStats = toJson(profile.stats);
+    }
+    if (profile.seasonsOk !== false) {
+      data.gameFrequentHeroes = toJson(profile.frequentHeroes);
+      data.gameRoles = toJson(profile.roles);
+      data.gameSeasons = toJson(profile.seasons);
+    }
+    return data;
   }
 
   /** Envoie un code de vérification dans le courrier en jeu du joueur. */
