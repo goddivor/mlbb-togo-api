@@ -70,13 +70,90 @@ export function serializeUser(user: any) {
   };
 }
 
+// Champs publics uniquement (annuaire / profils visibles par tous) : on masque
+// email, googleId/email, provider, identifiants de jeu, jetons...
+const PUBLIC_FIELDS = [
+  'id',
+  'username',
+  'displayName',
+  'avatar',
+  'rank',
+  'roleUser',
+  'country',
+  'city',
+  'bio',
+  'badges',
+  'joinedAt',
+  'lastActive',
+  'isOnline',
+  'wins',
+  'losses',
+  'mvpCount',
+  'streak',
+  'winRate',
+  'profileSource',
+  'hasGame',
+  'favoriteHeroes',
+  'gameNickname',
+  'gameLevel',
+  'gameRankLevel',
+  'gameRank',
+  'gameCountry',
+  'gameStats',
+  'gameFrequentHeroes',
+  'gameRoles',
+  'gameSeasons',
+];
+
+function pick(obj: any, fields: string[]) {
+  const out: any = {};
+  for (const f of fields) out[f] = obj[f];
+  return out;
+}
+
+/** Profil public complet (stats de jeu incluses). */
+export function serializePublicUser(user: any) {
+  if (!user) return user;
+  return pick(serializeUser(user), PUBLIC_FIELDS);
+}
+
+/** Carte allégée pour la liste des utilisateurs. */
+export function serializeUserCard(user: any) {
+  if (!user) return user;
+  return pick(serializeUser(user), [
+    'id',
+    'username',
+    'displayName',
+    'avatar',
+    'roleUser',
+    'country',
+    'winRate',
+    'hasGame',
+    'isOnline',
+    'gameRank',
+    'gameRankLevel',
+    'gameLevel',
+  ]);
+}
+
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   async findAll() {
-    const users = await this.prisma.user.findMany();
-    return users.map(serializeUser);
+    const users = await this.prisma.user.findMany({ where: { isBanned: false } });
+    return users
+      .map(serializeUserCard)
+      .sort((a, b) => {
+        if (a.hasGame !== b.hasGame) return a.hasGame ? -1 : 1;
+        return (b.gameRankLevel ?? 0) - (a.gameRankLevel ?? 0);
+      });
+  }
+
+  async findPublic(id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('Utilisateur introuvable.');
+    return serializePublicUser(user);
   }
 
   async leaderboard() {
