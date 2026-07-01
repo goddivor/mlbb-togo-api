@@ -1,5 +1,4 @@
-// Démarre MongoDB (replica set mono-nœud rs0, requis par Prisma) si pas déjà actif.
-// Cross-platform (Linux / macOS / Windows) : pas de `--fork` ni de socket Unix sous Windows.
+
 const net = require('net');
 const os = require('os');
 const path = require('path');
@@ -72,7 +71,7 @@ async function ensureMongo() {
     fs.mkdirSync(DATA, { recursive: true });
 
     const args = ['--dbpath', DATA, '--replSet', 'rs0', '--bind_ip', '127.0.0.1', '--port', String(PORT)];
-    if (!isWin) args.push('--unixSocketPrefix', MONGO_HOME); // socket Unix : POSIX uniquement
+    if (!isWin) args.push('--unixSocketPrefix', MONGO_HOME);
 
     const out = fs.openSync(LOG, 'a');
     const child = spawn(isWin ? 'mongod.exe' : 'mongod', args, {
@@ -95,16 +94,13 @@ async function ensureMongo() {
     console.log(`✓ MongoDB détecté sur ${PORT}`);
   }
 
-  // Dans TOUS les cas : s'assurer que c'est un replica set avec un PRIMARY.
-  // (Si le port était déjà pris par un mongod standalone, db push échouerait
-  //  ensuite avec un « ReplicaSetNoPrimary » obscur — on le rattrape ici.)
   if (!have('mongosh')) {
     console.warn('⚠ mongosh introuvable : impossible de vérifier/initialiser le replica set.');
     return;
   }
   const r = spawnSync(`mongosh --quiet --port ${PORT} "${RS_SCRIPT}"`, { shell: true, stdio: 'ignore' });
   if (r.status === 2) {
-    // Serveur lancé sans --replSet (standalone) → non convertible à chaud.
+
     standaloneError();
   }
   if (r.status !== 0) {

@@ -7,17 +7,6 @@ import {
 import * as crypto from 'crypto';
 import sharp from 'sharp';
 
-/**
- * Proxy de l'API interne Moonton GMS (mobilelegends.com).
- *
- * Signature reverse-engineerée :
- *   Authorization = base64( HMAC-SHA1( message, enigma ) )
- *   message = METHOD + "\n" + url.pathname + "\n" + query(non encodé) + "\n" + JSON.stringify(body)
- *   enigma  = clé fournie par GET /api/act/basev4 (non signé)
- *
- * On gère l'enigma et la signature côté serveur pour exposer au frontend
- * des endpoints propres (sans CORS ni Cloudflare côté navigateur).
- */
 @Injectable()
 export class MlbbService {
   private readonly logger = new Logger('MlbbService');
@@ -28,7 +17,13 @@ export class MlbbService {
   private readonly HEROES_SRC = '2756564';
   private readonly RANKING_SRC = '2756567';
 
-  // Cache de l'enigma (clé HMAC), de la liste des héros et des classements.
+  // Aggregated hero-meta API (win/pick/ban, counters, combos), with mirror fallback
+  // when the primary domain is saturated (SERVICE_UNAVAILABLE).
+  private readonly RONE_BASES = [
+    'https://mlbb.rone.dev/api',
+    'https://openmlbb.fastapicloud.dev/api',
+  ];
+
   private enigmaCache: { value: string; expiresAt: number } | null = null;
   private heroesCache: { lang: string; records: any[]; expiresAt: number } | null = null;
   private rankingCache = new Map<string, { data: any; expiresAt: number }>();
@@ -45,7 +40,6 @@ export class MlbbService {
     };
   }
 
-  /** Récupère un enigma (clé HMAC), avec cache 10 min, réessais et repli sur la dernière valeur. */
   private async getEnigma(): Promise<string> {
     const now = Date.now();
     if (this.enigmaCache && this.enigmaCache.expiresAt > now) {
@@ -63,15 +57,14 @@ export class MlbbService {
           return enigma;
         }
       } catch {
-        /* réessai */
+
       }
     }
-    // Moonton injoignable : on réutilise le dernier enigma connu (même expiré) si dispo.
+
     if (this.enigmaCache) return this.enigmaCache.value;
     throw new Error('enigma indisponible (Moonton injoignable).');
   }
 
-  /** Calcule la signature Authorization pour une requête. */
   private sign(
     method: string,
     pathname: string,
@@ -83,7 +76,6 @@ export class MlbbService {
     return crypto.createHmac('sha1', enigma).update(message, 'utf8').digest('base64');
   }
 
-  /** Appel POST signé sur une source GMS. */
   private async callSource(sourceId: string, body: any, lang = 'en'): Promise<any> {
     const enigma = await this.getEnigma();
     const pathname = `/api/gms/source/${this.APP_ID}/${sourceId}`;
@@ -107,15 +99,6 @@ export class MlbbService {
     return json;
   }
 
-  // ============ Proxy d'images (CDN Moonton peu fiable en direct) ============
-
-  /**
-   * Récupère une image du CDN Moonton côté serveur (pas de hotlink/referer),
-   * avec réessais et cache mémoire, puis la renvoie au frontend.
-   *
-   * Certaines images du CDN sont gravement gonflées (PNG 100x100 de 16 Mo !) :
-   * on réencode donc le raster en WebP redimensionné. Les SVG sont renvoyés tels quels.
-   */
   async proxyImage(
     url: string,
     width?: number,
@@ -159,10 +142,10 @@ export class MlbbService {
 
         let out: { buffer: Buffer; contentType: string };
         if (srcType.includes('svg')) {
-          // Vectoriel : léger, renvoyé tel quel.
+
           out = { buffer: raw, contentType: 'image/svg+xml' };
         } else {
-          // Raster : on redimensionne et recompresse en WebP (corrige les images gonflées).
+
           const buffer = await sharp(raw)
             .resize({ width: targetWidth, withoutEnlargement: true })
             .webp({ quality: 82 })
@@ -182,9 +165,6 @@ export class MlbbService {
     );
   }
 
-  // ============ Héros ============
-
-  /** Récupère les enregistrements bruts des héros (triés hero_id desc). */
   private async fetchHeroRecords(lang = 'en'): Promise<any[]> {
     const now = Date.now();
     if (this.heroesCache && this.heroesCache.lang === lang && this.heroesCache.expiresAt > now) {
@@ -210,11 +190,10 @@ export class MlbbService {
     } catch (e: any) {
       this.logger.warn(`Moonton injoignable (héros), repli sur le cache : ${e?.message}`);
     }
-    // Repli : dernières données connues (même expirées) ou tableau vide — jamais d'erreur 500.
+
     return this.heroesCache?.records ?? [];
   }
 
-  /** Forme synthétique d'un héros (pour les listes / galerie). */
   private mapSummary(record: any) {
     const d = record?.data ?? {};
     const h = d.hero?.data ?? {};
@@ -231,7 +210,6 @@ export class MlbbService {
     };
   }
 
-  /** Forme détaillée (compétences, skins, lore) pour la page d'un héros. */
   private mapDetail(record: any) {
     const d = record?.data ?? {};
     const h = d.hero?.data ?? {};
@@ -264,7 +242,6 @@ export class MlbbService {
     };
   }
 
-  /** Galerie / liste paginée des héros (forme synthétique). */
   async getHeroes(limit?: number, lang = 'en') {
     const records = await this.fetchHeroRecords(lang);
     const mapped = records.map((r) => this.mapSummary(r));
@@ -272,16 +249,11 @@ export class MlbbService {
     return { total: records.length, heroes: sliced };
   }
 
-  /** Les N héros les plus récents (par défaut 6, comme la page d'accueil officielle). */
   async getLatestHeroes(count = 6, lang = 'en') {
     const { heroes } = await this.getHeroes(count, lang);
     return heroes;
   }
 
-  /**
-   * Forme « vitrine » riche d'un héros (pour le carrousel d'accueil) :
-   * grande illustration, vignette, rôles, spécialités, stats et icônes de compétences.
-   */
   private mapShowcase(record: any) {
     const d = record?.data ?? {};
     const h = d.hero?.data ?? {};
@@ -295,14 +267,13 @@ export class MlbbService {
     return {
       heroId: d.hero_id ?? h.heroid ?? null,
       name: h.name ?? null,
-      // `painting` = découpe transparente du personnage (comme le site officiel) ;
-      // `head_big` (illustration rectangulaire avec décor) en repli.
+
       art: d.painting ?? d.head_big ?? d.head ?? h.head ?? null,
       thumb: d.head ?? h.squarehead ?? h.head ?? null,
       roles: (h.sortlabel ?? []).filter(Boolean),
       lanes: (h.roadsortlabel ?? []).filter(Boolean),
       specialities: (h.speciality ?? []).filter(Boolean),
-      // abilityshow = [Durability, Offense, Ability Effects, Difficulty]
+
       stats: {
         durability: ability[0] ?? 0,
         offense: ability[1] ?? 0,
@@ -313,15 +284,11 @@ export class MlbbService {
     };
   }
 
-  /** Les N derniers héros au format vitrine (carrousel d'accueil). */
   async getShowcaseHeroes(count = 6, lang = 'en') {
     const records = await this.fetchHeroRecords(lang);
     return records.slice(0, count).map((r) => this.mapShowcase(r));
   }
 
-  // ============ Classement méta (Hero Ranking) ============
-
-  /** Forme propre d'une ligne du classement méta. */
   private mapRanking(record: any) {
     const d = record?.data ?? {};
     const mh = d.main_hero?.data ?? {};
@@ -329,11 +296,11 @@ export class MlbbService {
       heroId: d.main_heroid ?? null,
       name: mh.name ?? null,
       image: mh.head ?? null,
-      // Taux exprimés en fraction 0..1 (multiplier par 100 pour un pourcentage).
+
       winRate: d.main_hero_win_rate ?? null,
       pickRate: d.main_hero_appearance_rate ?? null,
       banRate: d.main_hero_ban_rate ?? null,
-      // Meilleures synergies / partenaires (gain de win rate).
+
       synergies: (d.sub_hero ?? []).map((s: any) => ({
         heroId: s.heroid ?? null,
         image: s.hero?.data?.head ?? null,
@@ -342,13 +309,6 @@ export class MlbbService {
     };
   }
 
-  /**
-   * Classement méta des héros (win/pick/ban + synergies).
-   * @param rank      tier de rang (filtre bigrank, défaut "101")
-   * @param matchType type de partie (0 = classé)
-   * @param limit     nombre de héros (pageSize)
-   * @param sort      winRate | pickRate | banRate
-   */
   async getHeroRanking(opts: {
     rank?: string;
     matchType?: number;
@@ -415,7 +375,6 @@ export class MlbbService {
     return result;
   }
 
-  /** Détail complet d'un héros par son hero_id. */
   async getHero(heroId: number, lang = 'en') {
     const records = await this.fetchHeroRecords(lang);
     const rec = records.find((r) => {
@@ -426,5 +385,119 @@ export class MlbbService {
       throw new NotFoundException(`Héros ${heroId} introuvable.`);
     }
     return this.mapDetail(rec);
+  }
+
+  // ============ Meta hero (win/pick/ban, synergies, counters, combos) ============
+
+  /** Calls the aggregated hero-meta API, falling back to the mirror on saturation. */
+  private async roneFetch(path: string): Promise<any> {
+    let last: any = null;
+    for (const base of this.RONE_BASES) {
+      try {
+        const res = await fetch(`${base}${path}`);
+        const json = await res.json();
+        if (res.status === 503 || json?.code === 'SERVICE_UNAVAILABLE') {
+          last = json;
+          continue;
+        }
+        return json;
+      } catch {
+        /* try next base */
+      }
+    }
+    return last;
+  }
+
+  /** Map<heroId, { name, image }> built from the official hero list (to enrich meta). */
+  private async heroNameImageMap(lang = 'en'): Promise<Map<number, { name: string | null; image: string | null }>> {
+    const records = await this.fetchHeroRecords(lang);
+    const map = new Map<number, { name: string | null; image: string | null }>();
+    for (const r of records) {
+      const s = this.mapSummary(r);
+      if (s.heroId != null) map.set(Number(s.heroId), { name: s.name, image: s.image });
+    }
+    return map;
+  }
+
+  private pct(n: any): number {
+    return typeof n === 'number' ? Math.round(n * 1000) / 10 : 0;
+  }
+
+  /** Maps a sub_hero / sub_hero_last list, enriching each entry with name + image. */
+  private mapSubHeroes(list: any, heroMap: Map<number, any>): any[] {
+    return (Array.isArray(list) ? list : []).map((it: any) => {
+      const id = Number(it.heroid ?? it.hero?.data?.heroid);
+      const info = heroMap.get(id) || {};
+      return {
+        heroId: id || null,
+        name: info.name ?? null,
+        image: info.image ?? it.hero?.data?.head ?? null,
+        winRate: this.pct(it.hero_win_rate),
+        increaseWinRate: this.pct(it.increase_win_rate),
+      };
+    });
+  }
+
+  /** Enriches a GMS synergy entry ({ heroId, image, increaseWinRate }) with the name. */
+  private enrichSynergies(list: any, heroMap: Map<number, any>): any[] {
+    return (Array.isArray(list) ? list : []).map((x: any) => {
+      const id = Number(x.heroId ?? x.heroid);
+      const info = heroMap.get(id) || {};
+      return {
+        heroId: id || null,
+        name: info.name ?? null,
+        image: info.image ?? x.image ?? null,
+        winRate: this.pct(x.winRate),
+        increaseWinRate: this.pct(x.increaseWinRate ?? x.increase_win_rate),
+      };
+    });
+  }
+
+  /**
+   * Full hero meta for the detail page. Win/pick/ban and best teammates come from
+   * the Moonton GMS ranking (reliable); counters, worst teammates and skill combos
+   * come from the aggregated hero API (with mirror fallback) when available.
+   */
+  async getHeroMeta(heroId: number, lang = 'en') {
+    const [ranking, countersR, combosR, heroMap] = await Promise.all([
+      this.getHeroRanking({ limit: 400, lang }).catch(() => ({ ranking: [] as any[] })),
+      this.roneFetch(`/heroes/${heroId}/counters?lang=${lang}`),
+      this.roneFetch(`/heroes/${heroId}/skill-combos?lang=${lang}`),
+      this.heroNameImageMap(lang),
+    ]);
+
+    const entry = ((ranking as any)?.ranking ?? []).find(
+      (r: any) => Number(r.heroId) === Number(heroId),
+    );
+    const c = countersR?.data?.records?.[0]?.data ?? null;
+    const comboRecords = combosR?.data?.records ?? [];
+
+    const combos = (Array.isArray(comboRecords) ? comboRecords : []).map((r: any) => {
+      const d = r?.data ?? {};
+      return {
+        title: d.title ?? null,
+        description: d.desc ?? null,
+        skills: (d.skill_id ?? []).map((sk: any) => ({
+          id: sk?.data?.skillid ?? null,
+          icon: sk?.data?.skillicon ?? null,
+        })),
+      };
+    });
+
+    return {
+      available: !!entry,
+      winRate: this.pct(entry?.winRate),
+      pickRate: this.pct(entry?.pickRate),
+      banRate: this.pct(entry?.banRate),
+      synergy: {
+        best: this.enrichSynergies(entry?.synergies, heroMap),
+        worst: [],
+      },
+      counters: {
+        strong: this.mapSubHeroes(c?.sub_hero, heroMap),
+        weak: this.mapSubHeroes(c?.sub_hero_last, heroMap),
+      },
+      combos,
+    };
   }
 }

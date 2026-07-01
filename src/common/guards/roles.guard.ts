@@ -7,10 +7,6 @@ import {
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 
-/**
- * Garde d'autorisation par rôle plateforme (roleUser : user | moderator | admin).
- * À combiner avec JwtAuthGuard : @UseGuards(JwtAuthGuard, RolesGuard) + @Roles('admin').
- */
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private reflector: Reflector) {}

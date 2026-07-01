@@ -19,13 +19,11 @@ import { Roles } from '../common/decorators/roles.decorator';
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
-  // === Statistiques (public) ===
   @Get('stats')
   getStats() {
     return this.adminService.getStats();
   }
 
-  // === Journal d'administration ===
   @Get('logs')
   findAllLogs() {
     return this.adminService.findAllLogs();
@@ -38,7 +36,6 @@ export class AdminController {
     return this.adminService.createLog(dto);
   }
 
-  // === Formulaires ===
   @Get('forms')
   findAllForms() {
     return this.adminService.findAllForms();
@@ -70,13 +67,11 @@ export class AdminController {
     return this.adminService.removeForm(id);
   }
 
-  // === Réponses aux formulaires ===
   @Get('forms/:id/responses')
   findResponses(@Param('id') id: string) {
     return this.adminService.findResponses(id);
   }
 
-  // Soumission publique : n'importe qui peut répondre.
   @Post('forms/:id/responses')
   createResponse(
     @Param('id') id: string,

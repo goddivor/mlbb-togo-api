@@ -1,22 +1,11 @@
-/**
- * Seed Prisma — MLBB Togo.
- * Recopie les données de démonstration (frontend/src/lib/mockData.ts) et les insère
- * en base en respectant l'ordre des contraintes de clés étrangères.
- *
- * Lancement : `npx prisma db seed` ou `ts-node prisma/seed.ts`.
- */
+
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import heroes from './heroes.json';
 
 const prisma = new PrismaClient();
 
-/** Sérialise une valeur en chaîne JSON (champs TEXT SQLite). */
 const toJson = (value: any) => JSON.stringify(value ?? null);
-
-// ============================================================
-// === Données mock (recopiées depuis frontend/src/lib/mockData.ts)
-// ============================================================
 
 const mockPlayers: any[] = [
   {
@@ -278,14 +267,9 @@ const mockFormResponses: any[] = [
   { id: 'resp_3', formId: 'form_2', data: { 'Pseudo MLBB': 'NewPlayer123', 'ID MLBB': '987654321', 'Rang actuel': 'Epic', 'Rôle principal': 'Mage' }, submittedAt: '2024-03-23T09:00:00Z' },
 ];
 
-// ============================================================
-// === Seed
-// ============================================================
-
 async function main() {
   console.log('🌱 Démarrage du seed MLBB Togo...');
 
-  // 1. Nettoyage (ordre des dépendances FK).
   await prisma.comment.deleteMany();
   await prisma.post.deleteMany();
   await prisma.formResponse.deleteMany();
@@ -296,7 +280,7 @@ async function main() {
   await prisma.notification.deleteMany();
   await prisma.adminLog.deleteMany();
   await prisma.hero.deleteMany();
-  // Détache les utilisateurs de leurs équipes avant suppression.
+
   await prisma.user.updateMany({ data: { teamId: null } });
   await prisma.user.deleteMany();
   await prisma.team.deleteMany();
@@ -306,7 +290,6 @@ async function main() {
   await prisma.mtlImage.deleteMany();
   await prisma.mtl.deleteMany();
 
-  // Héros : toujours seedés (données de jeu publiques, nécessaires à la vitrine).
   for (const h of heroes as any[]) {
     await prisma.hero.create({
       data: {
@@ -318,7 +301,6 @@ async function main() {
   }
   console.log(`   - Héros          : ${(heroes as any[]).length}`);
 
-  // === E-sport : ETERNUM ESPORTS + sous-équipes (données réelles, toujours seedées) ===
   const eternum = await prisma.esport.create({
     data: {
       name: 'ETERNUM ESPORTS',
@@ -349,7 +331,6 @@ async function main() {
     `   - E-sport        : 1 org, ${esportTeams.length} équipes, ${sponsors.length} sponsors`,
   );
 
-  // === MTL : Mobile Legends Bang Bang Togo League (Saison 1) ===
   const mtl = await prisma.mtl.create({
     data: {
       name: 'Mobile Legends Bang Bang Togo League',
@@ -375,8 +356,6 @@ async function main() {
   }
   console.log(`   - MTL            : Saison 1, ${mtlImages.length} images`);
 
-  // Par défaut, la plateforme démarre SANS aucun compte ni contenu communautaire.
-  // Définir SEED_DEMO=1 pour injecter le jeu de données de démonstration.
   const SEED_DEMO =
     process.env.SEED_DEMO === '1' || process.env.SEED_DEMO === 'true';
   if (!SEED_DEMO) {
@@ -385,10 +364,8 @@ async function main() {
     return;
   }
 
-  // 2. Mot de passe commun (hashé) pour tous les utilisateurs de démo.
   const passwordHash = bcrypt.hashSync('password123', 10);
 
-  // a. Équipes.
   for (const t of mockTeams) {
     await prisma.team.create({
       data: {
@@ -411,7 +388,6 @@ async function main() {
     });
   }
 
-  // b. Utilisateurs.
   for (const p of mockPlayers) {
     await prisma.user.create({
       data: {
@@ -440,7 +416,6 @@ async function main() {
     });
   }
 
-  // c. Posts puis commentaires.
   for (const post of mockPosts) {
     await prisma.post.create({
       data: {
@@ -471,7 +446,6 @@ async function main() {
     }
   }
 
-  // d. Tournois (dates en String dans le schéma).
   for (const t of mockTournaments) {
     await prisma.tournament.create({
       data: {
@@ -494,7 +468,6 @@ async function main() {
     });
   }
 
-  // e. Événements.
   for (const e of mockEvents) {
     await prisma.event.create({
       data: {
@@ -512,7 +485,6 @@ async function main() {
     });
   }
 
-  // f. Matchs.
   for (const m of mockMatches) {
     await prisma.match.create({
       data: {
@@ -530,7 +502,6 @@ async function main() {
     });
   }
 
-  // h. Journal d'administration.
   for (const log of mockAdminLogs) {
     await prisma.adminLog.create({
       data: {
@@ -544,7 +515,6 @@ async function main() {
     });
   }
 
-  // i. Formulaires puis réponses.
   for (const f of mockFormTemplates) {
     await prisma.formTemplate.create({
       data: {
@@ -568,7 +538,6 @@ async function main() {
     });
   }
 
-  // j. Notifications.
   for (const n of mockNotifications) {
     await prisma.notification.create({
       data: {
