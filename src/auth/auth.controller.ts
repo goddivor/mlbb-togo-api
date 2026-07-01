@@ -80,6 +80,13 @@ export class AuthController {
     return this.authService.syncGame(user.id);
   }
 
+  /** Dissocie le compte de jeu MLBB du compte connecté. */
+  @UseGuards(JwtAuthGuard)
+  @Post('unlink/mlbb')
+  unlinkMlbb(@CurrentUser() user: { id: string }) {
+    return this.authService.unlinkMlbb(user.id);
+  }
+
   /** Héros favoris du compte connecté pour une saison donnée (sélecteur de saison). */
   @UseGuards(JwtAuthGuard)
   @Get('game/heroes')

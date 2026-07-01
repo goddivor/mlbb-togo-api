@@ -160,6 +160,13 @@ export class AuthService {
       this.fetchSeasons(token),
     ]);
 
+    // Session valide seulement si l'API renvoie code 0 avec des données.
+    // Sinon (token expiré, SERVICE_UNAVAILABLE, panne...), on NE doit PAS
+    // écraser les données déjà stockées.
+    const infoOk = !!(infoR && infoR.code === 0 && infoR.data);
+    const statsOk = !!(statsR && statsR.code === 0 && statsR.data);
+    const valid = infoOk || statsOk;
+
     const info = infoR?.data ?? {};
     const st = statsR?.data ?? {};
     // Les héros favoris exigent un sid : on prend la saison la plus récente.
@@ -195,6 +202,7 @@ export class AuthService {
       roles,
       seasons,
       currentSeason,
+      valid,
     };
   }
 
@@ -402,9 +410,56 @@ export class AuthService {
       throw new BadRequestException('Aucun compte de jeu lié.');
     }
     const profile = await this.fetchGameProfile(user.mlbbToken);
+    // Session KO (API indisponible ou token expiré) : on NE touche PAS aux
+    // données existantes, on remonte une erreur explicite.
+    if (!profile.valid) {
+      throw new BadRequestException(
+        "Le service Mobile Legends est momentanément indisponible ou ta session de jeu a expiré. Réessaie plus tard ; si le problème persiste, relie ton compte de jeu (nouveau code de vérification).",
+      );
+    }
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: this.gameFields(user.mlbbZoneId, user.mlbbToken, profile),
+    });
+    return serializeUser(updated);
+  }
+
+  /**
+   * Dissocie le compte de jeu MLBB du compte connecté (efface identité + données
+   * de jeu). Refusé si c'est la seule méthode de connexion (pas de compte Google),
+   * pour ne pas rendre le profil inaccessible.
+   */
+  async unlinkMlbb(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Utilisateur introuvable.');
+    if (!user.mlbbRoleId) {
+      throw new BadRequestException('Aucun compte de jeu lié.');
+    }
+    if (!user.googleId) {
+      throw new BadRequestException(
+        "Impossible de dissocier : c'est ta seule méthode de connexion. Lie d'abord un compte Google.",
+      );
+    }
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        mlbbRoleId: null,
+        mlbbZoneId: null,
+        mlbbToken: null,
+        gameNickname: null,
+        gameAvatar: null,
+        gameLevel: null,
+        gameRankLevel: null,
+        gameCountry: null,
+        gameStats: '{}',
+        gameFrequentHeroes: '[]',
+        gameSeasons: '[]',
+        gameRoles: '[]',
+        gameSyncedAt: null,
+        // Le profil bascule sur Google si le jeu était la source affichée.
+        profileSource: user.profileSource === 'game' ? 'google' : user.profileSource,
+        provider: user.provider === 'mlbb' ? 'google' : user.provider,
+      },
     });
     return serializeUser(updated);
   }
