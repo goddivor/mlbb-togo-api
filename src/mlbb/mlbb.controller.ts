@@ -59,4 +59,9 @@ export class MlbbController {
   getHero(@Param('heroId', ParseIntPipe) heroId: number, @Query('lang') lang?: string) {
     return this.mlbb.getHero(heroId, lang || 'en');
   }
+
+  @Get('heroes/:heroId/meta')
+  getHeroMeta(@Param('heroId', ParseIntPipe) heroId: number, @Query('lang') lang?: string) {
+    return this.mlbb.getHeroMeta(heroId, lang || 'en');
+  }
 }
