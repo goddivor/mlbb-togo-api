@@ -9,13 +9,11 @@ import { Roles } from '../common/decorators/roles.decorator';
 export class ContactController {
   constructor(private readonly contact: ContactService) {}
 
-  /** Envoi public d'un message de contact. */
   @Post()
   create(@Body() dto: CreateContactDto) {
     return this.contact.create(dto);
   }
 
-  /** Liste des messages (admin / modérateur). */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'moderator')
   @Get()

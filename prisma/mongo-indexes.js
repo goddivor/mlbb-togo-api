@@ -1,13 +1,3 @@
-// Index uniques PARTIELS pour les identités optionnelles du modèle User.
-//
-// Pourquoi : un index @unique simple (géré par Prisma) refuserait plusieurs
-// comptes SANS googleId / mlbbRoleId, car MongoDB considère les champs absents
-// comme `null` et interdit les doublons de null. Un index PARTIEL n'indexe que
-// les documents où le champ existe → l'unicité ne s'applique qu'aux comptes liés.
-//
-// À exécuter après `prisma db push` :
-//   mongosh "$DATABASE_URL" prisma/mongo-indexes.js
-// (idempotent : ré-exécutable sans erreur).
 
 db.User.createIndex(
   { googleId: 1 },

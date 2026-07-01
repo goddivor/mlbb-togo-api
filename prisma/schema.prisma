@@ -1,7 +1,3 @@
-// Schéma Prisma — MLBB Togo
-// MongoDB (replica set requis par Prisma, même mono-nœud).
-// Les listes/objets complexes restent stockés en TEXT JSON (compat. avec le code existant).
-// Synchronisation du schéma : `prisma db push` (MongoDB n'utilise pas de migrations SQL).
 
 generator client {
   provider = "prisma-client-js"
@@ -12,7 +8,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// === Utilisateurs / Joueurs ===
 model User {
   id             String    @id @default(auto()) @map("_id") @db.ObjectId
   username       String    @unique
@@ -20,8 +15,8 @@ model User {
   password       String
   avatar         String?
   rank           String    @default("warrior")
-  role           String    @default("fighter") // rôle MLBB préféré
-  favoriteHeroes String    @default("[]") // JSON: string[]
+  role           String    @default("fighter")
+  favoriteHeroes String    @default("[]")
   wins           Int       @default(0)
   losses         Int       @default(0)
   mvpCount       Int       @default(0)
@@ -29,37 +24,35 @@ model User {
   country        String    @default("Togo")
   city           String?
   bio            String?
-  badges         String    @default("[]") // JSON: string[]
+  badges         String    @default("[]")
   joinedAt       DateTime  @default(now())
   lastActive     DateTime  @default(now())
   isOnline       Boolean   @default(false)
   isBanned       Boolean   @default(false)
-  roleUser       String    @default("user") // user | moderator | admin
-  // Identité de connexion
-  provider       String    @default("local") // local | mlbb | google
-  // Profil Google lié (si présent). Unicité assurée par index PARTIEL MongoDB
-  // (cf. prisma/mongo-indexes.js) + contrôle applicatif : un index @unique simple
-  // refuserait plusieurs comptes SANS googleId (collision des null).
-  googleId       String? // identifiant Google (sub)
-  googleEmail    String? // email du compte Google
-  googleName     String? // nom affiché Google
-  googleAvatar   String? // photo de profil Google
-  // Profil de jeu MLBB lié (si présent). Unicité : index PARTIEL MongoDB (idem googleId).
-  mlbbRoleId     Int? // identifiant de jeu MLBB (role_id)
-  mlbbZoneId     Int? // serveur MLBB (zone_id)
-  mlbbToken      String? // jeton de l'API MLBB (stats, matchs...)
-  gameNickname   String? // pseudo en jeu
-  gameAvatar     String? // avatar en jeu
-  gameLevel      Int? // niveau du joueur
-  gameRankLevel  Int? // rang actuel (rank_level)
-  gameCountry    String? // pays enregistré en jeu
-  gameStats      String    @default("{}") // JSON: stats cumulées « tous modes » (victoires, parties, MVP...)
-  gameFrequentHeroes String @default("[]") // JSON: héros favoris de la saison courante
-  gameRoles      String    @default("[]") // JSON: rôles principaux [{role, matches}] (top 3)
-  gameSeasons    String    @default("[]") // JSON: number[] — saisons disponibles (sids, plus récente en tête)
-  gameSyncedAt   DateTime? // dernière synchronisation des données de jeu
-  // Préférence d'affichage du profil
-  profileSource  String    @default("game") // google | game
+  roleUser       String    @default("user")
+
+  provider       String    @default("local")
+
+  googleId       String?
+  googleEmail    String?
+  googleName     String?
+  googleAvatar   String?
+
+  mlbbRoleId     Int?
+  mlbbZoneId     Int?
+  mlbbToken      String?
+  gameNickname   String?
+  gameAvatar     String?
+  gameLevel      Int?
+  gameRankLevel  Int?
+  gameCountry    String?
+  gameStats      String    @default("{}")
+  gameFrequentHeroes String @default("[]")
+  gameRoles      String    @default("[]")
+  gameSeasons    String    @default("[]")
+  gameSyncedAt   DateTime?
+
+  profileSource  String    @default("game")
   teamId         String?   @db.ObjectId
   team           Team?     @relation("TeamMembers", fields: [teamId], references: [id])
   posts          Post[]
@@ -68,7 +61,6 @@ model User {
   updatedAt      DateTime  @updatedAt
 }
 
-// === Équipes ===
 model Team {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
   name         String
@@ -83,14 +75,13 @@ model Team {
   rank         Int      @default(0)
   foundedAt    DateTime @default(now())
   region       String   @default("Togo")
-  achievements String   @default("[]") // JSON: string[]
+  achievements String   @default("[]")
   isRecruiting Boolean  @default(false)
-  lookingFor   String   @default("[]") // JSON: string[]
+  lookingFor   String   @default("[]")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
 
-// === Forum : posts & commentaires ===
 model Post {
   id         String    @id @default(auto()) @map("_id") @db.ObjectId
   authorId   String    @db.ObjectId
@@ -119,68 +110,63 @@ model Comment {
   createdAt  DateTime @default(now())
 }
 
-// === Tournois ===
 model Tournament {
   id              String   @id @default(auto()) @map("_id") @db.ObjectId
   name            String
   description     String?
   organizer       String?
-  status          String   @default("upcoming") // upcoming | ongoing | completed | cancelled
+  status          String   @default("upcoming")
   startDate       String?
   endDate         String?
   prizePool       String?
   maxTeams        Int      @default(16)
-  registeredTeams String   @default("[]") // JSON: string[] (ids d'équipes)
+  registeredTeams String   @default("[]")
   format          String?
   rules           String?
   banner          String?
-  brackets        String   @default("[]") // JSON
+  brackets        String   @default("[]")
   streamUrl       String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
-// === Événements ===
 model Event {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
   title        String
-  type         String // scrim | coaching | tournament
+  type         String
   description  String?
   date         String?
   time         String?
   duration     String?
-  participants String   @default("[]") // JSON: string[]
+  participants String   @default("[]")
   organizer    String?
   isPublic     Boolean  @default(true)
   createdAt    DateTime @default(now())
 }
 
-// === Matchs ===
 model Match {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
-  team1      String // JSON: { id, name, score }
-  team2      String // JSON: { id, name, score }
+  team1      String
+  team2      String
   tournament String?
   date       String?
-  status     String   @default("upcoming") // completed | upcoming
+  status     String   @default("upcoming")
   mvp        String?
   duration   String?
   format     String?
-  games      String   @default("[]") // JSON: { number, winner, duration, mvp }[]
+  games      String   @default("[]")
   createdAt  DateTime @default(now())
 }
 
-// === Héros MLBB ===
 model Hero {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   name        String   @unique
-  role        String // tank | fighter | assassin | mage | marksman | support
+  role        String
   image       String?
   description String?
   createdAt   DateTime @default(now())
 }
 
-// === Journal d'administration ===
 model AdminLog {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   action    String
@@ -190,12 +176,11 @@ model AdminLog {
   timestamp DateTime @default(now())
 }
 
-// === Constructeur de formulaires ===
 model FormTemplate {
   id          String         @id @default(auto()) @map("_id") @db.ObjectId
   name        String
   description String?
-  fields      String         @default("[]") // JSON: champ[]
+  fields      String         @default("[]")
   status      String         @default("active")
   responses   FormResponse[]
   createdAt   DateTime       @default(now())
@@ -206,11 +191,10 @@ model FormResponse {
   id          String       @id @default(auto()) @map("_id") @db.ObjectId
   formId      String       @db.ObjectId
   form        FormTemplate @relation(fields: [formId], references: [id], onDelete: Cascade)
-  data        String       @default("{}") // JSON: { [label]: valeur }
+  data        String       @default("{}")
   submittedAt DateTime     @default(now())
 }
 
-// === Notifications ===
 model Notification {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   userId    String?  @db.ObjectId
@@ -222,13 +206,11 @@ model Notification {
   createdAt DateTime @default(now())
 }
 
-// === E-sport : organisation + sous-équipes ===
-// Schéma volontairement souple : on pourra ajouter des colonnes au fil du développement.
 model Esport {
   id          String       @id @default(auto()) @map("_id") @db.ObjectId
   name        String
-  logo        String? // URL (Cloudinary) — on ne stocke pas les fichiers
-  color       String? // couleur dominante (ex: #E9B84B)
+  logo        String?
+  color       String?
   description String?
   teams       EsportTeam[]
   createdAt   DateTime     @default(now())
@@ -238,7 +220,7 @@ model Esport {
 model EsportTeam {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   name      String
-  image     String? // URL (Cloudinary)
+  image     String?
   esportId  String   @db.ObjectId
   esport    Esport   @relation(fields: [esportId], references: [id], onDelete: Cascade)
   sort      Int      @default(0)
@@ -246,24 +228,22 @@ model EsportTeam {
   updatedAt DateTime @updatedAt
 }
 
-// === Sponsors ===
 model Sponsor {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   name      String?
-  logo      String // URL (Cloudinary)
+  logo      String
   url       String?
   sort      Int      @default(0)
   createdAt DateTime @default(now())
 }
 
-// === MTL : Mobile Legends (Bang Bang) Togo League ===
 model Mtl {
   id          String     @id @default(auto()) @map("_id") @db.ObjectId
-  name        String // "Mobile Legends Bang Bang Togo League"
-  season      String? // "Saison 1"
+  name        String
+  season      String?
   description String?
-  startDate   String? // "2025-10-17"
-  endDate     String? // "2025-12-07"
+  startDate   String?
+  endDate     String?
   images      MtlImage[]
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -271,7 +251,7 @@ model Mtl {
 
 model MtlImage {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  image     String // URL (Cloudinary)
+  image     String
   caption   String?
   sort      Int      @default(0)
   mtlId     String   @db.ObjectId
@@ -279,7 +259,6 @@ model MtlImage {
   createdAt DateTime @default(now())
 }
 
-// === Messages du formulaire de contact ===
 model ContactMessage {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   name      String

@@ -9,7 +9,6 @@ import { UpdateTeamDto } from './dto/update-team.dto';
 export class TeamsService {
   constructor(private prisma: PrismaService) {}
 
-  /** Sérialise une équipe : parse les champs JSON, calcule winRate, liste les membres (ids). */
   private async serialize(team: any) {
     const members = await this.prisma.user.findMany({
       where: { teamId: team.id },

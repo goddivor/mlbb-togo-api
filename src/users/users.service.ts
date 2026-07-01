@@ -3,10 +3,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import { UpdateUserDto } from './dto/update-user.dto';
 
-/**
- * Décode le `rank_level` MLBB (1..9999) en palier lisible, d'après les plages
- * officielles Moonton (/api/academy/ranks). Au-delà de 135 → paliers Mythic.
- */
 export function decodeRank(level?: number | null): string | null {
   if (level == null) return null;
   const tiers: Array<[number, string]> = [
@@ -27,19 +23,12 @@ export function decodeRank(level?: number | null): string | null {
   return null;
 }
 
-/** Calcule le pourcentage de victoires, arrondi à 1 décimale (0 si aucun match). */
 export function computeWinRate(wins: number, losses: number): number {
   const total = (wins || 0) + (losses || 0);
   if (total === 0) return 0;
   return Math.round(((wins || 0) / total) * 1000) / 10;
 }
 
-/**
- * Sérialise un User Prisma pour les réponses API :
- * - retire le mot de passe ;
- * - parse favoriteHeroes / badges en tableaux ;
- * - ajoute role_user (= roleUser) et winRate calculé.
- */
 export function serializeUser(user: any) {
   if (!user) return user;
   const { password, mlbbToken, ...rest } = user;
@@ -48,7 +37,6 @@ export function serializeUser(user: any) {
   const hasGame = !!user.mlbbRoleId;
   const source = user.profileSource === 'google' ? 'google' : 'game';
 
-  // Avatar/nom affichés selon la préférence, avec repli sur l'autre source puis le champ legacy.
   const displayAvatar =
     source === 'google'
       ? user.googleAvatar || user.gameAvatar || user.avatar || null
@@ -65,19 +53,19 @@ export function serializeUser(user: any) {
     winRate: computeWinRate(user.wins, user.losses),
     roleUser: user.roleUser,
     role_user: user.roleUser,
-    // Identités liées
+
     hasGoogle,
     hasGame,
     profileSource: source,
-    // Profil affiché (résolu selon profileSource)
+
     avatar: displayAvatar,
     displayName,
-    // Données de jeu prêtes à l'emploi
+
     gameStats: parseJson<any>(user.gameStats, {}),
     gameFrequentHeroes: parseJson<any[]>(user.gameFrequentHeroes, []),
     gameRoles: parseJson<any[]>(user.gameRoles, []),
     gameSeasons: parseJson<number[]>(user.gameSeasons, []),
-    // Rang lisible décodé depuis rank_level (ex. « Mythic Glory »).
+
     gameRank: decodeRank(user.gameRankLevel),
   };
 }

@@ -3,11 +3,6 @@ import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
-/**
- * Garde d'authentification JWT.
- * S'appuie sur la stratégie 'jwt' enregistrée par AuthModule.
- * Respecte le décorateur @Public() pour laisser passer les routes publiques.
- */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
   constructor(private reflector: Reflector) {
