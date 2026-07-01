@@ -16,8 +16,13 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 
-// API publique MLBB (rone.dev) pour la connexion par code de vérification.
-const MLBB_API = 'https://mlbb.rone.dev/api';
+// API publique MLBB. Deux bases : le domaine principal et son miroir officiel
+// (annoncé par l'API elle-même dans `alternative_endpoint` quand elle sature).
+// On tente la première, puis on bascule sur la suivante en cas d'indisponibilité.
+const MLBB_BASES = [
+  'https://mlbb.rone.dev/api',
+  'https://openmlbb.fastapicloud.dev/api',
+];
 
 // Profil de jeu « vide » (quand l'API n'a pas renvoyé de jeton exploitable).
 const EMPTY_GAME_PROFILE = {
@@ -105,6 +110,29 @@ export class AuthService {
 
   // ============ Connexion / liaison MLBB (code de vérification) ============
 
+  /**
+   * Appelle l'API MLBB avec bascule automatique vers le miroir : on essaie chaque
+   * base tant que la réponse indique une indisponibilité (503 / SERVICE_UNAVAILABLE)
+   * ou qu'une erreur réseau survient. Renvoie le JSON, ou null si tout échoue.
+   */
+  private async mlbbFetch(path: string, init?: any): Promise<any> {
+    let last: any = null;
+    for (const base of MLBB_BASES) {
+      try {
+        const res = await fetch(`${base}${path}`, init);
+        const json = await res.json();
+        if (res.status === 503 || json?.code === 'SERVICE_UNAVAILABLE') {
+          last = json;
+          continue; // base saturée → on tente la suivante
+        }
+        return json;
+      } catch {
+        // erreur réseau : on tente la base suivante
+      }
+    }
+    return last;
+  }
+
   /** Mappe les héros fréquents bruts de l'API MLBB vers notre format. */
   private mapFrequentHeroes(result: any): any[] {
     return (Array.isArray(result) ? result : []).map((h: any) => ({
@@ -121,30 +149,20 @@ export class AuthService {
 
   /** Liste des saisons du joueur (sids), la plus récente en tête. */
   private async fetchSeasons(token: string): Promise<number[]> {
-    try {
-      const res = await fetch(`${MLBB_API}/user/season`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const json: any = await res.json();
-      const sids = json?.data?.sids;
-      return Array.isArray(sids) ? sids : [];
-    } catch {
-      return [];
-    }
+    const json = await this.mlbbFetch('/user/season', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const sids = json?.data?.sids;
+    return Array.isArray(sids) ? sids : [];
   }
 
   /** Héros fréquents du joueur pour une saison donnée (sid OBLIGATOIRE côté API). */
   private async fetchFrequentHeroes(token: string, sid: number, limit = 8): Promise<any[]> {
-    try {
-      const res = await fetch(
-        `${MLBB_API}/user/heroes/frequent?sid=${sid}&limit=${limit}`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      const json: any = await res.json();
-      return this.mapFrequentHeroes(json?.data?.result);
-    } catch {
-      return [];
-    }
+    const json = await this.mlbbFetch(
+      `/user/heroes/frequent?sid=${sid}&limit=${limit}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    return this.mapFrequentHeroes(json?.data?.result);
   }
 
   /**
@@ -155,8 +173,8 @@ export class AuthService {
   private async fetchGameProfile(token: string) {
     const headers = { Authorization: `Bearer ${token}` };
     const [infoR, statsR, seasons] = await Promise.all([
-      fetch(`${MLBB_API}/user/info`, { headers }).then((r) => r.json()).catch(() => null),
-      fetch(`${MLBB_API}/user/stats`, { headers }).then((r) => r.json()).catch(() => null),
+      this.mlbbFetch('/user/info', { headers }),
+      this.mlbbFetch('/user/stats', { headers }),
       this.fetchSeasons(token),
     ]);
 
@@ -240,23 +258,18 @@ export class AuthService {
 
   /** Valide un code de vérification et renvoie le jeton de l'API MLBB. */
   private async validateMlbbCode(roleId: number, zoneId: number, vc: number) {
-    let json: any;
-    try {
-      const res = await fetch(`${MLBB_API}/user/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role_id: roleId, zone_id: zoneId, vc }),
-      });
-      json = await res.json();
-    } catch (e: any) {
-      this.logger.warn(`mlbb login injoignable: ${e?.message}`);
-      throw new BadRequestException('Service MLBB momentanément indisponible. Réessayez.');
+    const json = await this.mlbbFetch('/user/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role_id: roleId, zone_id: zoneId, vc }),
+    });
+    if (!json || json.code === 'SERVICE_UNAVAILABLE') {
+      throw new BadRequestException('Service MLBB momentanément indisponible. Réessayez dans un instant.');
     }
-    if (json?.code !== 0 || !json?.data) {
-      throw new UnauthorizedException(json?.msg || 'Code de vérification invalide ou expiré.');
+    if (json.code !== 0 || !json.data) {
+      throw new UnauthorizedException(json.msg || 'Code de vérification invalide ou expiré.');
     }
-    const data = json.data;
-    return (data.jwt || data.token || null) as string | null;
+    return (json.data.jwt || json.data.token || null) as string | null;
   }
 
   /** Champs Prisma dérivés d'un profil de jeu, prêts pour create/update. */
@@ -279,21 +292,20 @@ export class AuthService {
 
   /** Envoie un code de vérification dans le courrier en jeu du joueur. */
   async mlbbSendVc(roleId: number, zoneId: number) {
-    let json: any;
-    try {
-      const res = await fetch(`${MLBB_API}/user/auth/send-vc`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role_id: roleId, zone_id: zoneId }),
-      });
-      json = await res.json();
-    } catch (e: any) {
-      this.logger.warn(`send-vc injoignable: ${e?.message}`);
-      throw new BadRequestException("Service MLBB momentanément indisponible. Réessayez.");
-    }
-    if (json?.code !== 0) {
+    const json = await this.mlbbFetch('/user/auth/send-vc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role_id: roleId, zone_id: zoneId }),
+    });
+    // Indisponibilité API (les deux bases KO) : message distinct du cas « mauvais ID ».
+    if (!json || json.code === 'SERVICE_UNAVAILABLE') {
       throw new BadRequestException(
-        json?.msg || "Impossible d'envoyer le code. Vérifiez l'ID de jeu et le serveur.",
+        'Service MLBB momentanément indisponible (trafic élevé). Réessaie dans quelques instants.',
+      );
+    }
+    if (json.code !== 0) {
+      throw new BadRequestException(
+        json.msg || "Impossible d'envoyer le code. Vérifie l'ID de jeu et le serveur.",
       );
     }
     return {
