@@ -8,7 +8,6 @@ import { CreateFormDto } from './dto/create-form.dto';
 export class AdminService {
   constructor(private prisma: PrismaService) {}
 
-  // === Statistiques ===
   async getStats() {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
@@ -45,7 +44,6 @@ export class AdminService {
     };
   }
 
-  // === Journal d'administration ===
   async findAllLogs() {
     return this.prisma.adminLog.findMany({
       orderBy: { timestamp: 'desc' },
@@ -63,7 +61,6 @@ export class AdminService {
     });
   }
 
-  // === Formulaires ===
   private serializeForm(form: any, responsesCount?: number) {
     return {
       ...form,
@@ -117,7 +114,6 @@ export class AdminService {
     return { success: true };
   }
 
-  // === Réponses aux formulaires ===
   async findResponses(formId: string) {
     await this.findOneForm(formId);
     const responses = await this.prisma.formResponse.findMany({

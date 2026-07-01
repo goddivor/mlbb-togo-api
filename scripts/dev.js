@@ -1,4 +1,4 @@
-// Démarre MongoDB si besoin, puis NestJS en mode watch. Cross-platform.
+
 const { spawnSync } = require('child_process');
 const { ensureMongo } = require('./ensure-mongo');
 

@@ -1,6 +1,4 @@
-// Prépare la base MongoDB à l'identique pour quiconque clone le projet :
-//   1) démarre MongoDB (replica set)   2) schéma + index   3) données de référence.
-// Cross-platform (Linux / macOS / Windows).
+
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -12,7 +10,7 @@ function databaseUrl() {
     const m = env.match(/^DATABASE_URL=(.*)$/m);
     if (m) return m[1].trim().replace(/^["']|["']$/g, '');
   } catch (e) {
-    /* .env absent : on retombe sur la valeur par défaut */
+
   }
   return 'mongodb://127.0.0.1:27017/mlbb_togo?replicaSet=rs0';
 }

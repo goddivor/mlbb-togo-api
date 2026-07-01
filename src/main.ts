@@ -5,10 +5,8 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Préfixe global pour toutes les routes : /api/...
   app.setGlobalPrefix('api');
 
-  // Validation automatique des DTO (class-validator)
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -17,7 +15,6 @@ async function bootstrap() {
     }),
   );
 
-  // CORS pour autoriser le frontend Next.js
   app.enableCors({
     origin: [
       process.env.FRONTEND_URL || 'http://localhost:3005',

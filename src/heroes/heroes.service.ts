@@ -5,7 +5,6 @@ import { PrismaService } from '../prisma/prisma.service';
 export class HeroesService {
   constructor(private prisma: PrismaService) {}
 
-  /** Tous les héros, filtrés par rôle si fourni, triés par nom. */
   async findAll(role?: string) {
     return this.prisma.hero.findMany({
       where: role ? { role } : undefined,
@@ -20,7 +19,6 @@ export class HeroesService {
     });
   }
 
-  /** Un héros par son identifiant. */
   async findOne(id: string) {
     const hero = await this.prisma.hero.findUnique({
       where: { id },
