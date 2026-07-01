@@ -17,6 +17,13 @@ export class MlbbService {
   private readonly HEROES_SRC = '2756564';
   private readonly RANKING_SRC = '2756567';
 
+  // Aggregated hero-meta API (win/pick/ban, counters, combos), with mirror fallback
+  // when the primary domain is saturated (SERVICE_UNAVAILABLE).
+  private readonly RONE_BASES = [
+    'https://mlbb.rone.dev/api',
+    'https://openmlbb.fastapicloud.dev/api',
+  ];
+
   private enigmaCache: { value: string; expiresAt: number } | null = null;
   private heroesCache: { lang: string; records: any[]; expiresAt: number } | null = null;
   private rankingCache = new Map<string, { data: any; expiresAt: number }>();
@@ -378,5 +385,119 @@ export class MlbbService {
       throw new NotFoundException(`Héros ${heroId} introuvable.`);
     }
     return this.mapDetail(rec);
+  }
+
+  // ============ Meta hero (win/pick/ban, synergies, counters, combos) ============
+
+  /** Calls the aggregated hero-meta API, falling back to the mirror on saturation. */
+  private async roneFetch(path: string): Promise<any> {
+    let last: any = null;
+    for (const base of this.RONE_BASES) {
+      try {
+        const res = await fetch(`${base}${path}`);
+        const json = await res.json();
+        if (res.status === 503 || json?.code === 'SERVICE_UNAVAILABLE') {
+          last = json;
+          continue;
+        }
+        return json;
+      } catch {
+        /* try next base */
+      }
+    }
+    return last;
+  }
+
+  /** Map<heroId, { name, image }> built from the official hero list (to enrich meta). */
+  private async heroNameImageMap(lang = 'en'): Promise<Map<number, { name: string | null; image: string | null }>> {
+    const records = await this.fetchHeroRecords(lang);
+    const map = new Map<number, { name: string | null; image: string | null }>();
+    for (const r of records) {
+      const s = this.mapSummary(r);
+      if (s.heroId != null) map.set(Number(s.heroId), { name: s.name, image: s.image });
+    }
+    return map;
+  }
+
+  private pct(n: any): number {
+    return typeof n === 'number' ? Math.round(n * 1000) / 10 : 0;
+  }
+
+  /** Maps a sub_hero / sub_hero_last list, enriching each entry with name + image. */
+  private mapSubHeroes(list: any, heroMap: Map<number, any>): any[] {
+    return (Array.isArray(list) ? list : []).map((it: any) => {
+      const id = Number(it.heroid ?? it.hero?.data?.heroid);
+      const info = heroMap.get(id) || {};
+      return {
+        heroId: id || null,
+        name: info.name ?? null,
+        image: info.image ?? it.hero?.data?.head ?? null,
+        winRate: this.pct(it.hero_win_rate),
+        increaseWinRate: this.pct(it.increase_win_rate),
+      };
+    });
+  }
+
+  /** Enriches a GMS synergy entry ({ heroId, image, increaseWinRate }) with the name. */
+  private enrichSynergies(list: any, heroMap: Map<number, any>): any[] {
+    return (Array.isArray(list) ? list : []).map((x: any) => {
+      const id = Number(x.heroId ?? x.heroid);
+      const info = heroMap.get(id) || {};
+      return {
+        heroId: id || null,
+        name: info.name ?? null,
+        image: info.image ?? x.image ?? null,
+        winRate: this.pct(x.winRate),
+        increaseWinRate: this.pct(x.increaseWinRate ?? x.increase_win_rate),
+      };
+    });
+  }
+
+  /**
+   * Full hero meta for the detail page. Win/pick/ban and best teammates come from
+   * the Moonton GMS ranking (reliable); counters, worst teammates and skill combos
+   * come from the aggregated hero API (with mirror fallback) when available.
+   */
+  async getHeroMeta(heroId: number, lang = 'en') {
+    const [ranking, countersR, combosR, heroMap] = await Promise.all([
+      this.getHeroRanking({ limit: 400, lang }).catch(() => ({ ranking: [] as any[] })),
+      this.roneFetch(`/heroes/${heroId}/counters?lang=${lang}`),
+      this.roneFetch(`/heroes/${heroId}/skill-combos?lang=${lang}`),
+      this.heroNameImageMap(lang),
+    ]);
+
+    const entry = ((ranking as any)?.ranking ?? []).find(
+      (r: any) => Number(r.heroId) === Number(heroId),
+    );
+    const c = countersR?.data?.records?.[0]?.data ?? null;
+    const comboRecords = combosR?.data?.records ?? [];
+
+    const combos = (Array.isArray(comboRecords) ? comboRecords : []).map((r: any) => {
+      const d = r?.data ?? {};
+      return {
+        title: d.title ?? null,
+        description: d.desc ?? null,
+        skills: (d.skill_id ?? []).map((sk: any) => ({
+          id: sk?.data?.skillid ?? null,
+          icon: sk?.data?.skillicon ?? null,
+        })),
+      };
+    });
+
+    return {
+      available: !!entry,
+      winRate: this.pct(entry?.winRate),
+      pickRate: this.pct(entry?.pickRate),
+      banRate: this.pct(entry?.banRate),
+      synergy: {
+        best: this.enrichSynergies(entry?.synergies, heroMap),
+        worst: [],
+      },
+      counters: {
+        strong: this.mapSubHeroes(c?.sub_hero, heroMap),
+        weak: this.mapSubHeroes(c?.sub_hero_last, heroMap),
+      },
+      combos,
+    };
   }
 }
