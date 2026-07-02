@@ -260,6 +260,34 @@ model Sponsor {
   createdAt DateTime @default(now())
 }
 
+model EsportSeason {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  startDate   DateTime?
+  endDate     DateTime?
+  isActive    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model EsportMatch {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  seasonId     String?   @db.ObjectId
+  type         String    @default("friendly")
+  teamAId      String    @db.ObjectId
+  teamBId      String    @db.ObjectId
+  scheduledAt  DateTime?
+  status       String    @default("scheduled")
+  scoreA       Int       @default(0)
+  scoreB       Int       @default(0)
+  winnerTeamId String?   @db.ObjectId
+  notes        String?
+  createdById  String?   @db.ObjectId
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
 model Mtl {
   id          String     @id @default(auto()) @map("_id") @db.ObjectId
   name        String

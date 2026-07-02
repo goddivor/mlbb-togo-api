@@ -6,12 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { EsportService } from './esport.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('esport')
 export class EsportController {
@@ -34,6 +36,11 @@ export class EsportController {
     return this.esport.getTeam(id);
   }
 
+  @Get('teams/:id/matches')
+  getTeamMatches(@Param('id') id: string) {
+    return this.esport.getTeamMatches(id);
+  }
+
   @Get('sponsors')
   getSponsors() {
     return this.esport.getSponsors();
@@ -42,6 +49,30 @@ export class EsportController {
   @Get('mtl')
   getMtl() {
     return this.esport.getMtl();
+  }
+
+  @Get('seasons')
+  getSeasons() {
+    return this.esport.listSeasons();
+  }
+
+  @Get('seasons/:id')
+  getSeason(@Param('id') id: string) {
+    return this.esport.getSeason(id);
+  }
+
+  @Get('matches')
+  getMatches(
+    @Query('seasonId') seasonId?: string,
+    @Query('teamId') teamId?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.esport.listMatches({ seasonId, teamId, status });
+  }
+
+  @Get('matches/:id')
+  getMatch(@Param('id') id: string) {
+    return this.esport.getMatch(id);
   }
 
   // ----- Admin: organisation -----
@@ -131,5 +162,58 @@ export class EsportController {
   @Delete('sponsors/:id')
   deleteSponsor(@Param('id') id: string) {
     return this.esport.deleteSponsor(id);
+  }
+
+  // ----- Admin: seasons -----
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons')
+  createSeason(@Body() body: any) {
+    return this.esport.createSeason(body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('seasons/:id')
+  updateSeason(@Param('id') id: string, @Body() body: any) {
+    return this.esport.updateSeason(id, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Delete('seasons/:id')
+  deleteSeason(@Param('id') id: string) {
+    return this.esport.deleteSeason(id);
+  }
+
+  // ----- Admin: matches -----
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('matches')
+  createMatch(@Body() body: any, @CurrentUser() user: any) {
+    return this.esport.createMatch(body, user?.id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('matches/:id/result')
+  setMatchResult(@Param('id') id: string, @Body() body: any) {
+    return this.esport.setMatchResult(id, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('matches/:id')
+  updateMatch(@Param('id') id: string, @Body() body: any) {
+    return this.esport.updateMatch(id, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Delete('matches/:id')
+  deleteMatch(@Param('id') id: string) {
+    return this.esport.deleteMatch(id);
   }
 }

@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
+export const MATCH_TYPES = ['friendly', 'training', 'official'];
+export const MATCH_STATUS = ['scheduled', 'completed', 'cancelled'];
 
 function assertRole(role: unknown) {
   if (role == null) return null;
@@ -70,12 +72,21 @@ const teamInclude = {
 export class EsportService {
   constructor(private prisma: PrismaService) {}
 
+  private async attachStats(teams: any[]) {
+    const completed = await this.prisma.esportMatch.findMany({
+      where: { status: 'completed' },
+      select: { teamAId: true, teamBId: true, winnerTeamId: true, status: true },
+    });
+    return teams.map((tm) => ({ ...tm, stats: this.computeTeamStats(tm.id, completed) }));
+  }
+
   async getOrg() {
     const org = await this.prisma.esport.findFirst({
       include: { teams: { orderBy: { sort: 'asc' }, include: teamInclude } },
     });
     if (!org) return null;
-    return { ...org, teams: (org.teams ?? []).map(serializeTeam) };
+    const teams = await this.attachStats((org.teams ?? []).map(serializeTeam));
+    return { ...org, teams };
   }
 
   async getTeams() {
@@ -83,7 +94,7 @@ export class EsportService {
       orderBy: { sort: 'asc' },
       include: teamInclude,
     });
-    return teams.map(serializeTeam);
+    return this.attachStats(teams.map(serializeTeam));
   }
 
   async getTeam(id: string) {
@@ -92,7 +103,9 @@ export class EsportService {
       include: teamInclude,
     });
     if (!team) throw new NotFoundException('Équipe introuvable.');
-    return serializeTeam(team);
+    const [withStats] = await this.attachStats([serializeTeam(team)]);
+    const matches = await this.getTeamMatches(id, 10);
+    return { ...withStats, matches };
   }
 
   async getSponsors() {
@@ -294,5 +307,232 @@ export class EsportService {
     if (!sponsor) throw new NotFoundException('Sponsor introuvable.');
     await this.prisma.sponsor.delete({ where: { id } });
     return { ok: true };
+  }
+
+  // ----- Seasons -----
+
+  async listSeasons() {
+    return this.prisma.esportSeason.findMany({
+      orderBy: [{ isActive: 'desc' }, { startDate: 'desc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  async getSeason(id: string) {
+    const season = await this.prisma.esportSeason.findUnique({ where: { id } });
+    if (!season) throw new NotFoundException('Saison introuvable.');
+    return season;
+  }
+
+  async createSeason(data: any) {
+    if (!data?.name) throw new BadRequestException('Le nom de la saison est requis.');
+    if (data.isActive) await this.clearActiveSeasons();
+    return this.prisma.esportSeason.create({
+      data: {
+        name: data.name,
+        description: data.description ?? null,
+        startDate: data.startDate ? new Date(data.startDate) : null,
+        endDate: data.endDate ? new Date(data.endDate) : null,
+        isActive: !!data.isActive,
+      },
+    });
+  }
+
+  async updateSeason(id: string, data: any) {
+    await this.getSeason(id);
+    if (data.isActive === true) await this.clearActiveSeasons();
+    return this.prisma.esportSeason.update({
+      where: { id },
+      data: {
+        name: data.name ?? undefined,
+        description: data.description === undefined ? undefined : data.description,
+        startDate:
+          data.startDate === undefined
+            ? undefined
+            : data.startDate
+              ? new Date(data.startDate)
+              : null,
+        endDate:
+          data.endDate === undefined
+            ? undefined
+            : data.endDate
+              ? new Date(data.endDate)
+              : null,
+        isActive: typeof data.isActive === 'boolean' ? data.isActive : undefined,
+      },
+    });
+  }
+
+  async deleteSeason(id: string) {
+    await this.getSeason(id);
+    await this.prisma.esportSeason.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  private async clearActiveSeasons() {
+    await this.prisma.esportSeason.updateMany({
+      where: { isActive: true },
+      data: { isActive: false },
+    });
+  }
+
+  // ----- Matches -----
+
+  private async teamMap(ids: string[]) {
+    const uniq = Array.from(new Set(ids.filter(Boolean)));
+    const teams = uniq.length
+      ? await this.prisma.esportTeam.findMany({
+          where: { id: { in: uniq } },
+          select: { id: true, name: true, image: true, tag: true },
+        })
+      : [];
+    return new Map(teams.map((tm) => [tm.id, tm]));
+  }
+
+  private serializeMatch(m: any, tmap: Map<string, any>) {
+    return {
+      id: m.id,
+      seasonId: m.seasonId ?? null,
+      type: m.type,
+      status: m.status,
+      scheduledAt: m.scheduledAt,
+      scoreA: m.scoreA ?? 0,
+      scoreB: m.scoreB ?? 0,
+      winnerTeamId: m.winnerTeamId ?? null,
+      notes: m.notes ?? null,
+      createdAt: m.createdAt,
+      teamA: tmap.get(m.teamAId) ?? { id: m.teamAId, name: '?' },
+      teamB: tmap.get(m.teamBId) ?? { id: m.teamBId, name: '?' },
+      winner: m.winnerTeamId ? tmap.get(m.winnerTeamId) ?? null : null,
+    };
+  }
+
+  async listMatches(filter: { seasonId?: string; teamId?: string; status?: string } = {}) {
+    const where: any = {};
+    if (filter.seasonId) where.seasonId = filter.seasonId;
+    if (filter.status) where.status = filter.status;
+    if (filter.teamId)
+      where.OR = [{ teamAId: filter.teamId }, { teamBId: filter.teamId }];
+    const matches = await this.prisma.esportMatch.findMany({
+      where,
+      orderBy: [{ scheduledAt: 'desc' }, { createdAt: 'desc' }],
+    });
+    const tmap = await this.teamMap(
+      matches.flatMap((m) => [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
+    );
+    return matches.map((m) => this.serializeMatch(m, tmap));
+  }
+
+  async getMatch(id: string) {
+    const m = await this.prisma.esportMatch.findUnique({ where: { id } });
+    if (!m) throw new NotFoundException('Match introuvable.');
+    const tmap = await this.teamMap(
+      [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[],
+    );
+    return this.serializeMatch(m, tmap);
+  }
+
+  async createMatch(data: any, createdById?: string) {
+    const type = MATCH_TYPES.includes(data?.type) ? data.type : 'friendly';
+    if (!data?.teamAId || !data?.teamBId)
+      throw new BadRequestException('Les deux équipes sont requises.');
+    if (data.teamAId === data.teamBId)
+      throw new BadRequestException('Une équipe ne peut pas jouer contre elle-même.');
+    const found = await this.prisma.esportTeam.findMany({
+      where: { id: { in: [data.teamAId, data.teamBId] } },
+      select: { id: true },
+    });
+    if (found.length !== 2) throw new NotFoundException('Équipe introuvable.');
+    if (data.seasonId) await this.getSeason(data.seasonId);
+
+    await this.prisma.esportMatch.create({
+      data: {
+        seasonId: data.seasonId ?? null,
+        type,
+        teamAId: data.teamAId,
+        teamBId: data.teamBId,
+        scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
+        notes: data.notes ?? null,
+        createdById: createdById ?? null,
+      },
+    });
+    return this.listMatches();
+  }
+
+  async updateMatch(id: string, data: any) {
+    await this.getMatch(id);
+    const patch: any = {};
+    if (data.type !== undefined)
+      patch.type = MATCH_TYPES.includes(data.type) ? data.type : undefined;
+    if (data.seasonId !== undefined) patch.seasonId = data.seasonId || null;
+    if (data.teamAId !== undefined) patch.teamAId = data.teamAId;
+    if (data.teamBId !== undefined) patch.teamBId = data.teamBId;
+    if (data.scheduledAt !== undefined)
+      patch.scheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : null;
+    if (data.notes !== undefined) patch.notes = data.notes;
+    if (data.status !== undefined && MATCH_STATUS.includes(data.status))
+      patch.status = data.status;
+    if (patch.teamAId && patch.teamBId && patch.teamAId === patch.teamBId)
+      throw new BadRequestException('Une équipe ne peut pas jouer contre elle-même.');
+    await this.prisma.esportMatch.update({ where: { id }, data: patch });
+    return this.getMatch(id);
+  }
+
+  async setMatchResult(id: string, data: any) {
+    const m = await this.prisma.esportMatch.findUnique({ where: { id } });
+    if (!m) throw new NotFoundException('Match introuvable.');
+    const scoreA = Number.isFinite(+data?.scoreA) ? Math.max(0, +data.scoreA) : 0;
+    const scoreB = Number.isFinite(+data?.scoreB) ? Math.max(0, +data.scoreB) : 0;
+    let winnerTeamId: string | null = null;
+    if (data?.winnerTeamId) {
+      if (data.winnerTeamId !== m.teamAId && data.winnerTeamId !== m.teamBId)
+        throw new BadRequestException("Le vainqueur doit être l'une des deux équipes.");
+      winnerTeamId = data.winnerTeamId;
+    } else if (scoreA > scoreB) winnerTeamId = m.teamAId;
+    else if (scoreB > scoreA) winnerTeamId = m.teamBId;
+
+    await this.prisma.esportMatch.update({
+      where: { id },
+      data: { scoreA, scoreB, winnerTeamId, status: 'completed' },
+    });
+    return this.getMatch(id);
+  }
+
+  async deleteMatch(id: string) {
+    await this.getMatch(id);
+    await this.prisma.esportMatch.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  private computeTeamStats(teamId: string, matches: any[]) {
+    let wins = 0;
+    let losses = 0;
+    let draws = 0;
+    for (const m of matches) {
+      if (m.status !== 'completed') continue;
+      if (m.teamAId !== teamId && m.teamBId !== teamId) continue;
+      if (m.winnerTeamId === teamId) wins++;
+      else if (m.winnerTeamId) losses++;
+      else draws++;
+    }
+    const decisive = wins + losses;
+    return {
+      played: wins + losses + draws,
+      wins,
+      losses,
+      draws,
+      winRate: decisive ? Math.round((wins / decisive) * 100) : 0,
+    };
+  }
+
+  async getTeamMatches(teamId: string, limit = 10) {
+    const matches = await this.prisma.esportMatch.findMany({
+      where: { OR: [{ teamAId: teamId }, { teamBId: teamId }] },
+      orderBy: [{ scheduledAt: 'desc' }, { createdAt: 'desc' }],
+      take: limit,
+    });
+    const tmap = await this.teamMap(
+      matches.flatMap((m) => [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
+    );
+    return matches.map((m) => this.serializeMatch(m, tmap));
   }
 }
