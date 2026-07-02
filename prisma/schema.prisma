@@ -57,6 +57,7 @@ model User {
   team           Team?     @relation("TeamMembers", fields: [teamId], references: [id])
   posts          Post[]
   comments       Comment[]
+  esportMemberships EsportTeamMember[] @relation("EsportMemberships")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 }
@@ -218,14 +219,36 @@ model Esport {
 }
 
 model EsportTeam {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  name      String
-  image     String?
-  esportId  String   @db.ObjectId
-  esport    Esport   @relation(fields: [esportId], references: [id], onDelete: Cascade)
-  sort      Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String             @id @default(auto()) @map("_id") @db.ObjectId
+  name         String
+  image        String?
+  description  String?
+  type         String             @default("community")
+  isRecruiting Boolean            @default(false)
+  esportId     String?            @db.ObjectId
+  esport       Esport?            @relation(fields: [esportId], references: [id], onDelete: Cascade)
+  members      EsportTeamMember[]
+  sort         Int                @default(0)
+  foundedAt    DateTime           @default(now())
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+}
+
+model EsportTeamMember {
+  id           String     @id @default(auto()) @map("_id") @db.ObjectId
+  teamId       String     @db.ObjectId
+  team         EsportTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId       String     @db.ObjectId
+  user         User       @relation("EsportMemberships", fields: [userId], references: [id], onDelete: Cascade)
+  role         String?
+  isCaptain    Boolean    @default(false)
+  isSubstitute Boolean    @default(false)
+  sort         Int        @default(0)
+  joinedAt     DateTime   @default(now())
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([teamId, userId])
 }
 
 model Sponsor {
@@ -234,6 +257,74 @@ model Sponsor {
   logo      String
   url       String?
   sort      Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model EsportSeason {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  startDate   DateTime?
+  endDate     DateTime?
+  isActive    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model EsportMatch {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  seasonId     String?   @db.ObjectId
+  type         String    @default("friendly")
+  teamAId      String    @db.ObjectId
+  teamBId      String    @db.ObjectId
+  scheduledAt  DateTime?
+  status       String    @default("scheduled")
+  scoreA       Int       @default(0)
+  scoreB       Int       @default(0)
+  winnerTeamId String?   @db.ObjectId
+  notes        String?
+  createdById  String?   @db.ObjectId
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model EsportJoinRequest {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  teamId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  role      String?
+  message   String?
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TeamRequest {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  requesterId   String   @db.ObjectId
+  proposedName  String
+  message       String?
+  status        String   @default("pending")
+  createdTeamId String?  @db.ObjectId
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model MessageThread {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  subject        String?
+  requestId      String?  @db.ObjectId
+  participantIds String[]
+  lastMessageAt  DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Message {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  threadId  String   @db.ObjectId
+  senderId  String   @db.ObjectId
+  body      String
   createdAt DateTime @default(now())
 }
 

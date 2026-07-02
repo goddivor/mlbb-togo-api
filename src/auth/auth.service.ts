@@ -96,6 +96,24 @@ export class AuthService {
     return { token, user: serializeUser(user) };
   }
 
+  async adminLogin(dto: { username: string; password: string }) {
+    const user = await this.prisma.user.findUnique({
+      where: { username: dto.username },
+    });
+    if (!user || !user.password) {
+      throw new UnauthorizedException('Identifiants invalides.');
+    }
+    const valid = await bcrypt.compare(dto.password, user.password);
+    if (!valid) {
+      throw new UnauthorizedException('Identifiants invalides.');
+    }
+    if (user.roleUser !== 'admin' && user.roleUser !== 'moderator') {
+      throw new UnauthorizedException("Ce compte n'a pas d'accès administrateur.");
+    }
+    const token = this.signToken(user);
+    return { token, user: serializeUser(user) };
+  }
+
   async me(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) {
