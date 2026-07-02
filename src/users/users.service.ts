@@ -141,7 +141,10 @@ export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   async findAll() {
-    const users = await this.prisma.user.findMany({ where: { isBanned: false } });
+    // Staff accounts (admin/moderator) are special control accounts, not players.
+    const users = await this.prisma.user.findMany({
+      where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
+    });
     return users
       .map(serializeUserCard)
       .sort((a, b) => {
@@ -152,7 +155,9 @@ export class UsersService {
 
   async findPublic(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException('Utilisateur introuvable.');
+    if (!user || user.roleUser === 'admin' || user.roleUser === 'moderator') {
+      throw new NotFoundException('Utilisateur introuvable.');
+    }
     return serializePublicUser(user);
   }
 

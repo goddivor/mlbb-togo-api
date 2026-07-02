@@ -2,6 +2,7 @@ import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/co
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { AdminLoginDto } from './dto/admin-login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { MlbbSendVcDto, MlbbLoginDto } from './dto/mlbb-login.dto';
 import { GoogleLoginDto } from './dto/google.dto';
@@ -21,6 +22,11 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @Post('admin/login')
+  adminLogin(@Body() dto: AdminLoginDto) {
+    return this.authService.adminLogin(dto);
   }
 
   @Post('change-password')
