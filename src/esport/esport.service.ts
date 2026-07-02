@@ -230,6 +230,13 @@ export class EsportService {
 
   // ----- Admin: membres -----
 
+  // Admin, ou capitaine de l'équipe concernée.
+  private async assertTeamManager(teamId: string, user: any) {
+    if (user?.roleUser === 'admin') return;
+    if (user?.id && (await this.isCaptain(teamId, user.id))) return;
+    throw new ForbiddenException("Réservé au capitaine de l'équipe.");
+  }
+
   async addMember(teamId: string, data: any) {
     await this.getTeam(teamId);
     if (!data?.userId) throw new BadRequestException('userId est requis.');
@@ -258,20 +265,25 @@ export class EsportService {
     return this.getTeam(teamId);
   }
 
-  async updateMember(teamId: string, userId: string, data: any) {
+  async updateMember(teamId: string, userId: string, data: any, user?: any) {
+    await this.assertTeamManager(teamId, user);
     const member = await this.prisma.esportTeamMember.findUnique({
       where: { teamId_userId: { teamId, userId } },
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
+    const isAdmin = user?.roleUser === 'admin';
     const role = data.role === undefined ? undefined : assertRole(data.role);
 
-    if (data.isCaptain === true) await this.clearCaptain(teamId);
+    // Seul l'admin peut toucher au statut de capitaine.
+    if (isAdmin && data.isCaptain === true) await this.clearCaptain(teamId);
     await this.prisma.esportTeamMember.update({
       where: { teamId_userId: { teamId, userId } },
       data: {
         role,
         isCaptain:
-          typeof data.isCaptain === 'boolean' ? data.isCaptain : undefined,
+          isAdmin && typeof data.isCaptain === 'boolean'
+            ? data.isCaptain
+            : undefined,
         isSubstitute:
           typeof data.isSubstitute === 'boolean' ? data.isSubstitute : undefined,
         sort: typeof data.sort === 'number' ? data.sort : undefined,
@@ -280,11 +292,15 @@ export class EsportService {
     return this.getTeam(teamId);
   }
 
-  async removeMember(teamId: string, userId: string) {
+  async removeMember(teamId: string, userId: string, user?: any) {
+    await this.assertTeamManager(teamId, user);
     const member = await this.prisma.esportTeamMember.findUnique({
       where: { teamId_userId: { teamId, userId } },
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
+    // Le capitaine ne peut pas se retirer lui-même (le capitaine).
+    if (user?.roleUser !== 'admin' && member.isCaptain)
+      throw new ForbiddenException('Le capitaine ne peut pas être retiré.');
     await this.prisma.esportTeamMember.delete({
       where: { teamId_userId: { teamId, userId } },
     });
@@ -469,7 +485,23 @@ export class EsportService {
     return this.serializeMatch(m, tmap);
   }
 
-  async createMatch(data: any, createdById?: string) {
+  // Admin, ou capitaine d'une des deux équipes (hors officiel).
+  private async assertMatchManager(match: any, user: any) {
+    if (user?.roleUser === 'admin') return;
+    if (match.type === 'official')
+      throw new ForbiddenException(
+        "Seul l'administrateur peut gérer une rencontre officielle.",
+      );
+    if (
+      user?.id &&
+      ((await this.isCaptain(match.teamAId, user.id)) ||
+        (await this.isCaptain(match.teamBId, user.id)))
+    )
+      return;
+    throw new ForbiddenException("Réservé au capitaine de l'équipe.");
+  }
+
+  async createMatch(data: any, createdById?: string, user?: any) {
     const type = MATCH_TYPES.includes(data?.type) ? data.type : 'friendly';
     if (!data?.teamAId || !data?.teamBId)
       throw new BadRequestException('Les deux équipes sont requises.');
@@ -481,6 +513,18 @@ export class EsportService {
     });
     if (found.length !== 2) throw new NotFoundException('Équipe introuvable.');
     if (data.seasonId) await this.getSeason(data.seasonId);
+
+    // Le capitaine ne peut créer que des amicaux/entraînements de son équipe.
+    if (user && user.roleUser !== 'admin') {
+      if (type === 'official')
+        throw new ForbiddenException(
+          "Seul l'administrateur peut planifier une rencontre officielle.",
+        );
+      const capA = await this.isCaptain(data.teamAId, user.id);
+      const capB = await this.isCaptain(data.teamBId, user.id);
+      if (!capA && !capB)
+        throw new ForbiddenException("Réservé au capitaine de l'équipe.");
+    }
 
     await this.prisma.esportMatch.create({
       data: {
@@ -496,8 +540,10 @@ export class EsportService {
     return this.listMatches();
   }
 
-  async updateMatch(id: string, data: any) {
-    await this.getMatch(id);
+  async updateMatch(id: string, data: any, user?: any) {
+    const raw = await this.prisma.esportMatch.findUnique({ where: { id } });
+    if (!raw) throw new NotFoundException('Match introuvable.');
+    await this.assertMatchManager(raw, user);
     const patch: any = {};
     if (data.type !== undefined)
       patch.type = MATCH_TYPES.includes(data.type) ? data.type : undefined;
@@ -515,9 +561,10 @@ export class EsportService {
     return this.getMatch(id);
   }
 
-  async setMatchResult(id: string, data: any) {
+  async setMatchResult(id: string, data: any, user?: any) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id } });
     if (!m) throw new NotFoundException('Match introuvable.');
+    await this.assertMatchManager(m, user);
     const scoreA = Number.isFinite(+data?.scoreA) ? Math.max(0, +data.scoreA) : 0;
     const scoreB = Number.isFinite(+data?.scoreB) ? Math.max(0, +data.scoreB) : 0;
     let winnerTeamId: string | null = null;
@@ -535,8 +582,10 @@ export class EsportService {
     return this.getMatch(id);
   }
 
-  async deleteMatch(id: string) {
-    await this.getMatch(id);
+  async deleteMatch(id: string, user?: any) {
+    const raw = await this.prisma.esportMatch.findUnique({ where: { id } });
+    if (!raw) throw new NotFoundException('Match introuvable.');
+    await this.assertMatchManager(raw, user);
     await this.prisma.esportMatch.delete({ where: { id } });
     return { ok: true };
   }
