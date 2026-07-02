@@ -149,22 +149,25 @@ export class EsportController {
     return this.esport.addMember(id, body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard)
   @Patch('teams/:id/members/:userId')
   updateMember(
     @Param('id') id: string,
     @Param('userId') userId: string,
     @Body() body: any,
+    @CurrentUser() user: any,
   ) {
-    return this.esport.updateMember(id, userId, body);
+    return this.esport.updateMember(id, userId, body, user);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard)
   @Delete('teams/:id/members/:userId')
-  removeMember(@Param('id') id: string, @Param('userId') userId: string) {
-    return this.esport.removeMember(id, userId);
+  removeMember(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.esport.removeMember(id, userId, user);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -220,33 +223,29 @@ export class EsportController {
     return this.esport.deleteSeason(id);
   }
 
-  // ----- Admin: matches -----
+  // ----- Matches (admin, ou capitaine pour amical/entraînement) -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard)
   @Post('matches')
   createMatch(@Body() body: any, @CurrentUser() user: any) {
-    return this.esport.createMatch(body, user?.id);
+    return this.esport.createMatch(body, user?.id, user);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard)
   @Patch('matches/:id/result')
-  setMatchResult(@Param('id') id: string, @Body() body: any) {
-    return this.esport.setMatchResult(id, body);
+  setMatchResult(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.setMatchResult(id, body, user);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard)
   @Patch('matches/:id')
-  updateMatch(@Param('id') id: string, @Body() body: any) {
-    return this.esport.updateMatch(id, body);
+  updateMatch(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.updateMatch(id, body, user);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard)
   @Delete('matches/:id')
-  deleteMatch(@Param('id') id: string) {
-    return this.esport.deleteMatch(id);
+  deleteMatch(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.esport.deleteMatch(id, user);
   }
 }
