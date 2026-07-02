@@ -50,10 +50,10 @@ function serializeTeam(team: any) {
     id: team.id,
     name: team.name,
     image: team.image ?? null,
-    tag: team.tag ?? null,
     description: team.description ?? null,
+    type: team.type ?? 'community',
     isRecruiting: !!team.isRecruiting,
-    esportId: team.esportId,
+    esportId: team.esportId ?? null,
     sort: team.sort ?? 0,
     foundedAt: team.foundedAt,
     memberCount: members.length,
@@ -89,8 +89,9 @@ export class EsportService {
     return { ...org, teams };
   }
 
-  async getTeams() {
+  async getTeams(type?: string) {
     const teams = await this.prisma.esportTeam.findMany({
+      where: type ? { type } : {},
       orderBy: { sort: 'asc' },
       include: teamInclude,
     });
@@ -149,20 +150,42 @@ export class EsportService {
   async createTeam(data: any) {
     if (!data?.name)
       throw new BadRequestException("Le nom de l'équipe est requis.");
-    const esportId = await this.resolveOrgId(data.esportId);
+    const type = data.type === 'esport' ? 'esport' : 'community';
+    const esportId = type === 'esport' ? await this.resolveOrgId(data.esportId) : null;
     const team = await this.prisma.esportTeam.create({
       data: {
         name: data.name,
         image: data.image ?? null,
-        tag: data.tag ?? null,
         description: data.description ?? null,
+        type,
         isRecruiting: !!data.isRecruiting,
         sort: typeof data.sort === 'number' ? data.sort : 0,
         esportId,
       },
-      include: teamInclude,
     });
-    return serializeTeam(team);
+
+    // Créée depuis une demande de joueur : on lie la demande et on
+    // désigne le demandeur comme capitaine.
+    if (data.requestId) {
+      const req = await this.prisma.teamRequest.findUnique({
+        where: { id: data.requestId },
+      });
+      if (req) {
+        await this.prisma.teamRequest.update({
+          where: { id: req.id },
+          data: { status: 'approved', createdTeamId: team.id },
+        });
+        const existing = await this.prisma.esportTeamMember.findUnique({
+          where: { teamId_userId: { teamId: team.id, userId: req.requesterId } },
+        });
+        if (!existing) {
+          await this.prisma.esportTeamMember.create({
+            data: { teamId: team.id, userId: req.requesterId, isCaptain: true },
+          });
+        }
+      }
+    }
+    return this.getTeam(team.id);
   }
 
   async updateTeam(id: string, data: any) {
@@ -172,7 +195,6 @@ export class EsportService {
       data: {
         name: data.name ?? undefined,
         image: data.image === undefined ? undefined : data.image,
-        tag: data.tag === undefined ? undefined : data.tag,
         description:
           data.description === undefined ? undefined : data.description,
         isRecruiting:
@@ -182,6 +204,17 @@ export class EsportService {
       include: teamInclude,
     });
     return serializeTeam(team);
+  }
+
+  async transformToEsport(id: string) {
+    const team = await this.prisma.esportTeam.findUnique({ where: { id } });
+    if (!team) throw new NotFoundException('Équipe introuvable.');
+    const esportId = await this.resolveOrgId();
+    await this.prisma.esportTeam.update({
+      where: { id },
+      data: { type: 'esport', esportId },
+    });
+    return this.getTeam(id);
   }
 
   async deleteTeam(id: string) {
@@ -382,7 +415,7 @@ export class EsportService {
     const teams = uniq.length
       ? await this.prisma.esportTeam.findMany({
           where: { id: { in: uniq } },
-          select: { id: true, name: true, image: true, tag: true },
+          select: { id: true, name: true, image: true },
         })
       : [];
     return new Map(teams.map((tm) => [tm.id, tm]));

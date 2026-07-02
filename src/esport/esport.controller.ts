@@ -27,8 +27,8 @@ export class EsportController {
   }
 
   @Get('teams')
-  getTeams() {
-    return this.esport.getTeams();
+  getTeams(@Query('type') type?: string) {
+    return this.esport.getTeams(type);
   }
 
   @Get('teams/:id')
@@ -105,6 +105,13 @@ export class EsportController {
   @Delete('teams/:id')
   deleteTeam(@Param('id') id: string) {
     return this.esport.deleteTeam(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('teams/:id/transform')
+  transformTeam(@Param('id') id: string) {
+    return this.esport.transformToEsport(id);
   }
 
   // ----- Admin: membres -----

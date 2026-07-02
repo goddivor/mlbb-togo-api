@@ -222,11 +222,11 @@ model EsportTeam {
   id           String             @id @default(auto()) @map("_id") @db.ObjectId
   name         String
   image        String?
-  tag          String?
   description  String?
+  type         String             @default("community")
   isRecruiting Boolean            @default(false)
-  esportId     String             @db.ObjectId
-  esport       Esport             @relation(fields: [esportId], references: [id], onDelete: Cascade)
+  esportId     String?            @db.ObjectId
+  esport       Esport?            @relation(fields: [esportId], references: [id], onDelete: Cascade)
   members      EsportTeamMember[]
   sort         Int                @default(0)
   foundedAt    DateTime           @default(now())
@@ -289,14 +289,14 @@ model EsportMatch {
 }
 
 model TeamRequest {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  requesterId  String   @db.ObjectId
-  proposedName String
-  tag          String?
-  message      String?
-  status       String   @default("pending")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  requesterId   String   @db.ObjectId
+  proposedName  String
+  message       String?
+  status        String   @default("pending")
+  createdTeamId String?  @db.ObjectId
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model MessageThread {

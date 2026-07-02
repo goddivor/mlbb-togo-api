@@ -114,7 +114,6 @@ export class CommunityService {
       data: {
         requesterId: userId,
         proposedName: data.proposedName.trim(),
-        tag: data.tag?.trim() || null,
         message: data.message?.trim() || null,
       },
     });
