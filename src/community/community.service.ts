@@ -6,12 +6,16 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
+import { ChatGateway } from './chat.gateway';
 
 const REQUEST_STATUS = ['pending', 'in_review', 'approved', 'rejected'];
 
 @Injectable()
 export class CommunityService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private chat: ChatGateway,
+  ) {}
 
   // ----- Notifications (internal helpers) -----
 
@@ -19,7 +23,7 @@ export class CommunityService {
     userId: string,
     data: { type: string; title: string; message: string; link?: string },
   ) {
-    return this.prisma.notification.create({
+    const notification = await this.prisma.notification.create({
       data: {
         userId,
         type: data.type,
@@ -29,6 +33,22 @@ export class CommunityService {
         read: false,
       },
     });
+    this.chat.emitToUser(userId, 'notification:new', notification);
+    return notification;
+  }
+
+  private emitMessage(participantIds: string[], threadId: string, message: any) {
+    const payload = {
+      threadId,
+      message: {
+        id: message.id,
+        body: message.body,
+        senderId: message.senderId,
+        createdAt: message.createdAt,
+      },
+    };
+    for (const pid of participantIds)
+      this.chat.emitToUser(pid, 'message:new', payload);
   }
 
   private async notifyAdmins(data: {
@@ -182,9 +202,10 @@ export class CommunityService {
         lastMessageAt: new Date(),
       },
     });
-    await this.prisma.message.create({
+    const created = await this.prisma.message.create({
       data: { threadId: thread.id, senderId: fromUserId, body: data.body.trim() },
     });
+    this.emitMessage([fromUserId, data.userId], thread.id, created);
     await this.notify(data.userId, {
       type: 'message',
       title: 'Nouveau message',
@@ -257,13 +278,14 @@ export class CommunityService {
     if (!thread) throw new NotFoundException('Conversation introuvable.');
     if (!thread.participantIds.includes(userId))
       throw new ForbiddenException('Accès refusé à cette conversation.');
-    await this.prisma.message.create({
+    const created = await this.prisma.message.create({
       data: { threadId, senderId: userId, body: body.trim() },
     });
     await this.prisma.messageThread.update({
       where: { id: threadId },
       data: { lastMessageAt: new Date() },
     });
+    this.emitMessage(thread.participantIds, threadId, created);
     const otherId = thread.participantIds.find((p) => p !== userId);
     if (otherId)
       await this.notify(otherId, {
