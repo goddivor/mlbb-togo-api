@@ -13,6 +13,7 @@ import { AdminModule } from './admin/admin.module';
 import { MlbbModule } from './mlbb/mlbb.module';
 import { EsportModule } from './esport/esport.module';
 import { ContactModule } from './contact/contact.module';
+import { CommunityModule } from './community/community.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { ContactModule } from './contact/contact.module';
     MlbbModule,
     EsportModule,
     ContactModule,
+    CommunityModule,
   ],
 })
 export class AppModule {}
