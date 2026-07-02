@@ -288,6 +288,17 @@ model EsportMatch {
   updatedAt    DateTime  @updatedAt
 }
 
+model EsportJoinRequest {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  teamId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  role      String?
+  message   String?
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model TeamRequest {
   id            String   @id @default(auto()) @map("_id") @db.ObjectId
   requesterId   String   @db.ObjectId

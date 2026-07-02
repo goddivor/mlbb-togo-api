@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
+import { CommunityService } from '../community/community.service';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
 export const MATCH_TYPES = ['friendly', 'training', 'official'];
@@ -70,7 +72,10 @@ const teamInclude = {
 
 @Injectable()
 export class EsportService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private community: CommunityService,
+  ) {}
 
   private async attachStats(teams: any[]) {
     const completed = await this.prisma.esportMatch.findMany({
@@ -567,5 +572,108 @@ export class EsportService {
       matches.flatMap((m) => [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
     );
     return matches.map((m) => this.serializeMatch(m, tmap));
+  }
+
+  // ----- Join requests (recrutement, validé par le capitaine) -----
+
+  private async isCaptain(teamId: string, userId: string) {
+    const cap = await this.prisma.esportTeamMember.findFirst({
+      where: { teamId, userId, isCaptain: true },
+    });
+    return !!cap;
+  }
+
+  async requestJoin(userId: string, teamId: string, data: any) {
+    const team = await this.prisma.esportTeam.findUnique({ where: { id: teamId } });
+    if (!team) throw new NotFoundException('Équipe introuvable.');
+    const member = await this.prisma.esportTeamMember.findUnique({
+      where: { teamId_userId: { teamId, userId } },
+    });
+    if (member) throw new ConflictException('Vous êtes déjà membre de cette équipe.');
+    const pending = await this.prisma.esportJoinRequest.findFirst({
+      where: { teamId, userId, status: 'pending' },
+    });
+    if (pending)
+      throw new ConflictException('Vous avez déjà une demande en attente pour cette équipe.');
+    const role = assertRole(data?.role);
+
+    const req = await this.prisma.esportJoinRequest.create({
+      data: { teamId, userId, role, message: data?.message?.trim() || null },
+    });
+
+    const captain = await this.prisma.esportTeamMember.findFirst({
+      where: { teamId, isCaptain: true },
+    });
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const who = user ? serializeUserCard(user).displayName || user.username : 'Un joueur';
+    if (captain) {
+      await this.community.notifyUser(captain.userId, {
+        type: 'join_request',
+        title: 'Nouvelle demande de recrutement',
+        message: `${who} souhaite rejoindre « ${team.name} ».`,
+        link: `/teams/${teamId}`,
+      });
+    }
+    return req;
+  }
+
+  async myJoinRequests(userId: string) {
+    return this.prisma.esportJoinRequest.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async listJoinRequests(teamId: string, user: any) {
+    const allowed =
+      user?.roleUser === 'admin' || (await this.isCaptain(teamId, user.id));
+    if (!allowed)
+      throw new ForbiddenException('Réservé au capitaine de l’équipe.');
+    const reqs = await this.prisma.esportJoinRequest.findMany({
+      where: { teamId, status: 'pending' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: reqs.map((r) => r.userId) } },
+    });
+    const umap = new Map(users.map((u) => [u.id, serializeUserCard(u)]));
+    return reqs.map((r) => ({ ...r, user: umap.get(r.userId) ?? null }));
+  }
+
+  async decideJoinRequest(id: string, user: any, data: any) {
+    const req = await this.prisma.esportJoinRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Demande introuvable.');
+    const team = await this.prisma.esportTeam.findUnique({ where: { id: req.teamId } });
+    if (!team) throw new NotFoundException('Équipe introuvable.');
+    const allowed =
+      user?.roleUser === 'admin' || (await this.isCaptain(req.teamId, user.id));
+    if (!allowed)
+      throw new ForbiddenException('Réservé au capitaine de l’équipe.');
+
+    const status = data?.status === 'accepted' ? 'accepted' : 'rejected';
+
+    if (status === 'accepted') {
+      const already = await this.prisma.esportTeamMember.findUnique({
+        where: { teamId_userId: { teamId: req.teamId, userId: req.userId } },
+      });
+      if (!already) {
+        const role = data?.role !== undefined ? assertRole(data.role) : req.role ?? null;
+        await this.prisma.esportTeamMember.create({
+          data: { teamId: req.teamId, userId: req.userId, role },
+        });
+      }
+    }
+
+    await this.prisma.esportJoinRequest.update({ where: { id }, data: { status } });
+    await this.community.notifyUser(req.userId, {
+      type: 'join_decision',
+      title:
+        status === 'accepted'
+          ? 'Vous avez rejoint une équipe'
+          : 'Demande de recrutement refusée',
+      message: `Équipe « ${team.name} ».`,
+      link: `/teams/${req.teamId}`,
+    });
+    return { ok: true, status };
   }
 }

@@ -19,6 +19,14 @@ export class CommunityService {
 
   // ----- Notifications (internal helpers) -----
 
+  /** Notification publique, utilisable par d'autres modules (esport…). */
+  async notifyUser(
+    userId: string,
+    data: { type: string; title: string; message: string; link?: string },
+  ) {
+    return this.notify(userId, data);
+  }
+
   private async notify(
     userId: string,
     data: { type: string; title: string; message: string; link?: string },

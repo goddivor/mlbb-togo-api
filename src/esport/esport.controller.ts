@@ -41,6 +41,32 @@ export class EsportController {
     return this.esport.getTeamMatches(id);
   }
 
+  // ----- Join requests -----
+
+  @UseGuards(JwtAuthGuard)
+  @Get('join-requests/mine')
+  myJoinRequests(@CurrentUser() user: any) {
+    return this.esport.myJoinRequests(user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('teams/:id/join')
+  requestJoin(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.requestJoin(user.id, id, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('teams/:id/join-requests')
+  listJoinRequests(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.esport.listJoinRequests(id, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('join-requests/:id')
+  decideJoinRequest(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.decideJoinRequest(id, user, body);
+  }
+
   @Get('sponsors')
   getSponsors() {
     return this.esport.getSponsors();
