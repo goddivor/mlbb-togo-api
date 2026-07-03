@@ -224,7 +224,6 @@ model EsportTeam {
   image        String?
   description  String?
   type         String             @default("community")
-  isRecruiting Boolean            @default(false)
   esportId     String?            @db.ObjectId
   esport       Esport?            @relation(fields: [esportId], references: [id], onDelete: Cascade)
   members      EsportTeamMember[]
@@ -288,6 +287,36 @@ model EsportMatch {
   updatedAt    DateTime  @updatedAt
 }
 
+type RecruitmentSlot {
+  role     String
+  quantity Int    @default(1)
+}
+
+model Recruitment {
+  id          String             @id @default(auto()) @map("_id") @db.ObjectId
+  teamId      String             @db.ObjectId
+  createdById String             @db.ObjectId
+  status      String             @default("open")
+  message     String?
+  slots       RecruitmentSlot[]
+  openedAt    DateTime           @default(now())
+  closedAt    DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+}
+
+model RecruitmentApplication {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  recruitmentId String   @db.ObjectId
+  teamId        String   @db.ObjectId
+  userId        String   @db.ObjectId
+  role          String?
+  message       String?
+  status        String   @default("pending")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 model Friendship {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   requesterId String   @db.ObjectId
@@ -295,17 +324,6 @@ model Friendship {
   status      String   @default("pending")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-}
-
-model EsportJoinRequest {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  teamId    String   @db.ObjectId
-  userId    String   @db.ObjectId
-  role      String?
-  message   String?
-  status    String   @default("pending")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 model TeamRequest {
