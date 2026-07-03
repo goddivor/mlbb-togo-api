@@ -14,6 +14,7 @@ import { MlbbModule } from './mlbb/mlbb.module';
 import { EsportModule } from './esport/esport.module';
 import { ContactModule } from './contact/contact.module';
 import { CommunityModule } from './community/community.module';
+import { FriendsModule } from './friends/friends.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { CommunityModule } from './community/community.module';
     EsportModule,
     ContactModule,
     CommunityModule,
+    FriendsModule,
   ],
 })
 export class AppModule {}
