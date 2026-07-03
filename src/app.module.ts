@@ -15,6 +15,7 @@ import { EsportModule } from './esport/esport.module';
 import { ContactModule } from './contact/contact.module';
 import { CommunityModule } from './community/community.module';
 import { FriendsModule } from './friends/friends.module';
+import { RecruitmentModule } from './recruitment/recruitment.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { FriendsModule } from './friends/friends.module';
     ContactModule,
     CommunityModule,
     FriendsModule,
+    RecruitmentModule,
   ],
 })
 export class AppModule {}
