@@ -224,8 +224,6 @@ model EsportTeam {
   image        String?
   description  String?
   type         String             @default("community")
-  isRecruiting Boolean            @default(false)
-  lookingFor   String[]
   esportId     String?            @db.ObjectId
   esport       Esport?            @relation(fields: [esportId], references: [id], onDelete: Cascade)
   members      EsportTeamMember[]
@@ -326,17 +324,6 @@ model Friendship {
   status      String   @default("pending")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-}
-
-model EsportJoinRequest {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  teamId    String   @db.ObjectId
-  userId    String   @db.ObjectId
-  role      String?
-  message   String?
-  status    String   @default("pending")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 model TeamRequest {
