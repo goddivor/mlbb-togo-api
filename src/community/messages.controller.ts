@@ -8,16 +8,13 @@ import {
 } from '@nestjs/common';
 import { CommunityService } from './community.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('messages')
 export class MessagesController {
   constructor(private readonly community: CommunityService) {}
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard)
   @Post('threads')
   startThread(@CurrentUser() user: any, @Body() body: any) {
     return this.community.startThread(user.id, body);

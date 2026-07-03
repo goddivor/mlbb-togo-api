@@ -140,6 +140,12 @@ export class EsportController {
     return this.esport.transformToEsport(id);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Patch('teams/:id/recruiting')
+  setRecruiting(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.setRecruiting(id, body, user);
+  }
+
   // ----- Admin: membres -----
 
   @UseGuards(JwtAuthGuard, RolesGuard)

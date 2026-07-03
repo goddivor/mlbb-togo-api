@@ -55,6 +55,7 @@ function serializeTeam(team: any) {
     description: team.description ?? null,
     type: team.type ?? 'community',
     isRecruiting: !!team.isRecruiting,
+    lookingFor: team.lookingFor ?? [],
     esportId: team.esportId ?? null,
     sort: team.sort ?? 0,
     foundedAt: team.foundedAt,
@@ -206,6 +207,24 @@ export class EsportService {
           typeof data.isRecruiting === 'boolean' ? data.isRecruiting : undefined,
         sort: typeof data.sort === 'number' ? data.sort : undefined,
       },
+      include: teamInclude,
+    });
+    return serializeTeam(team);
+  }
+
+  // Capitaine (ou admin) : ouvrir/fermer le recrutement + postes recherchés.
+  async setRecruiting(id: string, data: any, user?: any) {
+    await this.getTeam(id);
+    await this.assertTeamManager(id, user);
+    const patch: any = {};
+    if (typeof data?.isRecruiting === 'boolean') patch.isRecruiting = data.isRecruiting;
+    if (Array.isArray(data?.lookingFor))
+      patch.lookingFor = data.lookingFor.filter((r: any) =>
+        (ESPORT_ROLES as readonly string[]).includes(r),
+      );
+    const team = await this.prisma.esportTeam.update({
+      where: { id },
+      data: patch,
       include: teamInclude,
     });
     return serializeTeam(team);

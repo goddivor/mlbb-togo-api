@@ -225,6 +225,7 @@ model EsportTeam {
   description  String?
   type         String             @default("community")
   isRecruiting Boolean            @default(false)
+  lookingFor   String[]
   esportId     String?            @db.ObjectId
   esport       Esport?            @relation(fields: [esportId], references: [id], onDelete: Cascade)
   members      EsportTeamMember[]
