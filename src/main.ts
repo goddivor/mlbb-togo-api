@@ -21,6 +21,8 @@ async function bootstrap() {
       'http://localhost:3005',
     ],
     credentials: true,
+    // Cache the OPTIONS preflight for 24h in the browser -> far fewer 204s.
+    maxAge: 86400,
   });
 
   const port = process.env.PORT || 3006;
