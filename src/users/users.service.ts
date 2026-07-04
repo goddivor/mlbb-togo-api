@@ -70,8 +70,8 @@ export function serializeUser(user: any) {
   };
 }
 
-// Champs publics uniquement (annuaire / profils visibles par tous) : on masque
-// email, googleId/email, provider, identifiants de jeu, jetons...
+// Public fields only (directory / profiles visible to everyone): we hide
+// email, googleId/email, provider, game identifiers, tokens...
 const PUBLIC_FIELDS = [
   'id',
   'username',
@@ -111,13 +111,13 @@ function pick(obj: any, fields: string[]) {
   return out;
 }
 
-/** Profil public complet (stats de jeu incluses). */
+/** Full public profile (game stats included). */
 export function serializePublicUser(user: any) {
   if (!user) return user;
   return pick(serializeUser(user), PUBLIC_FIELDS);
 }
 
-/** Carte allégée pour la liste des utilisateurs. */
+/** Lightweight card for the users list. */
 export function serializeUserCard(user: any) {
   if (!user) return user;
   return pick(serializeUser(user), [

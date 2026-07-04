@@ -2,8 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MlbbService } from '../mlbb/mlbb.service';
 
-// Mapping classe (role) -> lanes recommandées. Sert à déduire laneKeys
-// à partir de la première classe d'un héros lors du refresh MLBB.
+// Class (role) -> recommended lanes mapping. Used to derive laneKeys
+// from a hero's first class during the MLBB refresh.
 const CLASS_TO_LANES: Record<string, string[]> = {
   marksman: ['gold'],
   mage: ['mid'],
@@ -49,18 +49,18 @@ export class HeroesService {
     return hero;
   }
 
-  // ----- Cache MLBB -----
+  // ----- MLBB cache -----
 
-  // Récupère la liste complète des héros via l'API Moonton et met à jour
-  // (upsert par `name`) notre table Hero, afin de servir ensuite le cache DB.
+  // Fetches the full hero list via the Moonton API and upserts (by `name`)
+  // our Hero table, so the DB cache can be served afterwards.
   async refreshFromMlbb(): Promise<{ updated: number }> {
-    // Liste de base (name, roles, image, heroId) + showcase (art, thumb, stats).
+    // Base list (name, roles, image, heroId) + showcase (art, thumb, stats).
     const [{ heroes }, showcase] = await Promise.all([
       this.mlbb.getHeroes(),
       this.mlbb.getShowcaseHeroesLive(300),
     ]);
 
-    // Index des données showcase par nom (art/thumb/stats).
+    // Index showcase data by name (art/thumb/stats).
     const showcaseByName = new Map<string, any>();
     for (const s of showcase) {
       if (s?.name) showcaseByName.set(String(s.name).toLowerCase(), s);
@@ -106,18 +106,18 @@ export class HeroesService {
     return { updated };
   }
 
-  // Héros vedettes servis depuis NOTRE base (art non nul en priorité).
+  // Featured heroes served from OUR database (non-null art prioritized).
   async getShowcase(count = 6) {
     return this.readCachedHeroes(count);
   }
 
-  // Derniers héros servis depuis NOTRE base (mêmes données que le showcase).
+  // Latest heroes served from OUR database (same data as the showcase).
   async getLatest(count = 6) {
     return this.readCachedHeroes(count);
   }
 
-  // Lit des héros depuis la base et les mappe dans une forme proche de
-  // mlbb.getShowcaseHeroes. Priorise ceux ayant un `art` (splash) non nul.
+  // Reads heroes from the database and maps them into a shape close to
+  // mlbb.getShowcaseHeroes. Prioritizes those with a non-null `art` (splash).
   private async readCachedHeroes(count: number) {
     const withArt = await this.prisma.hero.findMany({
       where: { art: { not: null } },

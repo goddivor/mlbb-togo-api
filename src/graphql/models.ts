@@ -1,7 +1,7 @@
 import { ObjectType, Field, ID, Int } from '@nestjs/graphql';
 
-// Types GraphQL du catalogue (lecture) : héros, lanes, esport, sponsors.
-// Servis depuis NOTRE base (cache), pas depuis l'API Moonton en direct.
+// GraphQL catalog types (read): heroes, lanes, esport, sponsors.
+// Served from OUR database (cache), not from the Moonton API directly.
 
 @ObjectType()
 export class HeroModel {

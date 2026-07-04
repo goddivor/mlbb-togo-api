@@ -75,7 +75,7 @@ export class EsportController {
     return this.esport.getMatch(id);
   }
 
-  // ----- Admin: organisation -----
+  // ----- Admin: organization -----
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
@@ -84,7 +84,7 @@ export class EsportController {
     return this.esport.updateOrg(id, body);
   }
 
-  // ----- Admin: équipes -----
+  // ----- Admin: teams -----
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
@@ -114,7 +114,7 @@ export class EsportController {
     return this.esport.transformToEsport(id);
   }
 
-  // ----- Admin: membres -----
+  // ----- Admin: members -----
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
@@ -197,7 +197,7 @@ export class EsportController {
     return this.esport.deleteSeason(id);
   }
 
-  // ----- Matches (admin, ou capitaine pour amical/entraînement) -----
+  // ----- Matches (admin, or captain for friendly/training) -----
 
   @UseGuards(JwtAuthGuard)
   @Post('matches')

@@ -20,7 +20,7 @@ export class HeroesController {
     return this.heroesService.findAll(role);
   }
 
-  // Rafraîchit le cache des héros depuis l'API Moonton (admin uniquement).
+  // Refreshes the heroes cache from the Moonton API (admin only).
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'moderator')
   @Post('refresh')

@@ -1,4 +1,4 @@
-// DTO simple pour la mise à jour d'une lane (tous les champs optionnels).
+// Simple DTO for updating a lane (all fields optional).
 export class UpdateLaneDto {
   name?: string;
   shortName?: string;

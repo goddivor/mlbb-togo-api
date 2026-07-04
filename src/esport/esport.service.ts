@@ -119,7 +119,7 @@ export class EsportService {
     });
   }
 
-  // ----- Admin: organisation -----
+  // ----- Admin: organization -----
 
   private async resolveOrgId(esportId?: string) {
     if (esportId) return esportId;
@@ -145,7 +145,7 @@ export class EsportService {
     });
   }
 
-  // ----- Admin: équipes -----
+  // ----- Admin: teams -----
 
   async createTeam(data: any) {
     if (!data?.name)
@@ -163,8 +163,8 @@ export class EsportService {
       },
     });
 
-    // Créée depuis une demande de joueur : on lie la demande et on
-    // désigne le demandeur comme capitaine.
+    // Created from a player request: we link the request and
+    // designate the requester as captain.
     if (data.requestId) {
       const req = await this.prisma.teamRequest.findUnique({
         where: { id: data.requestId },
@@ -220,9 +220,9 @@ export class EsportService {
     return { ok: true };
   }
 
-  // ----- Admin: membres -----
+  // ----- Admin: members -----
 
-  // Admin, ou capitaine de l'équipe concernée.
+  // Admin, or captain of the team concerned.
   private async assertTeamManager(teamId: string, user: any) {
     if (user?.roleUser === 'admin') return;
     if (user?.id && (await this.isCaptain(teamId, user.id))) return;
@@ -266,7 +266,7 @@ export class EsportService {
     const isAdmin = user?.roleUser === 'admin';
     const role = data.role === undefined ? undefined : assertRole(data.role);
 
-    // Seul l'admin peut toucher au statut de capitaine.
+    // Only the admin can change the captain status.
     if (isAdmin && data.isCaptain === true) await this.clearCaptain(teamId);
     await this.prisma.esportTeamMember.update({
       where: { teamId_userId: { teamId, userId } },
@@ -290,7 +290,7 @@ export class EsportService {
       where: { teamId_userId: { teamId, userId } },
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
-    // Le capitaine ne peut pas se retirer lui-même (le capitaine).
+    // The captain cannot remove himself (the captain).
     if (user?.roleUser !== 'admin' && member.isCaptain)
       throw new ForbiddenException('Le capitaine ne peut pas être retiré.');
     await this.prisma.esportTeamMember.delete({
@@ -477,7 +477,7 @@ export class EsportService {
     return this.serializeMatch(m, tmap);
   }
 
-  // Admin, ou capitaine d'une des deux équipes (hors officiel).
+  // Admin, or captain of one of the two teams (except official).
   private async assertMatchManager(match: any, user: any) {
     if (user?.roleUser === 'admin') return;
     if (match.type === 'official')
@@ -506,7 +506,7 @@ export class EsportService {
     if (found.length !== 2) throw new NotFoundException('Équipe introuvable.');
     if (data.seasonId) await this.getSeason(data.seasonId);
 
-    // Le capitaine ne peut créer que des amicaux/entraînements de son équipe.
+    // The captain can only create friendly/training matches for his team.
     if (user && user.roleUser !== 'admin') {
       if (type === 'official')
         throw new ForbiddenException(
