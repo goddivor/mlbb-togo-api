@@ -166,14 +166,14 @@ model Hero {
   image       String?
   description String?
 
-  // Cache des données MLBB (évite de solliciter l'API à chaque affichage).
-  // Champs optionnels/tableaux : sûrs pour la lecture de documents existants.
+  // Cache of MLBB data (avoids calling the API on every display).
+  // Optional fields/arrays: safe for reading existing documents.
   heroId      Int?
-  roles       String[] // classes jouables (assassin, mage, fighter...)
-  laneKeys    String[] // lanes recommandées (gold/exp/jungle/mid/roam)
+  roles       String[] // playable classes (assassin, mage, fighter...)
+  laneKeys    String[] // recommended lanes (gold/exp/jungle/mid/roam)
   art         String?  // splash art
-  thumb       String?  // vignette
-  stats       Json? // win/pick/ban et méta (cache MLBB)
+  thumb       String?  // thumbnail
+  stats       Json? // win/pick/ban and meta (MLBB cache)
   speciality  String[]
   source      String? // "seed" | "mlbb"
   syncedAt    DateTime?
@@ -181,19 +181,19 @@ model Hero {
   createdAt   DateTime @default(now())
 }
 
-// Les 5 lanes de MLBB. Peu de lignes, mais la description et l'icône (SVG)
-// sont éditables par l'admin (utile quand Moonton fait une refonte du jeu).
-// `compatibleClasses` encode quelles classes peuvent tenir la lane, sans
-// contradiction (ex. jungle = assassin + fighter, roam = tank + support).
+// The 5 MLBB lanes. Few rows, but the description and icon (SVG)
+// are editable by the admin (useful when Moonton reworks the game).
+// `compatibleClasses` encodes which classes can hold the lane, without
+// contradiction (e.g. jungle = assassin + fighter, roam = tank + support).
 model Lane {
   id                String   @id @default(auto()) @map("_id") @db.ObjectId
   key               String   @unique // gold | exp | jungle | mid | roam
   name              String // "Gold Lane"
   shortName         String? // "Gold"
   description       String
-  icon              String // URL du SVG
+  icon              String // SVG URL
   color             String?
-  compatibleClasses String[] // classes jouables sur cette lane
+  compatibleClasses String[] // classes playable on this lane
   sort              Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt

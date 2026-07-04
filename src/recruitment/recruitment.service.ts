@@ -52,7 +52,7 @@ export class RecruitmentService {
     return new Map(teams.map((t) => [t.id, t]));
   }
 
-  // ----- Public : campagnes ouvertes -----
+  // ----- Public: open campaigns -----
 
   async listOpen(role?: string) {
     const where: any = { status: 'open' };
@@ -83,7 +83,7 @@ export class RecruitmentService {
     return apps.map((a) => ({ ...a, team: tmap.get(a.teamId) ?? null }));
   }
 
-  // ----- Campagnes d'une équipe (capitaine voit tout + candidatures) -----
+  // ----- A team's campaigns (captain sees everything + applications) -----
 
   async listByTeam(teamId: string, user: any) {
     const manager =
@@ -120,7 +120,7 @@ export class RecruitmentService {
     return new Map(users.map((u) => [u.id, serializeUserCard(u)]));
   }
 
-  // ----- Gestion (capitaine/admin) -----
+  // ----- Management (captain/admin) -----
 
   async create(user: any, data: any) {
     if (!data?.teamId) throw new BadRequestException('teamId requis.');
@@ -162,7 +162,7 @@ export class RecruitmentService {
     return { ok: true };
   }
 
-  // ----- Candidatures -----
+  // ----- Applications -----
 
   async apply(user: any, recruitmentId: string, data: any) {
     const rec = await this.prisma.recruitment.findUnique({ where: { id: recruitmentId } });

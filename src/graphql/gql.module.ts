@@ -3,13 +3,13 @@ import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { CatalogResolver } from './catalog.resolver';
 
-// Couche GraphQL (code-first) exposée sur /graphql, en coexistence avec le REST.
-// Lecture du catalogue (héros, lanes, esport, sponsors) servie depuis le cache DB.
+// GraphQL layer (code-first) exposed on /graphql, coexisting with REST.
+// Catalog reads (heroes, lanes, esport, sponsors) served from the DB cache.
 @Module({
   imports: [
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
-      autoSchemaFile: true, // schéma généré en mémoire (code-first)
+      autoSchemaFile: true, // schema generated in memory (code-first)
       sortSchema: true,
       playground: false,
       introspection: true,

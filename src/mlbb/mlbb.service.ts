@@ -253,15 +253,15 @@ export class MlbbService {
   }
 
   async getLatestHeroes(count = 6, lang = 'en') {
-    // Sert d'abord le cache de NOTRE base ; repli live seulement si vide.
+    // Serve OUR database cache first; live fallback only if empty.
     const cached = await this.readCachedShowcase(count);
     if (cached.length) return cached;
     const { heroes } = await this.getHeroes(count, lang);
     return heroes;
   }
 
-  // Lit des héros (art non nul en priorité) depuis notre base et les mappe
-  // dans une forme proche de mapShowcase. Retourne [] si aucun art en cache.
+  // Reads heroes (non-null art prioritized) from our database and maps them
+  // into a shape close to mapShowcase. Returns [] if no art is cached.
   private async readCachedShowcase(count: number) {
     const rows = await this.prisma.hero.findMany({
       where: { art: { not: null } },
@@ -312,13 +312,13 @@ export class MlbbService {
   }
 
   async getShowcaseHeroes(count = 6, lang = 'en') {
-    // Sert d'abord le cache de NOTRE base ; repli live seulement si vide.
+    // Serve OUR database cache first; live fallback only if empty.
     const cached = await this.readCachedShowcase(count);
     if (cached.length) return cached;
     return this.getShowcaseHeroesLive(count, lang);
   }
 
-  // Toujours en direct depuis Moonton (utilisé par le refresh du cache).
+  // Always live from Moonton (used by the cache refresh).
   async getShowcaseHeroesLive(count = 6, lang = 'en') {
     const records = await this.fetchHeroRecords(lang);
     return records.slice(0, count).map((r) => this.mapShowcase(r));

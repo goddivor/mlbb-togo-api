@@ -8,9 +8,9 @@ import {
   SponsorModel,
 } from './models';
 
-// Résolveur de lecture du catalogue. Toutes les données viennent de NOTRE
-// base (cache MLBB rempli par le seed + le refresh admin), ce qui évite de
-// solliciter l'API Moonton à chaque requête de la landing/du dashboard.
+// Catalog read resolver. All data comes from OUR database
+// (MLBB cache filled by the seed + admin refresh), which avoids
+// calling the Moonton API on every landing/dashboard request.
 @Resolver()
 export class CatalogResolver {
   constructor(private readonly prisma: PrismaService) {}

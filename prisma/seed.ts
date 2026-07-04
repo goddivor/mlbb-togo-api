@@ -7,7 +7,7 @@ const prisma = new PrismaClient();
 
 const toJson = (value: any) => JSON.stringify(value ?? null);
 
-// Icônes SVG officielles des rôles MLBB (réutilisées pour les lanes).
+// Official MLBB role SVG icons (reused for the lanes).
 const LANE_ICON = {
   marksman: 'https://akmweb.youngjoygame.com/web/gms/image/91f817c656908a83c2e24eecb3b70986.svg',
   fighter: 'https://akmweb.youngjoygame.com/web/gms/image/6a246099f7eb83a8856306d8b4c84fc2.svg',
@@ -16,8 +16,8 @@ const LANE_ICON = {
   tank: 'https://akmweb.youngjoygame.com/web/gms/image/a3dbb075b4d8186c29f02f7d47da236a.svg',
 };
 
-// Les 5 lanes. `compatibleClasses` = classes qui peuvent tenir la lane
-// (sans contradiction : jungle = assassin/fighter, roam = tank/support...).
+// The 5 lanes. `compatibleClasses` = classes that can hold the lane
+// (without contradiction: jungle = assassin/fighter, roam = tank/support...).
 const LANES = [
   {
     key: 'gold', name: 'Gold Lane', shortName: 'Gold', icon: LANE_ICON.marksman,
@@ -46,7 +46,7 @@ const LANES = [
   },
 ];
 
-// Classe -> lanes recommandées (déduit des compatibilités ci-dessus).
+// Class -> recommended lanes (derived from the compatibilities above).
 const CLASS_TO_LANES: Record<string, string[]> = {
   marksman: ['gold'],
   mage: ['mid'],
@@ -328,8 +328,8 @@ async function main() {
   await prisma.tournament.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.adminLog.deleteMany();
-  // Héros et lanes ne sont PAS effacés : on les upsert (idempotent) pour
-  // préserver les données rafraîchies depuis MLBB et les éditions admin.
+  // Heroes and lanes are NOT deleted: they are upserted (idempotent) to
+  // preserve data refreshed from MLBB and admin edits.
 
   await prisma.user.updateMany({ data: { teamId: null } });
   await prisma.user.deleteMany();
@@ -340,15 +340,15 @@ async function main() {
   await prisma.mtlImage.deleteMany();
   await prisma.mtl.deleteMany();
 
-  // Lanes : créées une seule fois. `update: {}` préserve les éditions admin
-  // (description/icône) lors des re-seeds.
+  // Lanes: created only once. `update: {}` preserves admin edits
+  // (description/icon) on re-seeds.
   for (const l of LANES) {
     await prisma.lane.upsert({ where: { key: l.key }, update: {}, create: l });
   }
   console.log(`   - Lanes          : ${LANES.length}`);
 
-  // Héros : upsert par nom. On ne touche pas aux champs enrichis par un refresh
-  // admin (stats/art/thumb/source) — seuls les champs de base sont resynchronisés.
+  // Heroes: upsert by name. We do not touch fields enriched by an admin
+  // refresh (stats/art/thumb/source); only the base fields are resynced.
   for (const h of heroes as any[]) {
     const role = String(h.role || '').toLowerCase();
     const base = {
