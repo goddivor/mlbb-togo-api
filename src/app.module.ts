@@ -16,6 +16,8 @@ import { ContactModule } from './contact/contact.module';
 import { CommunityModule } from './community/community.module';
 import { FriendsModule } from './friends/friends.module';
 import { RecruitmentModule } from './recruitment/recruitment.module';
+import { LanesModule } from './lanes/lanes.module';
+import { GqlModule } from './graphql/gql.module';
 
 @Module({
   imports: [
@@ -36,6 +38,8 @@ import { RecruitmentModule } from './recruitment/recruitment.module';
     CommunityModule,
     FriendsModule,
     RecruitmentModule,
+    LanesModule,
+    GqlModule,
   ],
 })
 export class AppModule {}
