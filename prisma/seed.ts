@@ -7,6 +7,55 @@ const prisma = new PrismaClient();
 
 const toJson = (value: any) => JSON.stringify(value ?? null);
 
+// Icônes SVG officielles des rôles MLBB (réutilisées pour les lanes).
+const LANE_ICON = {
+  marksman: 'https://akmweb.youngjoygame.com/web/gms/image/91f817c656908a83c2e24eecb3b70986.svg',
+  fighter: 'https://akmweb.youngjoygame.com/web/gms/image/6a246099f7eb83a8856306d8b4c84fc2.svg',
+  assassin: 'https://akmweb.youngjoygame.com/web/gms/image/de611167c7310681135f0b4198137bfa.svg',
+  mage: 'https://akmweb.youngjoygame.com/web/gms/image/facab1eacb218d767b5acb80304bfafd.svg',
+  tank: 'https://akmweb.youngjoygame.com/web/gms/image/a3dbb075b4d8186c29f02f7d47da236a.svg',
+};
+
+// Les 5 lanes. `compatibleClasses` = classes qui peuvent tenir la lane
+// (sans contradiction : jungle = assassin/fighter, roam = tank/support...).
+const LANES = [
+  {
+    key: 'gold', name: 'Gold Lane', shortName: 'Gold', icon: LANE_ICON.marksman,
+    color: '#f5b642', compatibleClasses: ['marksman'], sort: 1,
+    description: "La voie inférieure, réservée aux tireurs (marksman). Le gold laner farme l'or et devient le principal dégât à distance en fin de partie.",
+  },
+  {
+    key: 'roam', name: 'Roam', shortName: 'Roam', icon: LANE_ICON.tank,
+    color: '#22c55e', compatibleClasses: ['tank', 'support'], sort: 2,
+    description: "Le soutien mobile qui parcourt la carte. Tenue par un tank (initiation, contrôle) ou un support (soins, protection) : il ne farme pas et protège l'équipe.",
+  },
+  {
+    key: 'mid', name: 'Mid Lane', shortName: 'Mid', icon: LANE_ICON.mage,
+    color: '#a855f7', compatibleClasses: ['mage'], sort: 3,
+    description: 'La voie centrale des mages. Position clé pour les dégâts magiques de zone et le contrôle, avec un accès rapide aux deux moitiés de la carte.',
+  },
+  {
+    key: 'jungle', name: 'Jungle', shortName: 'Jungle', icon: LANE_ICON.assassin,
+    color: '#ec4899', compatibleClasses: ['assassin', 'fighter'], sort: 4,
+    description: "La jungle et ses monstres neutres. Tenue par un assassin (pics de dégâts, ganks) ou un fighter (présence physique). Le jungler contrôle le rythme et les objectifs.",
+  },
+  {
+    key: 'exp', name: 'EXP Lane', shortName: 'EXP', icon: LANE_ICON.fighter,
+    color: '#00d4ff', compatibleClasses: ['fighter', 'tank'], sort: 5,
+    description: "La voie supérieure, en un contre un. Tenue par un fighter (duel, split-push) ou un tank (résistance, front-line). Le exp laner encaisse et pèse dans les combats.",
+  },
+];
+
+// Classe -> lanes recommandées (déduit des compatibilités ci-dessus).
+const CLASS_TO_LANES: Record<string, string[]> = {
+  marksman: ['gold'],
+  mage: ['mid'],
+  assassin: ['jungle'],
+  fighter: ['exp', 'jungle'],
+  tank: ['roam', 'exp'],
+  support: ['roam'],
+};
+
 const mockPlayers: any[] = [
   {
     id: '1', username: 'TogoKing', email: 'togoking@mlbb.tg', avatar: null,
@@ -279,7 +328,8 @@ async function main() {
   await prisma.tournament.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.adminLog.deleteMany();
-  await prisma.hero.deleteMany();
+  // Héros et lanes ne sont PAS effacés : on les upsert (idempotent) pour
+  // préserver les données rafraîchies depuis MLBB et les éditions admin.
 
   await prisma.user.updateMany({ data: { teamId: null } });
   await prisma.user.deleteMany();
@@ -290,13 +340,27 @@ async function main() {
   await prisma.mtlImage.deleteMany();
   await prisma.mtl.deleteMany();
 
+  // Lanes : créées une seule fois. `update: {}` préserve les éditions admin
+  // (description/icône) lors des re-seeds.
+  for (const l of LANES) {
+    await prisma.lane.upsert({ where: { key: l.key }, update: {}, create: l });
+  }
+  console.log(`   - Lanes          : ${LANES.length}`);
+
+  // Héros : upsert par nom. On ne touche pas aux champs enrichis par un refresh
+  // admin (stats/art/thumb/source) — seuls les champs de base sont resynchronisés.
   for (const h of heroes as any[]) {
-    await prisma.hero.create({
-      data: {
-        name: h.name,
-        role: h.role,
-        image: h.image ?? undefined,
-      },
+    const role = String(h.role || '').toLowerCase();
+    const base = {
+      role,
+      image: h.image ?? undefined,
+      roles: role ? [role] : [],
+      laneKeys: CLASS_TO_LANES[role] ?? [],
+    };
+    await prisma.hero.upsert({
+      where: { name: h.name },
+      update: base,
+      create: { name: h.name, ...base, source: 'seed' },
     });
   }
   console.log(`   - Héros          : ${(heroes as any[]).length}`);

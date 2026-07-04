@@ -1,5 +1,15 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { HeroesService } from './heroes.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @Controller('heroes')
 export class HeroesController {
@@ -8,6 +18,14 @@ export class HeroesController {
   @Get()
   findAll(@Query('role') role?: string) {
     return this.heroesService.findAll(role);
+  }
+
+  // Rafraîchit le cache des héros depuis l'API Moonton (admin uniquement).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'moderator')
+  @Post('refresh')
+  refresh() {
+    return this.heroesService.refreshFromMlbb();
   }
 
   @Get(':id')
