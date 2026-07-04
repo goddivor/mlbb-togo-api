@@ -381,7 +381,9 @@ async function main() {
     { name: 'ETERNUM EPSILON', image: 'https://res.cloudinary.com/dvh5ywcdi/image/upload/v1772778812/IMG-20260221-WA0017_zngxww.jpg', sort: 5 },
   ];
   for (const t of esportTeams) {
-    await prisma.esportTeam.create({ data: { ...t, esportId: eternum.id } });
+    await prisma.esportTeam.create({
+      data: { ...t, type: 'esport', esportId: eternum.id },
+    });
   }
   const sponsors = [
     { logo: 'https://res.cloudinary.com/dvh5ywcdi/image/upload/file_00000000337c61f4846cda7ce7698a3f_mcmh2e.png', sort: 1 },
