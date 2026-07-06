@@ -233,6 +233,9 @@ model Notification {
   type      String
   title     String
   message   String
+  // Structured params (actor name, team name, status…) so the client can
+  // render a localized string; title/message stay as a plain-text fallback.
+  data      Json?
   read      Boolean  @default(false)
   link      String?
   createdAt DateTime @default(now())

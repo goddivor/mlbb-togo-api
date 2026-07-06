@@ -22,14 +22,26 @@ export class CommunityService {
   /** Notification publique, utilisable par d'autres modules (esport…). */
   async notifyUser(
     userId: string,
-    data: { type: string; title: string; message: string; link?: string },
+    data: {
+      type: string;
+      title: string;
+      message: string;
+      link?: string;
+      data?: Record<string, any>;
+    },
   ) {
     return this.notify(userId, data);
   }
 
   private async notify(
     userId: string,
-    data: { type: string; title: string; message: string; link?: string },
+    data: {
+      type: string;
+      title: string;
+      message: string;
+      link?: string;
+      data?: Record<string, any>;
+    },
   ) {
     const notification = await this.prisma.notification.create({
       data: {
@@ -37,6 +49,7 @@ export class CommunityService {
         type: data.type,
         title: data.title,
         message: data.message,
+        data: data.data ?? undefined,
         link: data.link ?? null,
         read: false,
       },
@@ -64,6 +77,7 @@ export class CommunityService {
     title: string;
     message: string;
     link?: string;
+    data?: Record<string, any>;
   }) {
     const admins = await this.prisma.user.findMany({
       where: { roleUser: { in: ['admin', 'moderator'] } },
@@ -132,6 +146,7 @@ export class CommunityService {
       title: "Nouvelle demande d'équipe",
       message: `${who} propose l'équipe « ${request.proposedName} ».`,
       link: '/admin/requests',
+      data: { who, teamName: request.proposedName },
     });
     return request;
   }
@@ -179,6 +194,7 @@ export class CommunityService {
       title: titles[status] ?? 'Mise à jour de votre demande',
       message: `Équipe « ${request.proposedName} ».`,
       link: '/messages',
+      data: { status, teamName: request.proposedName },
     });
     return this.withRequester(updated);
   }
