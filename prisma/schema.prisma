@@ -45,6 +45,7 @@ model User {
   gameAvatar     String?
   gameLevel      Int?
   gameRankLevel  Int?
+  gamePeakRankLevel Int?
   gameCountry    String?
   gameStats      String    @default("{}")
   gameFrequentHeroes String @default("[]")
