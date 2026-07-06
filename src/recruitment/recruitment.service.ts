@@ -199,6 +199,7 @@ export class RecruitmentService {
       title: 'Nouvelle candidature',
       message: `${who} a postulé à votre recrutement.`,
       link: `/teams/${rec.teamId}`,
+      data: { who },
     });
     return { ok: true };
   }
@@ -242,6 +243,7 @@ export class RecruitmentService {
         status === 'accepted' ? 'Candidature acceptée' : 'Candidature refusée',
       message: `Équipe « ${team?.name ?? ''} ».`,
       link: `/teams/${app.teamId}`,
+      data: { status, teamName: team?.name ?? '' },
     });
     return { ok: true, status };
   }

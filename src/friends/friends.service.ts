@@ -54,6 +54,7 @@ export class FriendsService {
       title: "Nouvelle demande d'ami",
       message: `${who} veut vous ajouter en ami.`,
       link: '/friends',
+      data: { who },
     });
     return { ok: true, status: 'pending_out' };
   }
@@ -74,6 +75,7 @@ export class FriendsService {
       title: 'Demande acceptée',
       message: `${who} a accepté votre demande d'ami.`,
       link: `/players/${me}`,
+      data: { who },
     });
     return { ok: true, status: 'friends' };
   }
