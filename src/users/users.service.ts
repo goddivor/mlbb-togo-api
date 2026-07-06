@@ -67,6 +67,7 @@ export function serializeUser(user: any) {
     gameSeasons: parseJson<number[]>(user.gameSeasons, []),
 
     gameRank: decodeRank(user.gameRankLevel),
+    gamePeakRank: decodeRank(user.gamePeakRankLevel),
   };
 }
 
@@ -98,6 +99,8 @@ const PUBLIC_FIELDS = [
   'gameLevel',
   'gameRankLevel',
   'gameRank',
+  'gamePeakRankLevel',
+  'gamePeakRank',
   'gameCountry',
   'gameStats',
   'gameFrequentHeroes',

@@ -33,6 +33,7 @@ const EMPTY_GAME_PROFILE = {
   avatar: null,
   level: null,
   rankLevel: null,
+  peakRankLevel: null,
   country: null,
   stats: {},
   frequentHeroes: [],
@@ -270,6 +271,7 @@ export class AuthService {
       avatar: info.avatar || null,
       level: info.level ?? null,
       rankLevel: info.rank_level ?? null,
+      peakRankLevel: info.history_rank_level ?? null,
       country: info.reg_country || null,
       stats,
       frequentHeroes,
@@ -343,6 +345,7 @@ export class AuthService {
       data.gameAvatar = profile.avatar;
       data.gameLevel = profile.level;
       data.gameRankLevel = profile.rankLevel;
+      data.gamePeakRankLevel = profile.peakRankLevel;
       data.gameCountry = profile.country;
     }
     if (profile.statsOk !== false) {
@@ -379,7 +382,7 @@ export class AuthService {
     const mlbbToken = await this.validateMlbbCode(roleId, zoneId, vc);
     const profile = mlbbToken
       ? await this.fetchGameProfile(mlbbToken, roleId, zoneId)
-      : { nickname: null, avatar: null, level: null, rankLevel: null, country: null, stats: {}, frequentHeroes: [] };
+      : { nickname: null, avatar: null, level: null, rankLevel: null, peakRankLevel: null, country: null, stats: {}, frequentHeroes: [] };
 
     let user = await this.prisma.user.findFirst({ where: { mlbbRoleId: roleId } });
     if (!user) {
