@@ -37,4 +37,10 @@ export class MessagesController {
   reply(@CurrentUser() user: any, @Param('id') id: string, @Body() body: any) {
     return this.community.reply(user.id, id, body.body);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('threads/:id/read')
+  markRead(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.community.markThreadRead(user.id, id);
+  }
 }
