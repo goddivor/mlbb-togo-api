@@ -1,6 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { hydrate, toJson } from '../common/utils/json.util';
+import { hydrate, parseJson, toJson } from '../common/utils/json.util';
 import { CreateTournamentDto } from './dto/create-tournament.dto';
 import { UpdateTournamentDto } from './dto/update-tournament.dto';
 
@@ -82,5 +86,40 @@ export class TournamentsService {
     await this.findOne(id);
     await this.prisma.tournament.delete({ where: { id } });
     return { success: true };
+  }
+
+  /** Register an esport team into a tournament (idempotent per team). */
+  async register(id: string, teamId: string) {
+    if (!teamId) throw new BadRequestException('Équipe requise.');
+    const tournament = await this.prisma.tournament.findUnique({ where: { id } });
+    if (!tournament) throw new NotFoundException('Tournoi introuvable.');
+    const team = await this.prisma.esportTeam.findUnique({ where: { id: teamId } });
+    if (!team) throw new NotFoundException('Équipe introuvable.');
+
+    const teams: any[] = parseJson(tournament.registeredTeams, []);
+    if (teams.some((t) => t.id === teamId))
+      throw new BadRequestException('Équipe déjà inscrite.');
+    if (teams.length >= tournament.maxTeams)
+      throw new BadRequestException('Tournoi complet.');
+    teams.push({ id: team.id, name: team.name, logo: team.image ?? null });
+
+    const updated = await this.prisma.tournament.update({
+      where: { id },
+      data: { registeredTeams: toJson(teams) },
+    });
+    return serialize(updated);
+  }
+
+  async unregister(id: string, teamId: string) {
+    const tournament = await this.prisma.tournament.findUnique({ where: { id } });
+    if (!tournament) throw new NotFoundException('Tournoi introuvable.');
+    const teams: any[] = parseJson(tournament.registeredTeams, []).filter(
+      (t: any) => t.id !== teamId,
+    );
+    const updated = await this.prisma.tournament.update({
+      where: { id },
+      data: { registeredTeams: toJson(teams) },
+    });
+    return serialize(updated);
   }
 }
