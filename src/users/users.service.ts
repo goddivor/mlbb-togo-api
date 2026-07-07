@@ -156,6 +156,31 @@ export class UsersService {
       });
   }
 
+  /** Full user list for the admin panel (includes email, role, ban status). */
+  async adminList() {
+    const users = await this.prisma.user.findMany({
+      orderBy: { joinedAt: 'desc' },
+    });
+    return users.map((u) => ({
+      id: u.id,
+      username: u.username,
+      displayName: serializeUserCard(u).displayName,
+      avatar: serializeUserCard(u).avatar,
+      email: u.email,
+      roleUser: u.roleUser,
+      isBanned: u.isBanned,
+      isOnline: u.isOnline,
+      country: u.country,
+      provider: u.provider,
+      hasGame: !!u.mlbbRoleId,
+      wins: u.wins,
+      losses: u.losses,
+      winRate: computeWinRate(u.wins, u.losses),
+      joinedAt: u.joinedAt,
+      lastActive: u.lastActive,
+    }));
+  }
+
   async findPublic(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user || user.roleUser === 'admin' || user.roleUser === 'moderator') {
@@ -165,9 +190,13 @@ export class UsersService {
   }
 
   async leaderboard() {
-    const users = await this.prisma.user.findMany();
+    // Public endpoint: never leak PII (email, googleId, tokens, prefs...) and
+    // exclude staff/banned accounts, exactly like the public directory.
+    const users = await this.prisma.user.findMany({
+      where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
+    });
     return users
-      .map(serializeUser)
+      .map(serializePublicUser)
       .sort((a, b) => b.winRate - a.winRate);
   }
 

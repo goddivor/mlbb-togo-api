@@ -29,6 +29,13 @@ export class UsersController {
     return this.usersService.leaderboard();
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'moderator')
+  @Get('admin')
+  adminList() {
+    return this.usersService.adminList();
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.usersService.findPublic(id);

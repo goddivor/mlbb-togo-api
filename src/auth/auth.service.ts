@@ -99,6 +99,9 @@ export class AuthService {
     if (!valid) {
       throw new UnauthorizedException('Identifiants invalides.');
     }
+    if (user.isBanned) {
+      throw new UnauthorizedException('Compte suspendu.');
+    }
 
     const token = this.signToken(user);
     return { token, user: serializeUser(user) };
@@ -117,6 +120,9 @@ export class AuthService {
     }
     if (user.roleUser !== 'admin' && user.roleUser !== 'moderator') {
       throw new UnauthorizedException("Ce compte n'a pas d'accès administrateur.");
+    }
+    if (user.isBanned) {
+      throw new UnauthorizedException('Compte suspendu.');
     }
     const token = this.signToken(user);
     return { token, user: serializeUser(user) };
