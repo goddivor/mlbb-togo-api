@@ -383,11 +383,12 @@ model MessageThread {
 }
 
 model Message {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  threadId  String   @db.ObjectId
-  senderId  String   @db.ObjectId
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  threadId  String    @db.ObjectId
+  senderId  String    @db.ObjectId
   body      String
-  createdAt DateTime @default(now())
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
 }
 
 model Mtl {

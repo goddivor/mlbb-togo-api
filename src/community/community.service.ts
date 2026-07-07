@@ -65,6 +65,7 @@ export class CommunityService {
         id: message.id,
         body: message.body,
         senderId: message.senderId,
+        readAt: message.readAt ?? null,
         createdAt: message.createdAt,
       },
     };
@@ -287,9 +288,31 @@ export class CommunityService {
         body: m.body,
         senderId: m.senderId,
         mine: m.senderId === userId,
+        readAt: m.readAt,
         createdAt: m.createdAt,
       })),
     };
+  }
+
+  /** Mark every message in the thread not authored by `userId` as read, and
+   *  tell the other participant(s) so their sent messages show read receipts. */
+  async markThreadRead(userId: string, threadId: string) {
+    const thread = await this.prisma.messageThread.findUnique({
+      where: { id: threadId },
+    });
+    if (!thread) throw new NotFoundException('Conversation introuvable.');
+    if (!thread.participantIds.includes(userId))
+      throw new ForbiddenException('Accès refusé à cette conversation.');
+    const readAt = new Date();
+    const res = await this.prisma.message.updateMany({
+      where: { threadId, senderId: { not: userId }, readAt: null },
+      data: { readAt },
+    });
+    if (res.count > 0) {
+      for (const pid of thread.participantIds.filter((p) => p !== userId))
+        this.chat.emitToUser(pid, 'message:read', { threadId, readerId: userId, readAt });
+    }
+    return { ok: true, read: res.count };
   }
 
   async reply(userId: string, threadId: string, body: string) {
