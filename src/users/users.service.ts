@@ -165,9 +165,13 @@ export class UsersService {
   }
 
   async leaderboard() {
-    const users = await this.prisma.user.findMany();
+    // Public endpoint: never leak PII (email, googleId, tokens, prefs...) and
+    // exclude staff/banned accounts, exactly like the public directory.
+    const users = await this.prisma.user.findMany({
+      where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
+    });
     return users
-      .map(serializeUser)
+      .map(serializePublicUser)
       .sort((a, b) => b.winRate - a.winRate);
   }
 

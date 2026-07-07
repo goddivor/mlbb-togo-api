@@ -1,7 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
+
+const STAFF_ROLES = ['admin', 'moderator'];
 
 @Injectable()
 export class PostsService {
@@ -41,9 +47,13 @@ export class PostsService {
     });
   }
 
-  async remove(id: string) {
+  async remove(id: string, user?: { id?: string; roleUser?: string }) {
     const post = await this.prisma.post.findUnique({ where: { id } });
     if (!post) throw new NotFoundException('Post introuvable.');
+    const isStaff = STAFF_ROLES.includes(user?.roleUser ?? '');
+    if (post.authorId !== user?.id && !isStaff) {
+      throw new ForbiddenException('Suppression non autorisée.');
+    }
     await this.prisma.comment.deleteMany({ where: { postId: id } });
     await this.prisma.post.delete({ where: { id } });
     return { success: true };

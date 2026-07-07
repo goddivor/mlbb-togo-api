@@ -36,8 +36,8 @@ export class PostsController {
 
   @UseGuards(JwtAuthGuard)
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.postsService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.postsService.remove(id, user);
   }
 
   @Post(':id/like')
