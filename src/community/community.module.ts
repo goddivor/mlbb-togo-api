@@ -6,9 +6,10 @@ import { NotificationsController } from './notifications.controller';
 import { TeamRequestsController } from './team-requests.controller';
 import { MessagesController } from './messages.controller';
 import { JWT_SECRET } from '../auth/jwt.strategy';
+import { PushModule } from '../push/push.module';
 
 @Module({
-  imports: [JwtModule.register({ secret: JWT_SECRET })],
+  imports: [JwtModule.register({ secret: JWT_SECRET }), PushModule],
   controllers: [
     NotificationsController,
     TeamRequestsController,
