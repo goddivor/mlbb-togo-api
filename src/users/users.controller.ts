@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -12,6 +13,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('users')
 export class UsersController {
@@ -34,8 +36,22 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
+  update(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: UpdateUserDto,
+  ) {
+    // Only the account owner (or staff) may edit a profile.
+    if (user.id !== id && user.roleUser !== 'admin' && user.roleUser !== 'moderator') {
+      throw new ForbiddenException('Modification non autorisée.');
+    }
     return this.usersService.update(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('me')
+  deleteSelf(@CurrentUser() user: any) {
+    return this.usersService.deleteSelf(user.id);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
