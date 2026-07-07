@@ -19,11 +19,15 @@ import { Roles } from '../common/decorators/roles.decorator';
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'moderator')
   @Get('stats')
   getStats() {
     return this.adminService.getStats();
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'moderator')
   @Get('logs')
   findAllLogs() {
     return this.adminService.findAllLogs();
@@ -36,11 +40,14 @@ export class AdminController {
     return this.adminService.createLog(dto);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'moderator')
   @Get('forms')
   findAllForms() {
     return this.adminService.findAllForms();
   }
 
+  // Public: the form definition is needed to render a fillable form.
   @Get('forms/:id')
   findOneForm(@Param('id') id: string) {
     return this.adminService.findOneForm(id);
@@ -67,6 +74,8 @@ export class AdminController {
     return this.adminService.removeForm(id);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'moderator')
   @Get('forms/:id/responses')
   findResponses(@Param('id') id: string) {
     return this.adminService.findResponses(id);
