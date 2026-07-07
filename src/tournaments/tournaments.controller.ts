@@ -49,4 +49,16 @@ export class TournamentsController {
   remove(@Param('id') id: string) {
     return this.tournamentsService.remove(id);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/register')
+  register(@Param('id') id: string, @Body('teamId') teamId: string) {
+    return this.tournamentsService.register(id, teamId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/register/:teamId')
+  unregister(@Param('id') id: string, @Param('teamId') teamId: string) {
+    return this.tournamentsService.unregister(id, teamId);
+  }
 }
