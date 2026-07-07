@@ -18,6 +18,7 @@ import { FriendsModule } from './friends/friends.module';
 import { RecruitmentModule } from './recruitment/recruitment.module';
 import { LanesModule } from './lanes/lanes.module';
 import { GqlModule } from './graphql/gql.module';
+import { PushModule } from './push/push.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { GqlModule } from './graphql/gql.module';
     RecruitmentModule,
     LanesModule,
     GqlModule,
+    PushModule,
   ],
 })
 export class AppModule {}

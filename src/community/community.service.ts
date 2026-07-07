@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 import { ChatGateway } from './chat.gateway';
+import { PushService } from '../push/push.service';
 
 const REQUEST_STATUS = ['pending', 'in_review', 'approved', 'rejected'];
 
@@ -27,6 +28,7 @@ export class CommunityService {
   constructor(
     private prisma: PrismaService,
     private chat: ChatGateway,
+    private push: PushService,
   ) {}
 
   // ----- Notifications (internal helpers) -----
@@ -79,6 +81,12 @@ export class CommunityService {
       },
     });
     this.chat.emitToUser(userId, 'notification:new', notification);
+    // Fire a Web Push so the user is notified even when the app is closed.
+    void this.push.sendToUser(userId, {
+      title: data.title,
+      body: data.message,
+      link: data.link ?? '/dashboard',
+    });
     return notification;
   }
 
