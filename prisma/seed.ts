@@ -16,6 +16,16 @@ const LANE_ICON = {
   tank: 'https://akmweb.youngjoygame.com/web/gms/image/a3dbb075b4d8186c29f02f7d47da236a.svg',
 };
 
+// The 6 hero classes/roles with their official Moonton SVG/PNG icons.
+const HERO_ROLES = [
+  { key: 'tank', name: 'Tank', icon: 'https://akmweb.youngjoygame.com/web/gms/image/60638c59536d9505c9c731af13f7fdfd.png', sort: 0 },
+  { key: 'fighter', name: 'Fighter', icon: 'https://akmweb.youngjoygame.com/web/gms/image/629e282165d4b63deceaf350426ea440.png', sort: 1 },
+  { key: 'assassin', name: 'Assassin', icon: 'https://akmweb.youngjoygame.com/web/gms/image/d0b8b65a47fc43dc7bb2bac447072fd2.png', sort: 2 },
+  { key: 'mage', name: 'Mage', icon: 'https://akmweb.youngjoygame.com/web/gms/image/1c6985dd0caec2028ccb6d1b8ca95e0f.png', sort: 3 },
+  { key: 'marksman', name: 'Marksman', icon: 'https://akmweb.youngjoygame.com/web/gms/image/025c69a764924f4bac526a2662f1a0b9.png', sort: 4 },
+  { key: 'support', name: 'Support', icon: 'https://akmweb.youngjoygame.com/web/gms/image/1e4609b25a4cd63ee5a13015d4058159.png', sort: 5 },
+];
+
 // The 5 lanes. `compatibleClasses` = classes that can hold the lane
 // (without contradiction: jungle = assassin/fighter, roam = tank/support...).
 const LANES = [
@@ -346,6 +356,16 @@ async function main() {
     await prisma.lane.upsert({ where: { key: l.key }, update: {}, create: l });
   }
   console.log(`   - Lanes          : ${LANES.length}`);
+
+  // Hero roles: keep icons in sync on every re-seed.
+  for (const r of HERO_ROLES) {
+    await prisma.heroRole.upsert({
+      where: { key: r.key },
+      update: { name: r.name, icon: r.icon, sort: r.sort },
+      create: r,
+    });
+  }
+  console.log(`   - Rôles          : ${HERO_ROLES.length}`);
 
   // Heroes: upsert by name. We do not touch fields enriched by an admin
   // refresh (stats/art/thumb/source); only the base fields are resynced.

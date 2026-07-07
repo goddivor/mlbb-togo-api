@@ -4,6 +4,7 @@ import {
   EsportOrgModel,
   EsportTeamModel,
   HeroModel,
+  HeroRoleModel,
   LaneModel,
   SponsorModel,
 } from './models';
@@ -52,6 +53,11 @@ export class CatalogResolver {
   @Query(() => LaneModel, { nullable: true })
   lane(@Args('key') key: string) {
     return this.prisma.lane.findUnique({ where: { key } });
+  }
+
+  @Query(() => [HeroRoleModel], { description: 'Les 6 rôles/classes de héros (icônes).' })
+  heroRoles() {
+    return this.prisma.heroRole.findMany({ orderBy: { sort: 'asc' } });
   }
 
   @Query(() => [SponsorModel])

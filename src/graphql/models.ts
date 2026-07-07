@@ -32,6 +32,15 @@ export class LaneModel {
 }
 
 @ObjectType()
+export class HeroRoleModel {
+  @Field(() => ID) id: string;
+  @Field() key: string;
+  @Field() name: string;
+  @Field() icon: string;
+  @Field(() => Int) sort: number;
+}
+
+@ObjectType()
 export class EsportTeamModel {
   @Field(() => ID) id: string;
   @Field() name: string;
