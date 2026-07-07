@@ -10,6 +10,18 @@ import { ChatGateway } from './chat.gateway';
 
 const REQUEST_STATUS = ['pending', 'in_review', 'approved', 'rejected'];
 
+// Maps a notification type to the preference category the user can toggle
+// in their settings. Types without an entry are always delivered.
+const NOTIF_CATEGORY: Record<string, string> = {
+  friend_request: 'friends',
+  friend_accept: 'friends',
+  message: 'messages',
+  team_request: 'teams',
+  request_decision: 'teams',
+  recruitment_application: 'teams',
+  recruitment_decision: 'teams',
+};
+
 @Injectable()
 export class CommunityService {
   constructor(
@@ -43,6 +55,18 @@ export class CommunityService {
       data?: Record<string, any>;
     },
   ) {
+    // Honor the recipient's notification preferences (a category set to false
+    // silences that kind of notification). Unknown categories are allowed.
+    const category = NOTIF_CATEGORY[data.type];
+    if (category) {
+      const recipient = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { notifPrefs: true },
+      });
+      const prefs = (recipient?.notifPrefs as Record<string, boolean>) ?? {};
+      if (prefs[category] === false) return null;
+    }
+
     const notification = await this.prisma.notification.create({
       data: {
         userId,
