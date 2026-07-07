@@ -54,6 +54,10 @@ model User {
   gameSyncedAt   DateTime?
 
   profileSource  String    @default("game")
+
+  // User preferences (settings page).
+  notifPrefs     Json?
+  privacy        Json?
   teamId         String?   @db.ObjectId
   team           Team?     @relation("TeamMembers", fields: [teamId], references: [id])
   posts          Post[]

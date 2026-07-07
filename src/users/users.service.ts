@@ -189,6 +189,8 @@ export class UsersService {
     if (dto.country !== undefined) data.country = dto.country;
     if (dto.city !== undefined) data.city = dto.city;
     if (dto.bio !== undefined) data.bio = dto.bio;
+    if (dto.notifPrefs !== undefined) data.notifPrefs = dto.notifPrefs;
+    if (dto.privacy !== undefined) data.privacy = dto.privacy;
 
     const user = await this.prisma.user.update({ where: { id }, data });
     return serializeUser(user);
@@ -196,6 +198,21 @@ export class UsersService {
 
   async remove(id: string) {
     await this.findOne(id);
+    await this.prisma.user.delete({ where: { id } });
+    return { success: true };
+  }
+
+  /** Self-deletion: remove the account and clean up its owned relations. */
+  async deleteSelf(id: string) {
+    await this.findOne(id);
+    await Promise.all([
+      this.prisma.friendship.deleteMany({
+        where: { OR: [{ requesterId: id }, { addresseeId: id }] },
+      }),
+      this.prisma.notification.deleteMany({ where: { userId: id } }),
+      this.prisma.esportTeamMember.deleteMany({ where: { userId: id } }),
+      this.prisma.recruitmentApplication.deleteMany({ where: { userId: id } }),
+    ]);
     await this.prisma.user.delete({ where: { id } });
     return { success: true };
   }

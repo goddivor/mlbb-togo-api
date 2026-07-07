@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsObject,
   IsOptional,
   IsString,
 } from 'class-validator';
@@ -37,4 +38,12 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   bio?: string;
+
+  @IsOptional()
+  @IsObject()
+  notifPrefs?: Record<string, boolean>;
+
+  @IsOptional()
+  @IsObject()
+  privacy?: Record<string, boolean>;
 }
