@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import { UpdateStreamConfigDto } from './dto/update-stream-config.dto';
+import { YoutubeOAuthService } from './youtube-oauth.service';
 
 export interface StreamVideo {
   id: string;
@@ -46,7 +47,10 @@ export class StreamService {
   private liveCache: { at: number; channelId: string; data: any } | null = null;
   private readonly LIVE_TTL = 60_000;
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private youtube: YoutubeOAuthService,
+  ) {}
 
   // The config is a singleton: at most one document. Create it lazily on first
   // read so the public Stream page always has something to render.
@@ -172,7 +176,7 @@ export class StreamService {
     });
     const config = await this.getOrCreate();
     const channelId = account?.channelId || config.channelId;
-    if (!channelId || !this.apiKey) return { live: false, videoId: null, title: null };
+    if (!channelId) return { live: false, videoId: null, title: null };
 
     const now = Date.now();
     if (
@@ -182,6 +186,16 @@ export class StreamService {
     ) {
       return this.liveCache.data;
     }
+
+    // Prefer the OAuth-connected channel (uses the connected project's quota,
+    // no API key needed); fall back to the API key for the default channel.
+    if (account) {
+      const data = await this.youtube.fetchLive();
+      this.liveCache = { at: now, channelId, data };
+      return data;
+    }
+
+    if (!this.apiKey) return { live: false, videoId: null, title: null };
 
     let result = { live: false, videoId: null as string | null, title: null as string | null };
     try {
@@ -217,7 +231,14 @@ export class StreamService {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    if (ids.length === 0 || !this.apiKey) return { views: {} };
+    if (ids.length === 0) return { views: {} };
+
+    // Prefer the OAuth-connected channel (no API key needed).
+    if (await this.youtube.hasAccount()) {
+      return { views: await this.youtube.fetchViews(idsCsv) };
+    }
+
+    if (!this.apiKey) return { views: {} };
     try {
       const url = new URL(`${YT_BASE}/videos`);
       url.searchParams.set('part', 'statistics');

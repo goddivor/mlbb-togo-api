@@ -217,6 +217,58 @@ export class YoutubeOAuthService {
     };
   }
 
+  // View counts via the connected account's authed client (no API key needed).
+  async fetchViews(idsCsv: string): Promise<Record<string, string>> {
+    const acc = await this.getAccount();
+    if (!acc) return {};
+    const ids = (idsCsv || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length === 0) return {};
+    try {
+      const client = await this.authedClient(acc);
+      const youtube = google.youtube({ version: 'v3', auth: client });
+      const resp = await youtube.videos.list({ part: ['statistics'], id: ids });
+      const map: Record<string, string> = {};
+      for (const it of resp.data.items || []) {
+        if (it.id && it.statistics?.viewCount) map[it.id] = it.statistics.viewCount;
+      }
+      return map;
+    } catch (e) {
+      this.logger.warn(`fetchViews (oauth) failed: ${(e as Error).message}`);
+      return {};
+    }
+  }
+
+  // Live status via the connected account's authed client (no API key needed).
+  async fetchLive(): Promise<{ live: boolean; videoId: string | null; title: string | null }> {
+    const acc = await this.getAccount();
+    if (!acc) return { live: false, videoId: null, title: null };
+    try {
+      const client = await this.authedClient(acc);
+      const youtube = google.youtube({ version: 'v3', auth: client });
+      const resp = await youtube.search.list({
+        part: ['snippet'],
+        channelId: acc.channelId,
+        eventType: 'live',
+        type: ['video'],
+      });
+      const item = (resp.data.items || [])[0];
+      if (item?.id?.videoId) {
+        return { live: true, videoId: item.id.videoId, title: item.snippet?.title || null };
+      }
+      return { live: false, videoId: null, title: null };
+    } catch (e) {
+      this.logger.warn(`fetchLive (oauth) failed: ${(e as Error).message}`);
+      return { live: false, videoId: null, title: null };
+    }
+  }
+
+  async hasAccount(): Promise<boolean> {
+    return !!(await this.getAccount());
+  }
+
   // Create a live broadcast + stream, bind them, return the OBS ingestion info.
   async startLive(title: string, description = '', privacy = 'public') {
     const acc = await this.getAccount();
