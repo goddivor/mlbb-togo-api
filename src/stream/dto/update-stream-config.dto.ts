@@ -31,6 +31,11 @@ export class StreamVideoDto {
   @IsString()
   @MaxLength(40)
   date?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  thumbnail?: string;
 }
 
 export class UpdateStreamConfigDto {
