@@ -461,6 +461,20 @@ model StreamConfig {
   updatedAt      DateTime @updatedAt
 }
 
+model StreamSeasonVideo {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  seasonId  String   @db.ObjectId
+  videoId   String
+  title     String   @default("")
+  thumbnail String   @default("")
+  duration  String   @default("")
+  date      String   @default("")
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([seasonId, videoId])
+}
+
 model YoutubeAccount {
   id               String   @id @default(auto()) @map("_id") @db.ObjectId
   channelId        String   @unique

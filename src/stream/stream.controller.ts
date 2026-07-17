@@ -2,8 +2,10 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Patch,
   Post,
+  Put,
   Query,
   Res,
   UseGuards,
@@ -12,6 +14,7 @@ import type { Response } from 'express';
 import { StreamService } from './stream.service';
 import { YoutubeOAuthService } from './youtube-oauth.service';
 import { UpdateStreamConfigDto } from './dto/update-stream-config.dto';
+import { SetSeasonVideosDto } from './dto/set-season-videos.dto';
 import { StartLiveDto } from './dto/start-live.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -41,6 +44,31 @@ export class StreamController {
   @Get('views')
   getViews(@Query('videoIds') videoIds: string) {
     return this.streamService.getViews(videoIds);
+  }
+
+  // Public: seasons (created by the admin) that have attached videos.
+  @Get('seasons')
+  getSeasons() {
+    return this.streamService.listPublicSeasons();
+  }
+
+  // Admin: videos attached to a given season.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...ADMIN)
+  @Get('seasons/:seasonId/videos')
+  getSeasonVideos(@Param('seasonId') seasonId: string) {
+    return this.streamService.getSeasonVideos(seasonId);
+  }
+
+  // Admin: replace a season's video selection.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...ADMIN)
+  @Put('seasons/:seasonId/videos')
+  setSeasonVideos(
+    @Param('seasonId') seasonId: string,
+    @Body() dto: SetSeasonVideosDto,
+  ) {
+    return this.streamService.setSeasonVideos(seasonId, dto.videos || []);
   }
 
   // OAuth callback: Google redirects here. Not guarded (no bearer in a browser

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import { UpdateStreamConfigDto } from './dto/update-stream-config.dto';
@@ -22,20 +22,10 @@ interface ChannelMeta {
 
 const YT_BASE = 'https://www.googleapis.com/youtube/v3';
 
-// Default channel/videos used to bootstrap the singleton config on first read.
-// The admin can change all of this from the dashboard afterwards.
+// Default channel used to bootstrap the singleton config on first read.
+// The admin connects the real channel afterwards; videos are attached to
+// admin-created seasons (see StreamSeasonVideo), not seeded here.
 const DEFAULT_CHANNEL = 'eternumesports';
-const DEFAULT_VIDEOS: StreamVideo[] = [
-  { id: 'gmQZwF1e440', title: 'Game 1', day: 'Game 1', duration: '12:34', date: '2025-01-15' },
-  { id: 'ig4rgd_XpsI', title: 'Game 1 (bis)', day: 'Game 1', duration: '10:45', date: '2025-01-16' },
-  { id: 'RrlV4gdaT-c', title: 'Game 2', day: 'Game 2', duration: '14:20', date: '2025-01-18' },
-  { id: 'XUxJ5RDPn50', title: 'Day 7', day: 'Day 7', duration: '18:05', date: '2025-01-22' },
-  { id: '0fHem_8aV-c', title: 'Day 9', day: 'Day 9', duration: '15:30', date: '2025-01-24' },
-  { id: 'rk1x2zOxN5c', title: 'Day 10', day: 'Day 10', duration: '16:45', date: '2025-01-25' },
-  { id: 'CpMvI_7n83I', title: 'Day 12', day: 'Day 12', duration: '20:10', date: '2025-01-27' },
-  { id: '5SjS6tOz0Ck', title: 'Third game', day: 'Game 3', duration: '13:55', date: '2025-01-29' },
-  { id: 'yEZqiM5uYoM', title: 'Final', day: 'Final', duration: '25:30', date: '2025-02-01' },
-];
 
 @Injectable()
 export class StreamService {
@@ -58,11 +48,7 @@ export class StreamService {
     const existing = await this.prisma.streamConfig.findFirst();
     if (existing) return existing;
     return this.prisma.streamConfig.create({
-      data: {
-        youtubeChannel: DEFAULT_CHANNEL,
-        s1MainVideoId: DEFAULT_VIDEOS[0].id,
-        videos: toJson(DEFAULT_VIDEOS),
-      },
+      data: { youtubeChannel: DEFAULT_CHANNEL },
     });
   }
 
@@ -258,6 +244,83 @@ export class StreamService {
       this.logger.warn(`Views fetch failed: ${(e as Error).message}`);
       return { views: {} };
     }
+  }
+
+  /* ---------------- Seasons ↔ videos ---------------- */
+
+  // Public: seasons (created by the admin in the esport module) that have at
+  // least one attached video, each with its ordered video list.
+  async listPublicSeasons() {
+    const links = await this.prisma.streamSeasonVideo.findMany({
+      orderBy: [{ seasonId: 'asc' }, { sort: 'asc' }],
+    });
+    if (links.length === 0) return [];
+    const seasonIds = [...new Set(links.map((l) => l.seasonId))];
+    const seasons = await this.prisma.esportSeason.findMany({
+      where: { id: { in: seasonIds } },
+    });
+    const byId = new Map(seasons.map((s) => [s.id, s]));
+    // Preserve the esport season order (most recent first).
+    const ordered = seasons
+      .sort((a, b) => (b.startDate?.getTime() || 0) - (a.startDate?.getTime() || 0))
+      .map((s) => s.id);
+    return ordered
+      .filter((id) => byId.has(id))
+      .map((id) => ({
+        seasonId: id,
+        name: byId.get(id)!.name,
+        videos: links
+          .filter((l) => l.seasonId === id)
+          .map((l) => ({
+            id: l.videoId,
+            title: l.title,
+            thumbnail: l.thumbnail || undefined,
+            duration: l.duration || undefined,
+            date: l.date || undefined,
+          })),
+      }));
+  }
+
+  // Admin: the videos currently attached to a given season.
+  async getSeasonVideos(seasonId: string) {
+    const links = await this.prisma.streamSeasonVideo.findMany({
+      where: { seasonId },
+      orderBy: { sort: 'asc' },
+    });
+    return links.map((l) => ({
+      id: l.videoId,
+      title: l.title,
+      thumbnail: l.thumbnail || undefined,
+      duration: l.duration || undefined,
+      date: l.date || undefined,
+    }));
+  }
+
+  // Admin: replace a season's video selection with the provided list.
+  async setSeasonVideos(seasonId: string, videos: Partial<StreamVideo>[]) {
+    // Guard: the season must exist (created via the esport admin).
+    const season = await this.prisma.esportSeason.findUnique({
+      where: { id: seasonId },
+    });
+    if (!season) throw new NotFoundException('Saison introuvable.');
+
+    const cleaned = (videos || [])
+      .map((v, i) => ({
+        seasonId,
+        videoId: this.normalizeVideoId(v.id || ''),
+        title: (v.title || '').trim(),
+        thumbnail: (v.thumbnail || '').trim(),
+        duration: (v.duration || '').trim(),
+        date: (v.date || '').trim(),
+        sort: i,
+      }))
+      .filter((v) => v.videoId);
+
+    await this.prisma.streamSeasonVideo.deleteMany({ where: { seasonId } });
+    if (cleaned.length > 0) {
+      await this.prisma.streamSeasonVideo.createMany({ data: cleaned });
+    }
+    return this.getSeasonVideos(seasonId);
   }
 
   // Resolve a handle (or channel id) to its metadata via the YouTube API.
