@@ -445,3 +445,54 @@ model ContactMessage {
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 }
+
+model StreamConfig {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  youtubeChannel String   @default("eternumesports")
+  channelId      String   @default("")
+  channelTitle   String   @default("")
+  channelAvatar  String   @default("")
+  channelBanner  String   @default("")
+  liveTitle      String   @default("")
+  liveDesc       String   @default("")
+  s1MainVideoId  String   @default("")
+  videos         String   @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model StreamSeasonVideo {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  seasonId  String   @db.ObjectId
+  videoId   String
+  title     String   @default("")
+  thumbnail String   @default("")
+  duration  String   @default("")
+  date      String   @default("")
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([seasonId, videoId])
+}
+
+model YoutubeAccount {
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  channelId        String   @unique
+  channelTitle     String   @default("")
+  channelThumbnail String   @default("")
+  channelBanner    String   @default("")
+  accessToken      String
+  refreshToken     String
+  tokenExpiresAt   DateTime
+  scope            String   @default("")
+  isConnected      Boolean  @default(true)
+  connectedAt      DateTime @default(now())
+  liveBroadcastId  String   @default("")
+  liveStreamId     String   @default("")
+  liveRtmpUrl      String   @default("")
+  liveStreamKey    String   @default("")
+  liveStatus       String   @default("")
+  liveWatchUrl     String   @default("")
+  liveTitle        String   @default("")
+  updatedAt        DateTime @updatedAt
+}

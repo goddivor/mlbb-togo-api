@@ -639,6 +639,15 @@ async function main() {
     });
   }
 
+  // Stream config: a single document holding the connected YouTube channel.
+  // Videos are attached to admin-created seasons (StreamSeasonVideo), not here.
+  const streamExists = await prisma.streamConfig.findFirst();
+  if (!streamExists) {
+    await prisma.streamConfig.create({
+      data: { youtubeChannel: 'eternumesports' },
+    });
+  }
+
   console.log('✅ Seed terminé. Résumé :');
   console.log(`   - Équipes        : ${mockTeams.length}`);
   console.log(`   - Utilisateurs   : ${mockPlayers.length}`);
