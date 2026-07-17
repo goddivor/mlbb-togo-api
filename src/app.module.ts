@@ -19,6 +19,7 @@ import { RecruitmentModule } from './recruitment/recruitment.module';
 import { LanesModule } from './lanes/lanes.module';
 import { GqlModule } from './graphql/gql.module';
 import { PushModule } from './push/push.module';
+import { StreamModule } from './stream/stream.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { PushModule } from './push/push.module';
     LanesModule,
     GqlModule,
     PushModule,
+    StreamModule,
   ],
 })
 export class AppModule {}

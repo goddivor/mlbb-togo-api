@@ -445,3 +445,14 @@ model ContactMessage {
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 }
+
+model StreamConfig {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  youtubeChannel String   @default("eternumesports")
+  liveTitle      String   @default("")
+  liveDesc       String   @default("")
+  s1MainVideoId  String   @default("")
+  videos         String   @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}

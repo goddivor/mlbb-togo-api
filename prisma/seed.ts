@@ -639,6 +639,30 @@ async function main() {
     });
   }
 
+  // Stream config: a single document holding the YouTube channel + Season 1
+  // video list, editable by the admin. Created once, left untouched afterwards.
+  const streamExists = await prisma.streamConfig.findFirst();
+  if (!streamExists) {
+    const s1Videos = [
+      { id: 'gmQZwF1e440', title: 'Game 1', day: 'Game 1', duration: '12:34', date: '2025-01-15' },
+      { id: 'ig4rgd_XpsI', title: 'Game 1 (bis)', day: 'Game 1', duration: '10:45', date: '2025-01-16' },
+      { id: 'RrlV4gdaT-c', title: 'Game 2', day: 'Game 2', duration: '14:20', date: '2025-01-18' },
+      { id: 'XUxJ5RDPn50', title: 'Day 7', day: 'Day 7', duration: '18:05', date: '2025-01-22' },
+      { id: '0fHem_8aV-c', title: 'Day 9', day: 'Day 9', duration: '15:30', date: '2025-01-24' },
+      { id: 'rk1x2zOxN5c', title: 'Day 10', day: 'Day 10', duration: '16:45', date: '2025-01-25' },
+      { id: 'CpMvI_7n83I', title: 'Day 12', day: 'Day 12', duration: '20:10', date: '2025-01-27' },
+      { id: '5SjS6tOz0Ck', title: 'Third game', day: 'Game 3', duration: '13:55', date: '2025-01-29' },
+      { id: 'yEZqiM5uYoM', title: 'Final', day: 'Final', duration: '25:30', date: '2025-02-01' },
+    ];
+    await prisma.streamConfig.create({
+      data: {
+        youtubeChannel: 'eternumesports',
+        s1MainVideoId: s1Videos[0].id,
+        videos: JSON.stringify(s1Videos),
+      },
+    });
+  }
+
   console.log('✅ Seed terminé. Résumé :');
   console.log(`   - Équipes        : ${mockTeams.length}`);
   console.log(`   - Utilisateurs   : ${mockPlayers.length}`);
