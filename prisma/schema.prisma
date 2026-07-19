@@ -496,3 +496,65 @@ model YoutubeAccount {
   liveTitle        String   @default("")
   updatedAt        DateTime @updatedAt
 }
+
+// ---- Draft Simulator (community tournaments 1v1 / 3v3 / 5v5) ----
+model DraftTournament {
+  id                   String    @id @default(auto()) @map("_id") @db.ObjectId
+  name                 String
+  description          String?
+  category             String    // "1v1" | "3v3" | "5v5"
+  teamSize             Int       // 1 | 3 | 5
+  roles                String    @default("[]") // JSON: required roles (admin-defined for non-5v5; the 5 lanes for 5v5)
+  status               String    @default("draft") // draft | registration | closed | drafted | ongoing | completed
+  registrationOpensAt  DateTime?
+  registrationClosesAt DateTime?
+  secondPhaseOpen      Boolean   @default(false)
+  secondPhaseClosesAt  DateTime?
+  createdById          String?   @db.ObjectId
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+model DraftRegistration {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  tournamentId  String   @db.ObjectId
+  userId        String   @db.ObjectId
+  preferredRole String
+  phase         Int      @default(1) // 1 = initial, 2 = second registration phase
+  createdAt     DateTime @default(now())
+
+  @@unique([tournamentId, userId])
+}
+
+model DraftTeam {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  tournamentId String   @db.ObjectId
+  name         String
+  icon         String   @default("")
+  seed         Int      @default(0)
+  complete     Boolean  @default(true)
+  eliminated   Boolean  @default(false) // incomplete team kept out of the bracket
+  createdAt    DateTime @default(now())
+}
+
+model DraftTeamMember {
+  id            String @id @default(auto()) @map("_id") @db.ObjectId
+  tournamentId  String @db.ObjectId
+  teamId        String @db.ObjectId
+  userId        String @db.ObjectId
+  preferredRole String
+  assignedRole  String
+}
+
+model DraftMatch {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  tournamentId String    @db.ObjectId
+  round        Int
+  position     Int
+  teamAId      String?   @db.ObjectId
+  teamBId      String?   @db.ObjectId
+  winnerTeamId String?   @db.ObjectId
+  scheduledAt  DateTime?
+  status       String    @default("pending") // pending | done
+  createdAt    DateTime  @default(now())
+}
