@@ -534,15 +534,40 @@ export class AuthService {
 
   private async fetchGoogleProfile(accessToken: string) {
     let profile: any;
-    try {
-      const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!res.ok) throw new Error('userinfo ' + res.status);
-      profile = await res.json();
-    } catch (e: any) {
-      this.logger.warn(`Google userinfo échec: ${e?.message}`);
-      throw new UnauthorizedException('Jeton Google invalide.');
+    // Retry: the network hop to googleapis.com can fail transiently.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(
+          'https://www.googleapis.com/oauth2/v3/userinfo',
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            signal: controller.signal,
+          },
+        ).finally(() => clearTimeout(timeout));
+        if (res.status === 401 || res.status === 403) {
+          // A genuinely invalid/expired token: no point retrying.
+          throw new UnauthorizedException('Jeton Google invalide.');
+        }
+        if (!res.ok) throw new Error('userinfo ' + res.status);
+        profile = await res.json();
+        break;
+      } catch (e: any) {
+        if (e instanceof UnauthorizedException) throw e;
+        // Log the underlying cause (undici hides it behind "fetch failed").
+        this.logger.warn(
+          `Google userinfo échec (tentative ${attempt}/3): ${e?.message}${
+            e?.cause ? ` — ${e.cause?.code || e.cause?.message || e.cause}` : ''
+          }`,
+        );
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 400 * attempt));
+      }
+    }
+    if (!profile) {
+      throw new UnauthorizedException(
+        'Impossible de contacter Google. Vérifiez la connexion et réessayez.',
+      );
     }
     const googleId: string = profile.sub;
     const email: string = profile.email;

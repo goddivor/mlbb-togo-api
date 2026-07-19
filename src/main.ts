@@ -1,6 +1,12 @@
+import { setDefaultResultOrder } from 'node:dns';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+
+// Prefer IPv4 when resolving hostnames. Node's fetch (undici) otherwise tries
+// IPv6 first and fails with an opaque "fetch failed" on machines/networks with
+// broken IPv6 (a common cause of Google userinfo failures on login).
+setDefaultResultOrder('ipv4first');
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
