@@ -26,6 +26,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { PickBanModule } from './pickban/pickban.module';
 import { AiModule } from './ai/ai.module';
+import { LeagueStatsModule } from './league-stats/league-stats.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { AiModule } from './ai/ai.module';
     GamificationModule,
     PickBanModule,
     AiModule,
+    LeagueStatsModule,
   ],
 })
 export class AppModule {}
