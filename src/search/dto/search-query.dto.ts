@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 const toInt = ({ value }: { value: unknown }) => {
   if (value === undefined || value === null || value === '') return undefined;
@@ -14,6 +14,7 @@ export class SearchQueryDto {
    */
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   q?: string;
 
   /**

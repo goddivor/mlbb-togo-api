@@ -1,4 +1,4 @@
-import { SearchService } from './search.service';
+import { SearchService, escapeRegex } from './search.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const userRow = (over: Partial<Record<string, any>> = {}) => ({
@@ -305,15 +305,36 @@ describe('SearchService', () => {
 
       await service.search({ q: 'TeSt' });
 
-      // Check that a case-insensitive regex pattern is passed
+      // Check that a case-insensitive Prisma filter is passed
       expect(prisma.user.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            username: expect.objectContaining({
-              $regex: 'TeSt',
-              $options: 'i',
-            }),
+            username: { contains: 'TeSt', mode: 'insensitive' },
           }),
+        }),
+      );
+    });
+  });
+
+  describe('regex safety', () => {
+    it('escapes regex metacharacters in the query', () => {
+      expect(escapeRegex('a.b*c(d)[e]{f}|g^h$i?j+k\\l')).toBe(
+        'a\\.b\\*c\\(d\\)\\[e\\]\\{f\\}\\|g\\^h\\$i\\?j\\+k\\\\l',
+      );
+    });
+
+    it('passes the escaped query to prisma', async () => {
+      prisma.user.findMany.mockResolvedValue([]);
+      prisma.hero.findMany.mockResolvedValue([]);
+      prisma.team.findMany.mockResolvedValue([]);
+      prisma.tournament.findMany.mockResolvedValue([]);
+      prisma.event.findMany.mockResolvedValue([]);
+
+      await service.search({ q: '.*' });
+
+      expect(prisma.hero.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { name: { contains: '\\.\\*', mode: 'insensitive' } },
         }),
       );
     });

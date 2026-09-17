@@ -3,6 +3,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { serializeUserCard } from '../users/users.service';
 
+type SearchPattern = { contains: string; mode: 'insensitive' };
+
+/**
+ * Escape regex metacharacters. Prisma's MongoDB connector compiles `contains`
+ * to a `$regex` without escaping, so raw user input could inject regex syntax.
+ */
+export function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 @Injectable()
 export class SearchService {
   constructor(private prisma: PrismaService) {}
@@ -22,8 +32,8 @@ export class SearchService {
       };
     }
 
-    // Case-insensitive search patterns (MongoDB regex).
-    const pattern = { $regex: q, $options: 'i' };
+    // Case-insensitive literal substring filter (regex-safe).
+    const pattern: SearchPattern = { contains: escapeRegex(q), mode: 'insensitive' };
 
     // Run all searches in parallel for better performance.
     const [users, heroes, teams, tournaments, events] = await Promise.all([
@@ -37,7 +47,7 @@ export class SearchService {
     return { users, heroes, teams, tournaments, events };
   }
 
-  private async searchUsers(pattern: any, limit: number) {
+  private async searchUsers(pattern: SearchPattern, limit: number) {
     // Public endpoint: exclude banned users and staff (admin/moderator).
     const users = await this.prisma.user.findMany({
       where: {
@@ -51,7 +61,7 @@ export class SearchService {
     return users.map(serializeUserCard);
   }
 
-  private async searchHeroes(pattern: any, limit: number) {
+  private async searchHeroes(pattern: SearchPattern, limit: number) {
     return this.prisma.hero.findMany({
       where: { name: pattern },
       take: limit,
@@ -65,7 +75,7 @@ export class SearchService {
     });
   }
 
-  private async searchTeams(pattern: any, limit: number) {
+  private async searchTeams(pattern: SearchPattern, limit: number) {
     return this.prisma.team.findMany({
       where: {
         OR: [{ name: pattern }, { tag: pattern }],
@@ -84,7 +94,7 @@ export class SearchService {
     });
   }
 
-  private async searchTournaments(pattern: any, limit: number) {
+  private async searchTournaments(pattern: SearchPattern, limit: number) {
     return this.prisma.tournament.findMany({
       where: {
         OR: [{ name: pattern }, { description: pattern }],
@@ -101,7 +111,7 @@ export class SearchService {
     });
   }
 
-  private async searchEvents(pattern: any, limit: number) {
+  private async searchEvents(pattern: SearchPattern, limit: number) {
     return this.prisma.event.findMany({
       where: {
         OR: [{ title: pattern }, { description: pattern }],
