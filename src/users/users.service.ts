@@ -174,8 +174,17 @@ export class UsersService {
     const users = await this.prisma.user.findMany({
       where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
     });
+    // Gamification level shown on player cards (users without progress: null).
+    const levels = new Map(
+      (
+        await this.prisma.userProgress.findMany({
+          where: { userId: { in: users.map((u) => u.id) } },
+          select: { userId: true, level: true },
+        })
+      ).map((p) => [p.userId, p.level]),
+    );
     return users
-      .map(serializeUserCard)
+      .map((u) => ({ ...serializeUserCard(u), level: levels.get(u.id) ?? null }))
       .sort((a, b) => {
         if (a.hasGame !== b.hasGame) return a.hasGame ? -1 : 1;
         return (b.gameRankLevel ?? 0) - (a.gameRankLevel ?? 0);
