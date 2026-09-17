@@ -9,7 +9,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
-    "lint": "eslint \"{src,test}/**/*.ts\" --fix",
+    "lint": "eslint \"{src,test}/**/*.ts\"",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:push": "prisma db push",
@@ -18,7 +18,8 @@
     "db:reset": "prisma migrate reset --force",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:cov": "jest --coverage"
+    "test:cov": "jest --coverage",
+    "lint:fix": "eslint \"{src,test}/**/*.ts\" --fix"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -61,6 +62,10 @@
     "@types/jest": "^29.5.14",
     "@types/node": "^20.16.10",
     "@types/passport-jwt": "^4.0.1",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.2",
     "jest": "^29.7.0",
     "prisma": "6.19.2",
     "ts-jest": "^29.4.12",
