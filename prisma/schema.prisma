@@ -346,6 +346,31 @@ model EsportMatch {
   updatedAt    DateTime  @updatedAt
 }
 
+// Per-player participation and stats on an esport match (one row per
+// player and match). Used to build player profiles: history, win rate,
+// KDA, MVP count, badges. Additive model: existing matches simply have
+// no rows.
+model EsportMatchPlayer {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  matchId   String   @db.ObjectId
+  userId    String   @db.ObjectId
+  teamId    String   @db.ObjectId
+  hero      String?  // hero name from the catalog
+  heroId    String?  @db.ObjectId // catalog Hero id (optional)
+  role      String?  // roam | jungle | mid | exp | gold
+  kills     Int      @default(0)
+  deaths    Int      @default(0)
+  assists   Int      @default(0)
+  gold      Int?
+  damage    Int?
+  isMvp     Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([matchId, userId])
+  @@index([userId])
+}
+
 type RecruitmentSlot {
   role     String
   quantity Int    @default(1)
