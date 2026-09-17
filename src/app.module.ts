@@ -22,6 +22,7 @@ import { PushModule } from './push/push.module';
 import { StreamModule } from './stream/stream.module';
 import { DraftModule } from './draft/draft.module';
 import { SearchModule } from './search/search.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { SearchModule } from './search/search.module';
     StreamModule,
     DraftModule,
     SearchModule,
+    DashboardModule,
   ],
 })
 export class AppModule {}

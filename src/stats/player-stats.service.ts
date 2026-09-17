@@ -78,6 +78,12 @@ export class PlayerStatsService {
     return new Map(heroes.map((h) => [h.name, h.thumb || h.image || null]));
   }
 
+  /** Completed-match participations of a player (any order). */
+  async getParticipations(userId: string): Promise<Participation[]> {
+    const { rows, matches } = await this.loadParticipations(userId);
+    return this.toParticipations(rows, matches);
+  }
+
   /** Public aggregated stats for a player profile. */
   async getUserStats(userId: string) {
     const user = await this.assertPlayer(userId);
