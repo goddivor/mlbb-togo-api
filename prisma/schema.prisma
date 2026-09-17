@@ -343,15 +343,31 @@ model EsportTeamStaff {
   @@index([teamId])
 }
 
+// League season. `isActive` is kept in sync with `status` for backward
+// compatibility (status === 'active' || 'playoffs' <=> isActive).
+// Lifecycle: upcoming -> active -> playoffs -> closed (reopen goes back to
+// active). `summary` is a JSON snapshot frozen at closing (final standings,
+// podium) read by the Hall of Fame. `slug` is unique through a partial index
+// (see prisma/mongo-indexes.js) so legacy documents without a slug stay valid.
 model EsportSeason {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
-  name        String
-  description String?
-  startDate   DateTime?
-  endDate     DateTime?
-  isActive    Boolean   @default(false)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  name              String
+  slug              String?
+  number            Int?
+  theme             String?
+  slogan            String?
+  description       String?
+  status            String?   // upcoming | active | playoffs | closed
+  startDate         DateTime?
+  endDate           DateTime?
+  playoffsStartDate DateTime?
+  closedAt          DateTime?
+  banner            String?
+  color             String?
+  summary           String?   // JSON snapshot frozen at closing
+  isActive          Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 }
 
 model EsportMatch {

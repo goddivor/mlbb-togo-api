@@ -31,6 +31,8 @@ export type SeasonLike = {
   startDate?: Date | string | null;
   endDate?: Date | string | null;
   isActive?: boolean;
+  /** Lifecycle status (see EsportSeasonsService); legacy rows have none. */
+  status?: string | null;
 };
 
 export type TeamMatchView = {
@@ -201,6 +203,9 @@ export function standingsOf(matches: MatchLike[]) {
 }
 
 export function isSeasonOver(season: SeasonLike, now = new Date()) {
+  // The explicit lifecycle status wins over dates / the legacy flag.
+  if (season.status === 'closed') return true;
+  if (season.status === 'active' || season.status === 'playoffs') return false;
   if (season.endDate) {
     const d = new Date(season.endDate);
     if (!isNaN(d.getTime())) return d.getTime() < now.getTime();
@@ -391,10 +396,14 @@ export class EsportStatsService {
     };
   }
 
-  async getTeamHistory(teamId: string, page = 1, limit = 10) {
+  async getTeamHistory(teamId: string, page = 1, limit = 10, seasonId?: string) {
     const team = await this.assertTeam(teamId);
     const safeLimit = Math.min(50, Math.max(1, Math.floor(limit) || 10));
-    const raw = await this.teamMatches(teamId, { status: 'completed' });
+    // Optional season filter (global season switcher on the frontend).
+    const raw = await this.teamMatches(teamId, {
+      status: 'completed',
+      ...(seasonId ? { seasonId } : {}),
+    });
     const chrono = completedForTeam(teamId, raw);
     const desc = [...chrono].reverse();
     const total = desc.length;

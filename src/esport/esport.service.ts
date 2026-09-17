@@ -12,6 +12,7 @@ import { PlayerStatsService } from '../stats/player-stats.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { kdaOf } from '../stats/player-stats.util';
 import { normalizeFiguresInput, parseFigures } from './esport-figures';
+import { EsportSeasonsService } from './esport-seasons.service';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
 export const MATCH_TYPES = ['friendly', 'training', 'official'];
@@ -78,6 +79,7 @@ export class EsportService {
   constructor(
     private prisma: PrismaService,
     private playerStats: PlayerStatsService,
+    private seasons: EsportSeasonsService,
     @Optional() private gamification?: GamificationService,
   ) {}
 
@@ -387,70 +389,15 @@ export class EsportService {
     return { ok: true };
   }
 
-  // ----- Seasons -----
+  // ----- Seasons (lifecycle lives in EsportSeasonsService) -----
 
   async listSeasons() {
-    return this.prisma.esportSeason.findMany({
-      orderBy: [{ isActive: 'desc' }, { startDate: 'desc' }, { createdAt: 'desc' }],
-    });
+    return this.seasons.list();
   }
 
+  /** Raw season lookup used by match creation (404 when unknown). */
   async getSeason(id: string) {
-    const season = await this.prisma.esportSeason.findUnique({ where: { id } });
-    if (!season) throw new NotFoundException('Saison introuvable.');
-    return season;
-  }
-
-  async createSeason(data: any) {
-    if (!data?.name) throw new BadRequestException('Le nom de la saison est requis.');
-    if (data.isActive) await this.clearActiveSeasons();
-    return this.prisma.esportSeason.create({
-      data: {
-        name: data.name,
-        description: data.description ?? null,
-        startDate: data.startDate ? new Date(data.startDate) : null,
-        endDate: data.endDate ? new Date(data.endDate) : null,
-        isActive: !!data.isActive,
-      },
-    });
-  }
-
-  async updateSeason(id: string, data: any) {
-    await this.getSeason(id);
-    if (data.isActive === true) await this.clearActiveSeasons();
-    return this.prisma.esportSeason.update({
-      where: { id },
-      data: {
-        name: data.name ?? undefined,
-        description: data.description === undefined ? undefined : data.description,
-        startDate:
-          data.startDate === undefined
-            ? undefined
-            : data.startDate
-              ? new Date(data.startDate)
-              : null,
-        endDate:
-          data.endDate === undefined
-            ? undefined
-            : data.endDate
-              ? new Date(data.endDate)
-              : null,
-        isActive: typeof data.isActive === 'boolean' ? data.isActive : undefined,
-      },
-    });
-  }
-
-  async deleteSeason(id: string) {
-    await this.getSeason(id);
-    await this.prisma.esportSeason.delete({ where: { id } });
-    return { ok: true };
-  }
-
-  private async clearActiveSeasons() {
-    await this.prisma.esportSeason.updateMany({
-      where: { isActive: true },
-      data: { isActive: false },
-    });
+    return this.seasons.findRaw(id);
   }
 
   // ----- Matches -----
