@@ -6,10 +6,12 @@ import {
   Get,
   Param,
   Patch,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { LeaderboardQueryDto } from './dto/leaderboard-query.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -25,8 +27,8 @@ export class UsersController {
   }
 
   @Get('leaderboard')
-  leaderboard() {
-    return this.usersService.leaderboard();
+  leaderboard(@Query() query: LeaderboardQueryDto) {
+    return this.usersService.leaderboard(query);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
