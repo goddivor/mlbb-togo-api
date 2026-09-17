@@ -23,6 +23,7 @@ import { StreamModule } from './stream/stream.module';
 import { DraftModule } from './draft/draft.module';
 import { SearchModule } from './search/search.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { GamificationModule } from './gamification/gamification.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     DraftModule,
     SearchModule,
     DashboardModule,
+    GamificationModule,
   ],
 })
 export class AppModule {}
