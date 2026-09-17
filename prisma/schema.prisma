@@ -63,6 +63,7 @@ model User {
   posts          Post[]
   comments       Comment[]
   esportMemberships EsportTeamMember[] @relation("EsportMemberships")
+  pickbanDrafts  PickBanDraft[] @relation("PickBanDrafts")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 }
@@ -670,4 +671,31 @@ model UserMission {
 
   @@unique([userId, missionId, periodKey])
   @@index([userId, periodKey])
+}
+
+model PickBanDraft {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String    @default("Untitled Draft")
+  mode        String    @default("ranked") // ranked | tournament
+  shareCode   String    @unique @db.String
+  ownerId     String    @db.ObjectId
+  owner       User?     @relation("PickBanDrafts", fields: [ownerId], references: [id])
+
+  // Teams: JSON-serialized arrays of picks/bans
+  blueTeam    String    @default("{\"picks\":[],\"bans\":[]}") // Pick[], Ban[]
+  redTeam     String    @default("{\"picks\":[],\"bans\":[]}") // Pick[], Ban[]
+
+  // Draft state
+  currentStep Int       @default(0) // step in the MLBB draft order
+  status      String    @default("active") // active | completed | archived
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model PickBanDraftShare {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  draftId   String   @db.ObjectId
+  code      String   @unique @db.String
+  createdAt DateTime @default(now())
 }
