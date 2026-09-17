@@ -273,6 +273,9 @@ model Esport {
   logo        String?
   color       String?
   description String?
+  // JSON object of public target figures shown on the About page
+  // ({ streamAudience, socialReach, teams, offlineEvents }), edited by the admin.
+  figures     String?
   teams       EsportTeam[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
