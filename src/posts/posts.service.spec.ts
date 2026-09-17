@@ -1,4 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import {
   PostsService,
   canPostInCategory,
@@ -48,9 +49,10 @@ function makePrisma() {
     postLike: {
       findUnique: jest.fn(),
       findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
       create: jest.fn(),
       delete: jest.fn(),
-      deleteMany: jest.fn(),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     comment: { create: jest.fn(), deleteMany: jest.fn() },
     sponsor: {
@@ -199,31 +201,76 @@ describe('PostsService', () => {
     it('likes then unlikes idempotently and keeps the counter in sync', async () => {
       prisma.post.findUnique.mockResolvedValue(postRow({ likes: 0 }));
       prisma.postLike.findUnique.mockResolvedValueOnce(null);
-      prisma.post.update.mockResolvedValueOnce(postRow({ likes: 1 }));
+      prisma.post.update.mockResolvedValueOnce({ likes: 1 });
       const first = await service.toggleLike('p1', player);
       expect(first).toEqual({ liked: true, likes: 1 });
       expect(prisma.postLike.create).toHaveBeenCalledWith({
         data: { postId: 'p1', userId: 'u1' },
       });
+      expect(prisma.post.update).toHaveBeenLastCalledWith({
+        where: { id: 'p1' },
+        data: { likes: { increment: 1 } },
+        select: { likes: true },
+      });
 
       prisma.post.findUnique.mockResolvedValue(postRow({ likes: 1 }));
       prisma.postLike.findUnique.mockResolvedValueOnce({ id: 'l1' });
-      prisma.post.update.mockResolvedValueOnce(postRow({ likes: 0 }));
+      prisma.postLike.deleteMany.mockResolvedValueOnce({ count: 1 });
+      prisma.post.update.mockResolvedValueOnce({ likes: 0 });
       const second = await service.toggleLike('p1', player);
       expect(second).toEqual({ liked: false, likes: 0 });
-      expect(prisma.postLike.delete).toHaveBeenCalledTimes(1);
+      expect(prisma.postLike.deleteMany).toHaveBeenCalledWith({
+        where: { postId: 'p1', userId: 'u1' },
+      });
       expect(prisma.postLike.create).toHaveBeenCalledTimes(1);
+      expect(prisma.post.update).toHaveBeenLastCalledWith({
+        where: { id: 'p1' },
+        data: { likes: { increment: -1 } },
+        select: { likes: true },
+      });
     });
 
-    it('never pushes the counter below zero when unliking', async () => {
+    it('treats a concurrent duplicate like (P2002) as already liked without counting twice', async () => {
+      prisma.post.findUnique.mockResolvedValue(postRow({ likes: 1 }));
+      prisma.postLike.findUnique.mockResolvedValueOnce(null);
+      prisma.postLike.create.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('dup', {
+          code: 'P2002',
+          clientVersion: 'test',
+        }),
+      );
+      await expect(service.toggleLike('p1', player)).resolves.toEqual({
+        liked: true,
+        likes: 1,
+      });
+      expect(prisma.post.update).not.toHaveBeenCalled();
+    });
+
+    it('does not decrement when a concurrent request already removed the like', async () => {
+      prisma.post.findUnique.mockResolvedValue(postRow({ likes: 0 }));
+      prisma.postLike.findUnique.mockResolvedValueOnce({ id: 'l1' });
+      prisma.postLike.deleteMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.toggleLike('p1', player)).resolves.toEqual({
+        liked: false,
+        likes: 0,
+      });
+      expect(prisma.post.update).not.toHaveBeenCalled();
+    });
+
+    it('rethrows unexpected errors from the like insert', async () => {
+      prisma.post.findUnique.mockResolvedValue(postRow());
+      prisma.postLike.findUnique.mockResolvedValueOnce(null);
+      prisma.postLike.create.mockRejectedValueOnce(new Error('boom'));
+      await expect(service.toggleLike('p1', player)).rejects.toThrow('boom');
+    });
+
+    it('never reports a counter below zero', async () => {
       prisma.post.findUnique.mockResolvedValue(postRow({ likes: 0 }));
       prisma.postLike.findUnique.mockResolvedValue({ id: 'l1' });
-      prisma.post.update.mockResolvedValue(postRow({ likes: 0 }));
-      await service.toggleLike('p1', player);
-      expect(prisma.post.update).toHaveBeenCalledWith({
-        where: { id: 'p1' },
-        data: { likes: 0 },
-      });
+      prisma.postLike.deleteMany.mockResolvedValueOnce({ count: 1 });
+      prisma.post.update.mockResolvedValueOnce({ likes: -1 });
+      const res = await service.toggleLike('p1', player);
+      expect(res).toEqual({ liked: false, likes: 0 });
     });
   });
 

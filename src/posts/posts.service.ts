@@ -303,30 +303,49 @@ export class PostsService {
   }
 
   /**
-   * Idempotent like toggle: one PostLike row per (post, user); the
-   * denormalized `likes` counter never drops below zero.
+   * Idempotent like toggle: one PostLike row per (post, user). Safe under
+   * concurrent requests: a duplicate insert (P2002) counts as "already liked"
+   * and `deleteMany` tolerates an already-removed row. The denormalized
+   * `likes` counter only moves when a row was really inserted or removed
+   * (atomic increment/decrement), so it stays exact whatever the interleaving.
    */
   async toggleLike(id: string, user: ActingUser) {
     const post = await this.findRaw(id);
     if (!user?.id) throw new ForbiddenException('Connexion requise.');
-    const key = { postId_userId: { postId: id, userId: user.id } };
-    const existing = await this.prisma.postLike.findUnique({ where: key });
+    const where = { postId: id, userId: user.id };
+    const existing = await this.prisma.postLike.findUnique({
+      where: { postId_userId: where },
+    });
+    let liked: boolean;
+    let delta = 0;
     if (existing) {
-      await this.prisma.postLike.delete({ where: key });
+      const { count } = await this.prisma.postLike.deleteMany({ where });
+      delta = -count;
+      liked = false;
+    } else {
+      try {
+        await this.prisma.postLike.create({ data: where });
+        delta = 1;
+      } catch (e) {
+        if (
+          !(e instanceof Prisma.PrismaClientKnownRequestError) ||
+          e.code !== 'P2002'
+        ) {
+          throw e;
+        }
+      }
+      liked = true;
+    }
+    let likes = post.likes;
+    if (delta !== 0) {
       const updated = await this.prisma.post.update({
         where: { id },
-        data: { likes: Math.max(0, post.likes - 1) },
+        data: { likes: { increment: delta } },
+        select: { likes: true },
       });
-      return { liked: false, likes: updated.likes };
+      likes = updated.likes;
     }
-    await this.prisma.postLike.create({
-      data: { postId: id, userId: user.id },
-    });
-    const updated = await this.prisma.post.update({
-      where: { id },
-      data: { likes: { increment: 1 } },
-    });
-    return { liked: true, likes: updated.likes };
+    return { liked, likes: Math.max(0, likes) };
   }
 
   async share(id: string) {
