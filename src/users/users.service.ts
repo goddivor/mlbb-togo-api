@@ -2,6 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import { UpdateUserDto } from './dto/update-user.dto';
+import {
+  LeaderboardMetric,
+  LeaderboardQueryDto,
+} from './dto/leaderboard-query.dto';
 
 export function decodeRank(level?: number | null): string | null {
   if (level == null) return null;
@@ -27,6 +31,28 @@ export function computeWinRate(wins: number, losses: number): number {
   const total = (wins || 0) + (losses || 0);
   if (total === 0) return 0;
   return Math.round(((wins || 0) / total) * 1000) / 10;
+}
+
+/**
+ * Ranking comparator. Every metric falls back on the same chain so that two
+ * players with identical figures keep a stable, non-random order across calls:
+ * games played, then wins, then MVP count, then username.
+ */
+export function compareByMetric(metric: LeaderboardMetric) {
+  const primary: Record<LeaderboardMetric, (u: any) => number> = {
+    winRate: (u) => u.winRate || 0,
+    wins: (u) => u.wins || 0,
+    mvpCount: (u) => u.mvpCount || 0,
+    streak: (u) => u.streak || 0,
+  };
+  const value = primary[metric];
+
+  return (a: any, b: any) =>
+    value(b) - value(a) ||
+    (b.games || 0) - (a.games || 0) ||
+    (b.wins || 0) - (a.wins || 0) ||
+    (b.mvpCount || 0) - (a.mvpCount || 0) ||
+    String(a.username || '').localeCompare(String(b.username || ''));
 }
 
 export function serializeUser(user: any) {
@@ -189,15 +215,64 @@ export class UsersService {
     return serializePublicUser(user);
   }
 
-  async leaderboard() {
+  /**
+   * Ids of the players who took part in a given esport season, derived from the
+   * matches of that season. Player stats are aggregates (the schema keeps no
+   * per-season counters), so a season narrows *who* is ranked, not the numbers.
+   */
+  private async seasonParticipantIds(seasonId: string): Promise<string[]> {
+    const matches = await this.prisma.esportMatch.findMany({
+      where: { seasonId },
+      select: { teamAId: true, teamBId: true },
+    });
+    if (matches.length === 0) return [];
+
+    const teamIds = [
+      ...new Set(matches.flatMap((m) => [m.teamAId, m.teamBId]).filter(Boolean)),
+    ];
+    const members = await this.prisma.esportTeamMember.findMany({
+      where: { teamId: { in: teamIds } },
+      select: { userId: true },
+    });
+    return [...new Set(members.map((m) => m.userId))];
+  }
+
+  async leaderboard(query: LeaderboardQueryDto = {}) {
+    const metric: LeaderboardMetric = query.metric ?? 'winRate';
+    const limit = query.limit ?? 50;
+    const minGames = query.minGames ?? 0;
+
     // Public endpoint: never leak PII (email, googleId, tokens, prefs...) and
     // exclude staff/banned accounts, exactly like the public directory.
-    const users = await this.prisma.user.findMany({
-      where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
-    });
-    return users
-      .map(serializePublicUser)
-      .sort((a, b) => b.winRate - a.winRate);
+    const where: Record<string, any> = {
+      isBanned: false,
+      roleUser: { notIn: ['admin', 'moderator'] },
+    };
+    if (query.role) where.role = query.role;
+
+    if (query.seasonId) {
+      const ids = await this.seasonParticipantIds(query.seasonId);
+      if (ids.length === 0) return { metric, total: 0, entries: [] };
+      where.id = { in: ids };
+    }
+
+    const users = await this.prisma.user.findMany({ where });
+    const ranked = users
+      .map((u) => ({
+        ...serializePublicUser(u),
+        role: u.role,
+        games: (u.wins || 0) + (u.losses || 0),
+      }))
+      .filter((u) => u.games >= minGames)
+      .sort(compareByMetric(metric));
+
+    return {
+      metric,
+      total: ranked.length,
+      entries: ranked
+        .slice(0, limit)
+        .map((u, i) => ({ ...u, position: i + 1 })),
+    };
   }
 
   async findOne(id: string) {
