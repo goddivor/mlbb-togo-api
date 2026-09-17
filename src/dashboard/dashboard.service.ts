@@ -23,6 +23,8 @@ const SOURCE_TAKE = 10;
 const LAST_MATCHES = 5;
 const LATEST_NOTIFICATIONS = 5;
 const RANK_METRIC: LeaderboardMetric = 'winRate';
+// Same sample floor as the /leaderboard page default: a 1-0 record is not a rank.
+const RANK_MIN_GAMES = 10;
 // Bracket statuses that still describe a match to come.
 const PENDING_BRACKET = new Set(['pending', 'scheduled', 'live']);
 // Draft tournaments the player can still expect something from.
@@ -92,9 +94,11 @@ export class DashboardService {
 
   private async rank(userId: string) {
     // The leaderboard already loads every ranked player; asking for all of
-    // them costs nothing more and gives the exact position.
+    // them costs nothing more and gives the exact position. Players under
+    // the sample floor get `position: null` (the widget shows "not ranked").
     const board = await this.users.leaderboard({
       metric: RANK_METRIC,
+      minGames: RANK_MIN_GAMES,
       limit: Number.MAX_SAFE_INTEGER,
     });
     const position = rankOf(board.entries, userId);

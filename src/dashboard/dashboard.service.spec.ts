@@ -106,7 +106,7 @@ describe('DashboardService', () => {
     });
     const out = await service.getDashboard(U, NOW);
     expect(users.leaderboard).toHaveBeenCalledWith(
-      expect.objectContaining({ metric: 'winRate', limit: Number.MAX_SAFE_INTEGER }),
+      expect.objectContaining({ metric: 'winRate', minGames: 10, limit: Number.MAX_SAFE_INTEGER }),
     );
     expect(out.rank).toEqual({ metric: 'winRate', position: 2, total: 3, value: 60, games: 10 });
   });
