@@ -1,9 +1,22 @@
 
+import 'dotenv/config';
+import { createHash } from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import heroes from './heroes.json';
 
 const prisma = new PrismaClient();
+
+/**
+ * Turns a readable fixture key ('t1', 'p3', 'form_1'...) into a valid 24-hex
+ * MongoDB ObjectId. The fixtures below were written for SQLite, where an id
+ * was any string; on MongoDB every id and foreign key must be an ObjectId.
+ * Hashing keeps the fixtures readable and, being deterministic, preserves the
+ * cross-references between them (a team's `captainId` still resolves to the
+ * very user the fixture points at).
+ */
+const oid = (key: string | number): string =>
+  createHash('md5').update(String(key)).digest('hex').slice(0, 24);
 
 const toJson = (value: any) => JSON.stringify(value ?? null);
 
@@ -455,12 +468,12 @@ async function main() {
   for (const t of mockTeams) {
     await prisma.team.create({
       data: {
-        id: t.id,
+        id: oid(t.id),
         name: t.name,
         tag: t.tag,
         logo: t.logo ?? undefined,
         description: t.description ?? undefined,
-        captainId: t.captainId ?? undefined,
+        captainId: t.captainId ? oid(t.captainId) : undefined,
         maxMembers: t.maxMembers,
         wins: t.wins,
         losses: t.losses,
@@ -477,7 +490,7 @@ async function main() {
   for (const p of mockPlayers) {
     await prisma.user.create({
       data: {
-        id: p.id,
+        id: oid(p.id),
         username: p.username,
         email: p.email,
         password: passwordHash,
@@ -497,7 +510,7 @@ async function main() {
         lastActive: new Date(p.lastActive),
         isOnline: p.isOnline,
         roleUser: p.role_user,
-        teamId: p.teamId ?? undefined,
+        teamId: p.teamId ? oid(p.teamId) : undefined,
       },
     });
   }
@@ -505,8 +518,8 @@ async function main() {
   for (const post of mockPosts) {
     await prisma.post.create({
       data: {
-        id: post.id,
-        authorId: post.authorId,
+        id: oid(post.id),
+        authorId: oid(post.authorId),
         authorName: post.authorName,
         authorRank: post.authorRank ?? undefined,
         category: post.category,
@@ -521,9 +534,9 @@ async function main() {
     for (const c of post.comments ?? []) {
       await prisma.comment.create({
         data: {
-          id: c.id,
-          postId: post.id,
-          authorId: c.authorId,
+          id: oid(c.id),
+          postId: oid(post.id),
+          authorId: oid(c.authorId),
           authorName: c.authorName,
           content: c.content,
           createdAt: new Date(c.createdAt),
@@ -535,7 +548,7 @@ async function main() {
   for (const t of mockTournaments) {
     await prisma.tournament.create({
       data: {
-        id: t.id,
+        id: oid(t.id),
         name: t.name,
         description: t.description ?? undefined,
         organizer: t.organizer ?? undefined,
@@ -544,7 +557,7 @@ async function main() {
         endDate: t.endDate ?? undefined,
         prizePool: t.prizePool ?? undefined,
         maxTeams: t.maxTeams,
-        registeredTeams: toJson(t.registeredTeams),
+        registeredTeams: toJson((t.registeredTeams ?? []).map(oid)),
         format: t.format ?? undefined,
         rules: t.rules ?? undefined,
         banner: t.banner ?? undefined,
@@ -557,14 +570,14 @@ async function main() {
   for (const e of mockEvents) {
     await prisma.event.create({
       data: {
-        id: e.id,
+        id: oid(e.id),
         title: e.title,
         type: e.type,
         description: e.description ?? undefined,
         date: e.date ?? undefined,
         time: e.time ?? undefined,
         duration: e.duration ?? undefined,
-        participants: toJson(e.participants),
+        participants: toJson((e.participants ?? []).map(oid)),
         organizer: e.organizer ?? undefined,
         isPublic: e.isPublic,
       },
@@ -574,16 +587,16 @@ async function main() {
   for (const m of mockMatches) {
     await prisma.match.create({
       data: {
-        id: m.id,
-        team1: toJson(m.team1),
-        team2: toJson(m.team2),
+        id: oid(m.id),
+        team1: toJson({ ...m.team1, id: oid(m.team1.id) }),
+        team2: toJson({ ...m.team2, id: oid(m.team2.id) }),
         tournament: m.tournament ?? undefined,
         date: m.date ?? undefined,
         status: m.status,
         mvp: m.mvp ?? undefined,
         duration: m.duration ?? undefined,
         format: m.format ?? undefined,
-        games: toJson(m.games),
+        games: toJson((m.games ?? []).map((g: any) => ({ ...g, winner: oid(g.winner) }))),
       },
     });
   }
@@ -591,7 +604,7 @@ async function main() {
   for (const log of mockAdminLogs) {
     await prisma.adminLog.create({
       data: {
-        id: log.id,
+        id: oid(log.id),
         action: log.action,
         admin: log.admin,
         target: log.target ?? undefined,
@@ -604,7 +617,7 @@ async function main() {
   for (const f of mockFormTemplates) {
     await prisma.formTemplate.create({
       data: {
-        id: f.id,
+        id: oid(f.id),
         name: f.name,
         description: f.description ?? undefined,
         fields: toJson(f.fields),
@@ -616,8 +629,8 @@ async function main() {
   for (const r of mockFormResponses) {
     await prisma.formResponse.create({
       data: {
-        id: r.id,
-        formId: r.formId,
+        id: oid(r.id),
+        formId: oid(r.formId),
         data: toJson(r.data),
         submittedAt: new Date(r.submittedAt),
       },
@@ -627,8 +640,8 @@ async function main() {
   for (const n of mockNotifications) {
     await prisma.notification.create({
       data: {
-        id: n.id,
-        userId: n.userId ?? undefined,
+        id: oid(n.id),
+        userId: n.userId ? oid(n.userId) : undefined,
         type: n.type,
         title: n.title,
         message: n.message,
