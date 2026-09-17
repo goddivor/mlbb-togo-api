@@ -1,172 +1,143 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { PickBanSuggestionService } from './pickban-suggestion.service';
+import {
+  HeroCandidate,
+  PickBanSuggestionService,
+  PickedHeroMeta,
+  SuggestionContext,
+} from './pickban-suggestion.service';
+
+const hero = (id: string, extra: Partial<HeroCandidate> = {}): HeroCandidate => ({
+  id,
+  name: id[0].toUpperCase() + id.slice(1),
+  laneKeys: [],
+  ...extra,
+});
+
+const meta = (heroId: string, m: Partial<PickedHeroMeta> = {}): PickedHeroMeta => ({
+  heroId,
+  strongAgainst: [],
+  weakAgainst: [],
+  bestTeammates: [],
+  ...m,
+});
+
+const ctx = (over: Partial<SuggestionContext> = {}): SuggestionContext => ({
+  action: 'pick',
+  team: 'blue',
+  allyPicks: [],
+  enemyPicks: [],
+  excluded: new Set(),
+  pickedMeta: new Map(),
+  metaAvailable: true,
+  ...over,
+});
 
 describe('PickBanSuggestionService', () => {
-  let service: PickBanSuggestionService;
+  const service = new PickBanSuggestionService();
 
-  beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [PickBanSuggestionService],
-    }).compile();
-
-    service = module.get<PickBanSuggestionService>(PickBanSuggestionService);
+  it('never suggests picked or banned heroes and returns at most `limit` items', () => {
+    const heroes = Array.from({ length: 12 }, (_, i) => hero(`h${i}`));
+    const out = service.suggest(heroes, ctx({ excluded: new Set(['h0', 'h1']) }), 5);
+    expect(out).toHaveLength(5);
+    expect(out.map((s) => s.heroId)).not.toContain('h0');
+    expect(out.map((s) => s.heroId)).not.toContain('h1');
   });
 
-  it('should be defined', () => {
-    expect(service).toBeDefined();
+  it('ranks a hero that counters an enemy pick first and explains why', () => {
+    const heroes = [hero('ling'), hero('khufra'), hero('layla')];
+    const out = service.suggest(
+      heroes,
+      ctx({
+        enemyPicks: ['ling'],
+        excluded: new Set(['ling']),
+        pickedMeta: new Map([['ling', meta('ling', { weakAgainst: ['khufra'] })]]),
+      }),
+    );
+    expect(out[0].heroId).toBe('khufra');
+    expect(out[0].reason).toContain('counters Ling');
   });
 
-  describe('suggestHeroes', () => {
-    it('should suggest heroes based on lane coverage', () => {
-      const heroes = [
-        { id: '1', name: 'Marksman A', role: 'marksman', laneKeys: ['gold'] },
-        { id: '2', name: 'Mage B', role: 'mage', laneKeys: ['mid'] },
-        { id: '3', name: 'Fighter C', role: 'fighter', laneKeys: ['exp', 'jungle'] },
-      ];
+  it('penalizes a hero the enemy pick is strong against', () => {
+    const heroes = [hero('ling'), hero('layla'), hero('nana')];
+    const out = service.suggest(
+      heroes,
+      ctx({
+        enemyPicks: ['ling'],
+        excluded: new Set(['ling']),
+        pickedMeta: new Map([['ling', meta('ling', { strongAgainst: ['layla'] })]]),
+      }),
+    );
+    const layla = out.find((s) => s.heroId === 'layla')!;
+    const nana = out.find((s) => s.heroId === 'nana')!;
+    expect(layla.score).toBeLessThan(nana.score);
+    expect(layla.reason).toContain('countered by Ling');
+  });
 
-      const counters = new Map();
-      counters.set('1', { heroId: '1', strong: [], weak: [] });
-      counters.set('2', { heroId: '2', strong: [], weak: [] });
-      counters.set('3', { heroId: '3', strong: [], weak: [] });
+  it('rewards synergy with ally picks', () => {
+    const heroes = [hero('angela'), hero('chou'), hero('miya')];
+    const out = service.suggest(
+      heroes,
+      ctx({
+        allyPicks: ['angela'],
+        excluded: new Set(['angela']),
+        pickedMeta: new Map([['angela', meta('angela', { bestTeammates: ['chou'] })]]),
+      }),
+    );
+    expect(out[0].heroId).toBe('chou');
+    expect(out[0].reason).toContain('synergy with Angela');
+  });
 
-      const suggestions = service.suggestHeroes(heroes, counters, {
-        action: 'pick',
-        team: 'blue',
-        pickedHeroIds: new Set(),
-        bannedHeroIds: new Set(),
-        allyPicks: [],
-        enemyPicks: [],
-        allyBans: [],
-        enemyBans: [],
-        uncoveredLanes: new Set(['gold', 'mid', 'jungle', 'exp', 'roam']),
-      });
+  it('prefers heroes that cover a lane the team is still missing', () => {
+    const heroes = [
+      hero('miya', { laneKeys: ['gold'] }),
+      hero('nana', { laneKeys: ['mid'] }),
+      hero('claude', { laneKeys: ['gold'] }),
+    ];
+    const out = service.suggest(
+      heroes,
+      ctx({ allyPicks: ['miya'], excluded: new Set(['miya']) }),
+    );
+    expect(out[0].heroId).toBe('nana');
+    expect(out[0].reason).toContain('covers Mid lane');
+    expect(out.find((s) => s.heroId === 'claude')!.reason).not.toContain('covers');
+  });
 
-      expect(suggestions.length).toBeGreaterThan(0);
-      expect(suggestions[0].heroId).toBeDefined();
-      expect(suggestions[0].reason).toBeDefined();
-      expect(suggestions[0].score).toBeGreaterThan(0);
-    });
+  it('falls back to win rate when no meta is available', () => {
+    const heroes = [
+      hero('weak', { winRate: 45 }),
+      hero('strong', { winRate: 56 }),
+      hero('avg', { winRate: 50 }),
+    ];
+    const out = service.suggest(heroes, ctx({ metaAvailable: false }));
+    expect(out[0].heroId).toBe('strong');
+    expect(out[0].reason).toContain('56.0% win rate');
+    expect(out[2].heroId).toBe('weak');
+  });
 
-    it('should prioritize counters to enemy picks', () => {
-      const heroes = [
-        { id: '1', name: 'Ling', role: 'assassin' },
-        { id: '2', name: 'Counter Ling', role: 'tank' },
-        { id: '3', name: 'Random', role: 'mage' },
-      ];
-
-      const counters = new Map();
-      // Counter Ling (id='2') counters Ling (id='1')
-      counters.set('1', { heroId: '1', strong: [], weak: ['2'] });
-      counters.set('2', { heroId: '2', strong: ['1'], weak: [] });
-      counters.set('3', { heroId: '3', strong: [], weak: [] });
-
-      const suggestions = service.suggestHeroes(heroes, counters, {
-        action: 'pick',
-        team: 'blue',
-        pickedHeroIds: new Set(),
-        bannedHeroIds: new Set(),
-        allyPicks: [],
-        enemyPicks: ['1'], // Enemy picked Ling
-        allyBans: [],
-        enemyBans: [],
-        uncoveredLanes: new Set(),
-      });
-
-      // Counter Ling should be suggested first
-      const counterLing = suggestions.find((s) => s.heroId === '2');
-      expect(counterLing).toBeDefined();
-      expect(counterLing?.reason).toContain('Ling');
-    });
-
-    it('should exclude already picked heroes', () => {
-      const heroes = [
-        { id: '1', name: 'Hero 1', role: 'fighter' },
-        { id: '2', name: 'Hero 2', role: 'mage' },
-      ];
-
-      const counters = new Map();
-      counters.set('1', { heroId: '1', strong: [], weak: [] });
-      counters.set('2', { heroId: '2', strong: [], weak: [] });
-
-      const suggestions = service.suggestHeroes(heroes, counters, {
-        action: 'pick',
-        team: 'blue',
-        pickedHeroIds: new Set(['1']), // Hero 1 already picked
-        bannedHeroIds: new Set(),
-        allyPicks: [],
-        enemyPicks: [],
-        allyBans: [],
-        enemyBans: [],
-        uncoveredLanes: new Set(),
-      });
-
-      expect(suggestions.find((s) => s.heroId === '1')).toBeUndefined();
-    });
-
-    it('should prioritize high ban rate for banning', () => {
-      const heroes = [
-        {
-          id: '1',
-          name: 'OP Hero',
-          role: 'fighter',
-          stats: { banRate: 80, pickRate: 70, winRate: 55 },
-        },
-        {
-          id: '2',
-          name: 'Normal Hero',
-          role: 'mage',
-          stats: { banRate: 20, pickRate: 30, winRate: 50 },
-        },
-      ];
-
-      const counters = new Map();
-      counters.set('1', { heroId: '1', strong: [], weak: [] });
-      counters.set('2', { heroId: '2', strong: [], weak: [] });
-
-      const suggestions = service.suggestHeroes(heroes, counters, {
+  it('for bans, prioritizes heroes that counter our picks and high ban rates', () => {
+    const heroes = [
+      hero('tigreal'),
+      hero('fanny', { banRate: 60 }),
+      hero('layla', { banRate: 2 }),
+      hero('lancelot'),
+    ];
+    const out = service.suggest(
+      heroes,
+      ctx({
         action: 'ban',
-        team: 'blue',
-        pickedHeroIds: new Set(),
-        bannedHeroIds: new Set(),
-        allyPicks: [],
-        enemyPicks: [],
-        allyBans: [],
-        enemyBans: [],
-        uncoveredLanes: new Set(),
-      });
+        allyPicks: ['tigreal'],
+        excluded: new Set(['tigreal']),
+        pickedMeta: new Map([['tigreal', meta('tigreal', { weakAgainst: ['lancelot'] })]]),
+      }),
+    );
+    expect(out[0].heroId).toBe('lancelot');
+    expect(out[0].reason).toContain('counters your Tigreal');
+    expect(out[1].heroId).toBe('fanny');
+    expect(out[1].reason).toContain('60% ban rate');
+  });
 
-      const opHero = suggestions.find((s) => s.heroId === '1');
-      expect(opHero).toBeDefined();
-      expect(opHero?.score).toBeGreaterThan(
-        suggestions.find((s) => s.heroId === '2')?.score || 0,
-      );
-    });
-
-    it('should return at most 5 suggestions', () => {
-      const heroes = Array.from({ length: 20 }, (_, i) => ({
-        id: String(i + 1),
-        name: `Hero ${i + 1}`,
-        role: 'fighter',
-      }));
-
-      const counters = new Map();
-      heroes.forEach((h) => {
-        counters.set(h.id, { heroId: h.id, strong: [], weak: [] });
-      });
-
-      const suggestions = service.suggestHeroes(heroes, counters, {
-        action: 'pick',
-        team: 'blue',
-        pickedHeroIds: new Set(),
-        bannedHeroIds: new Set(),
-        allyPicks: [],
-        enemyPicks: [],
-        allyBans: [],
-        enemyBans: [],
-        uncoveredLanes: new Set(),
-      });
-
-      expect(suggestions.length).toBeLessThanOrEqual(5);
-    });
+  it('uses a stable alphabetical tie-break', () => {
+    const heroes = [hero('zilong'), hero('alice'), hero('miya')];
+    const out = service.suggest(heroes, ctx());
+    expect(out.map((s) => s.heroId)).toEqual(['alice', 'miya', 'zilong']);
   });
 });

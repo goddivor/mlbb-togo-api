@@ -1,110 +1,89 @@
 import {
-  Controller,
-  Post,
-  Get,
-  Patch,
-  Delete,
   Body,
+  Controller,
+  Delete,
+  Get,
   Param,
-  Query,
-  UseGuards,
+  Patch,
+  Post,
   Request,
-  ForbiddenException,
+  UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PickBanService } from './pickban.service';
-import { CreatePickBanDraftDto } from './dto/create-pick-ban-draft.dto';
-import { UpdatePickBanStepDto } from './dto/update-pick-ban-step.dto';
-import { SuggestPickBanDto, SuggestPickBanResponseDto } from './dto/suggest-pick-ban.dto';
+import {
+  CreatePickBanDraftDto,
+  SuggestPickBanDto,
+  SuggestPickBanResponseDto,
+  UpdatePickBanStepDto,
+} from './dto/pickban.dto';
 
+// Pick & ban draft simulator (hero drafting). Distinct from `/draft`, which is
+// the community tournament draft (random team composition).
 @Controller('pickban')
 export class PickBanController {
-  constructor(private service: PickBanService) {}
+  constructor(private readonly service: PickBanService) {}
 
-  /* ---------- Public endpoints ---------- */
+  /* ---------- Public ---------- */
 
-  /**
-   * GET /pickban/share/:code
-   * Get a draft by share code (public read).
-   */
+  // Hero catalogue with lanes/thumbs/rates for the draft board.
+  @Get('heroes')
+  listHeroes() {
+    return this.service.listHeroes();
+  }
+
+  // Read-only access to a shared draft.
   @Get('share/:code')
-  async getByShareCode(@Param('code') code: string) {
+  getByShareCode(@Param('code') code: string) {
     return this.service.getByShareCode(code);
   }
 
-  /**
-   * POST /pickban/suggest
-   * Get hero suggestions for the next draft action (public).
-   */
+  // Ranked suggestions for the next action of the given board state.
   @Post('suggest')
-  async suggestNext(
-    @Body() dto: SuggestPickBanDto,
-  ): Promise<SuggestPickBanResponseDto> {
+  suggest(@Body() dto: SuggestPickBanDto): Promise<SuggestPickBanResponseDto> {
     return this.service.suggestNext(dto);
   }
 
-  /* ---------- Authenticated endpoints ---------- */
+  /* ---------- Owner (JWT) ---------- */
 
-  /**
-   * POST /pickban
-   * Create a new draft.
-   */
-  @UseGuards(JwtAuthGuard)
-  @Post()
-  async create(@Request() req, @Body() dto: CreatePickBanDraftDto) {
-    return this.service.create(req.user.id, dto);
-  }
-
-  /**
-   * GET /pickban/:id
-   * Get a draft by ID (owner can read/write, others can read).
-   */
-  @Get(':id')
-  async getById(@Param('id') id: string, @Request() req) {
-    return this.service.getById(id, req.user?.id);
-  }
-
-  /**
-   * GET /pickban
-   * List all drafts owned by the current user.
-   */
   @UseGuards(JwtAuthGuard)
   @Get()
-  async listMine(@Request() req) {
+  listMine(@Request() req: any) {
     return this.service.listMine(req.user.id);
   }
 
-  /**
-   * PATCH /pickban/:id/step
-   * Update the draft with the next pick/ban action.
-   */
+  @UseGuards(JwtAuthGuard)
+  @Post()
+  create(@Request() req: any, @Body() dto: CreatePickBanDraftDto) {
+    return this.service.create(req.user.id, dto);
+  }
+
+  @Get(':id')
+  getById(@Param('id') id: string) {
+    return this.service.getById(id);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Patch(':id/step')
-  async updateStep(
-    @Param('id') id: string,
-    @Body() dto: UpdatePickBanStepDto,
-    @Request() req,
-  ) {
+  updateStep(@Param('id') id: string, @Request() req: any, @Body() dto: UpdatePickBanStepDto) {
     return this.service.updateStep(id, req.user.id, dto);
   }
 
-  /**
-   * PATCH /pickban/:id/reset
-   * Reset the draft to the initial state.
-   */
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/undo')
+  undo(@Param('id') id: string, @Request() req: any) {
+    return this.service.undo(id, req.user.id);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Patch(':id/reset')
-  async reset(@Param('id') id: string, @Request() req) {
+  reset(@Param('id') id: string, @Request() req: any) {
     return this.service.reset(id, req.user.id);
   }
 
-  /**
-   * DELETE /pickban/:id
-   * Delete a draft (owner only).
-   */
   @UseGuards(JwtAuthGuard)
   @Delete(':id')
-  async deleteDraft(@Param('id') id: string, @Request() req) {
+  remove(@Param('id') id: string, @Request() req: any) {
     return this.service.deleteDraft(id, req.user.id);
   }
 }

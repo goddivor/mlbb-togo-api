@@ -2,117 +2,148 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MlbbService } from '../mlbb/mlbb.service';
-import { HeroesService } from '../heroes/heroes.service';
-import { CreatePickBanDraftDto } from './dto/create-pick-ban-draft.dto';
-import { UpdatePickBanStepDto } from './dto/update-pick-ban-step.dto';
+import { parseJson, toJson } from '../common/utils/json.util';
 import {
+  CreatePickBanDraftDto,
   SuggestPickBanDto,
   SuggestPickBanResponseDto,
-} from './dto/suggest-pick-ban.dto';
-import { PickBanSuggestionService } from './pickban-suggestion.service';
-import { parseJson, toJson } from '../common/utils/json.util';
-import * as crypto from 'crypto';
+  UpdatePickBanStepDto,
+} from './dto/pickban.dto';
+import {
+  HeroCandidate,
+  PickBanSuggestionService,
+  PickedHeroMeta,
+} from './pickban-suggestion.service';
+import {
+  DraftOrderError,
+  DraftState,
+  TeamState,
+  applyAction,
+  emptyTeam,
+  isComplete,
+  isMode,
+  stepAt,
+  totalSteps,
+  undoAction,
+  usedHeroIds,
+} from './pickban-order';
 
-/**
- * MLBB draft order (Blue bans first):
- * Ranked (3 bans/side):
- *   0-2: Blue bans, 3-5: Red bans, 6-10: Picks alternate B-R-B-R-B
- *
- * Tournament (5 bans/side):
- *   0-4: Blue bans, 5-9: Red bans, 10-19: Picks alternate B-R-B-R-B (5 per side)
- */
-const DRAFT_ORDERS = {
-  ranked: {
-    bans: 3,
-    picks: 5,
-    totalSteps: 16,
-    order: [
-      // 0-2: Blue bans
-      { step: 0, action: 'ban', team: 'blue' },
-      { step: 1, action: 'ban', team: 'blue' },
-      { step: 2, action: 'ban', team: 'blue' },
-      // 3-5: Red bans
-      { step: 3, action: 'ban', team: 'red' },
-      { step: 4, action: 'ban', team: 'red' },
-      { step: 5, action: 'ban', team: 'red' },
-      // 6-15: Picks (alternate)
-      { step: 6, action: 'pick', team: 'blue' },
-      { step: 7, action: 'pick', team: 'red' },
-      { step: 8, action: 'pick', team: 'blue' },
-      { step: 9, action: 'pick', team: 'red' },
-      { step: 10, action: 'pick', team: 'blue' },
-      { step: 11, action: 'pick', team: 'red' },
-      { step: 12, action: 'pick', team: 'blue' },
-      { step: 13, action: 'pick', team: 'red' },
-      { step: 14, action: 'pick', team: 'blue' },
-      { step: 15, action: 'pick', team: 'red' },
-    ],
-  },
-  tournament: {
-    bans: 5,
-    picks: 5,
-    totalSteps: 20,
-    order: [
-      // 0-4: Blue bans
-      { step: 0, action: 'ban', team: 'blue' },
-      { step: 1, action: 'ban', team: 'blue' },
-      { step: 2, action: 'ban', team: 'blue' },
-      { step: 3, action: 'ban', team: 'blue' },
-      { step: 4, action: 'ban', team: 'blue' },
-      // 5-9: Red bans
-      { step: 5, action: 'ban', team: 'red' },
-      { step: 6, action: 'ban', team: 'red' },
-      { step: 7, action: 'ban', team: 'red' },
-      { step: 8, action: 'ban', team: 'red' },
-      { step: 9, action: 'ban', team: 'red' },
-      // 10-19: Picks (alternate)
-      { step: 10, action: 'pick', team: 'blue' },
-      { step: 11, action: 'pick', team: 'red' },
-      { step: 12, action: 'pick', team: 'blue' },
-      { step: 13, action: 'pick', team: 'red' },
-      { step: 14, action: 'pick', team: 'blue' },
-      { step: 15, action: 'pick', team: 'red' },
-      { step: 16, action: 'pick', team: 'blue' },
-      { step: 17, action: 'pick', team: 'red' },
-      { step: 18, action: 'pick', team: 'blue' },
-      { step: 19, action: 'pick', team: 'red' },
-    ],
-  },
-};
+const META_TTL_MS = 60 * 60 * 1000; // 1 hour
+const META_FAIL_TTL_MS = 5 * 60 * 1000; // retry Moonton sooner after a failure
 
-interface TeamState {
-  picks: Array<{ heroId: string; heroName: string; lane?: string }>;
-  bans: Array<{ heroId: string; heroName: string }>;
+interface MetaCacheEntry {
+  meta: PickedHeroMeta | null;
+  expiresAt: number;
+}
+
+interface HeroRates {
+  winRate: number | null;
+  pickRate: number | null;
+  banRate: number | null;
 }
 
 @Injectable()
 export class PickBanService {
-  private metaCache: Map<number, { data: any; expiresAt: number }> = new Map();
-  private readonly META_TTL = 60 * 60 * 1000; // 1 hour
+  private readonly logger = new Logger('PickBanService');
+  // Keyed by our Hero id.
+  private readonly metaCache = new Map<string, MetaCacheEntry>();
+  // Win/pick/ban rates keyed by Moonton hero id (one ranking call, cached).
+  private ratesCache: { rates: Map<number, HeroRates>; expiresAt: number } | null = null;
 
   constructor(
     private prisma: PrismaService,
     private mlbb: MlbbService,
-    private heroes: HeroesService,
     private suggestion: PickBanSuggestionService,
   ) {}
+
+  /* ---------- Hero catalogue ---------- */
+
+  // Heroes with the fields the draft board needs (lanes, thumbs, rates).
+  async listHeroes(): Promise<HeroCandidate[]> {
+    return this.loadCandidates();
+  }
+
+  private async loadCandidates(): Promise<Array<HeroCandidate & { heroId: number | null }>> {
+    const [rows, rates] = await Promise.all([
+      this.prisma.hero.findMany({ orderBy: { name: 'asc' } }),
+      this.getRates(),
+    ]);
+    return rows.map((h) => this.toCandidate(h, rates));
+  }
+
+  private toCandidate(
+    h: any,
+    rates: Map<number, HeroRates>,
+  ): HeroCandidate & { heroId: number | null } {
+    const heroId = h.heroId != null ? Number(h.heroId) : null;
+    const r = heroId != null ? rates.get(heroId) : undefined;
+    // `stats` may carry rates when cached from the showcase; ranking wins.
+    const stats = (h.stats ?? {}) as any;
+    return {
+      id: h.id,
+      heroId,
+      name: h.name,
+      image: h.image ?? null,
+      thumb: h.thumb ?? h.image ?? null,
+      role: h.role ?? null,
+      roles: h.roles ?? [],
+      laneKeys: h.laneKeys ?? [],
+      winRate: r?.winRate ?? this.pct(stats.winRate),
+      pickRate: r?.pickRate ?? this.pct(stats.pickRate),
+      banRate: r?.banRate ?? this.pct(stats.banRate),
+    };
+  }
+
+  // Current-season win/pick/ban rates from the Moonton ranking (all ranks).
+  // Empty map when the proxy is unavailable so the board still works.
+  private async getRates(): Promise<Map<number, HeroRates>> {
+    if (this.ratesCache && this.ratesCache.expiresAt > Date.now()) return this.ratesCache.rates;
+    const rates = new Map<number, HeroRates>();
+    try {
+      const res: any = await this.mlbb.getHeroRanking({ limit: 200 });
+      for (const r of res?.ranking ?? []) {
+        const id = Number(r?.heroId);
+        if (!id) continue;
+        rates.set(id, {
+          winRate: this.pct(r.winRate),
+          pickRate: this.pct(r.pickRate),
+          banRate: this.pct(r.banRate),
+        });
+      }
+      this.ratesCache = { rates, expiresAt: Date.now() + META_TTL_MS };
+    } catch (err) {
+      this.logger.warn(`Hero ranking unavailable: ${(err as Error).message}`);
+      this.ratesCache = { rates, expiresAt: Date.now() + META_FAIL_TTL_MS };
+    }
+    return rates;
+  }
+
+  // Moonton rates are fractions (0.52); tolerate percentages as well.
+  private pct(n: any): number | null {
+    if (typeof n !== 'number' || Number.isNaN(n)) return null;
+    return Math.round((n <= 1 ? n * 100 : n) * 10) / 10;
+  }
 
   /* ---------- CRUD ---------- */
 
   async create(userId: string, dto: CreatePickBanDraftDto) {
-    const shareCode = this.generateShareCode();
+    const mode = dto.mode ?? 'ranked';
+    if (!isMode(mode)) throw new BadRequestException('Invalid draft mode.');
+    const name = (dto.name ?? '').trim().slice(0, 60) || 'Untitled draft';
     const draft = await this.prisma.pickBanDraft.create({
       data: {
-        name: dto.name || 'Untitled Draft',
-        mode: dto.mode || 'ranked',
-        shareCode,
+        name,
+        mode,
+        shareCode: await this.uniqueShareCode(),
         ownerId: userId,
-        blueTeam: toJson({ picks: [], bans: [] }),
-        redTeam: toJson({ picks: [], bans: [] }),
+        blueTeam: toJson(emptyTeam()),
+        redTeam: toJson(emptyTeam()),
         currentStep: 0,
         status: 'active',
       },
@@ -120,23 +151,15 @@ export class PickBanService {
     return this.serialize(draft);
   }
 
-  async getById(id: string, userId?: string) {
-    const draft = await this.prisma.pickBanDraft.findUnique({
-      where: { id },
-    });
+  async getById(id: string) {
+    const draft = await this.prisma.pickBanDraft.findUnique({ where: { id } });
     if (!draft) throw new NotFoundException('Draft not found.');
-
-    // Public read allowed; write only for owner
-    if (userId && draft.ownerId !== userId) {
-      // Still allow read
-    }
-
     return this.serialize(draft);
   }
 
   async getByShareCode(code: string) {
     const draft = await this.prisma.pickBanDraft.findUnique({
-      where: { shareCode: code },
+      where: { shareCode: code.toUpperCase() },
     });
     if (!draft) throw new NotFoundException('Draft not found.');
     return this.serialize(draft);
@@ -145,116 +168,52 @@ export class PickBanService {
   async listMine(userId: string) {
     const drafts = await this.prisma.pickBanDraft.findMany({
       where: { ownerId: userId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { updatedAt: 'desc' },
     });
     return drafts.map((d) => this.serialize(d));
   }
 
   async updateStep(id: string, userId: string, dto: UpdatePickBanStepDto) {
-    const draft = await this.prisma.pickBanDraft.findUnique({
-      where: { id },
-    });
-    if (!draft) throw new NotFoundException('Draft not found.');
-    if (draft.ownerId !== userId)
-      throw new ForbiddenException('Not the draft owner.');
-
-    // Validate against draft order
-    const config = DRAFT_ORDERS[draft.mode as keyof typeof DRAFT_ORDERS];
-    if (!config) throw new BadRequestException('Invalid draft mode.');
-    if (draft.currentStep >= config.totalSteps)
-      throw new BadRequestException('Draft already complete.');
-
-    const expectedStep = config.order[draft.currentStep];
-    if (!expectedStep)
-      throw new BadRequestException('Invalid step in draft order.');
-
-    if (expectedStep.action !== dto.action) {
-      throw new BadRequestException(
-        `Step ${draft.currentStep} expects ${expectedStep.action}, not ${dto.action}.`,
-      );
-    }
-    if (expectedStep.team !== dto.team) {
-      throw new BadRequestException(
-        `Step ${draft.currentStep} is for ${expectedStep.team} team, not ${dto.team}.`,
-      );
-    }
-
-    // Validate hero exists and is not already used
+    const draft = await this.getOwned(id, userId);
     const hero = await this.prisma.hero.findUnique({ where: { id: dto.heroId } });
     if (!hero) throw new BadRequestException('Hero not found.');
 
-    const blueTeam = parseJson<TeamState>(draft.blueTeam, { picks: [], bans: [] });
-    const redTeam = parseJson<TeamState>(draft.redTeam, { picks: [], bans: [] });
-
-    const usedHeroIds = new Set([
-      ...blueTeam.picks.map((p) => p.heroId),
-      ...blueTeam.bans.map((b) => b.heroId),
-      ...redTeam.picks.map((p) => p.heroId),
-      ...redTeam.bans.map((b) => b.heroId),
-    ]);
-
-    if (usedHeroIds.has(dto.heroId))
-      throw new BadRequestException('Hero already used.');
-
-    // Add to team
-    const targetTeam = dto.team === 'blue' ? blueTeam : redTeam;
-    if (dto.action === 'pick') {
-      targetTeam.picks.push({
-        heroId: dto.heroId,
+    const state = this.toState(draft);
+    let next: DraftState;
+    try {
+      next = applyAction(state, {
+        action: dto.action,
+        team: dto.team,
+        heroId: hero.id,
         heroName: hero.name,
-        lane: dto.lane,
+        lane: dto.action === 'pick' ? dto.lane : undefined,
       });
-    } else {
-      targetTeam.bans.push({
-        heroId: dto.heroId,
-        heroName: hero.name,
-      });
+    } catch (err) {
+      if (err instanceof DraftOrderError) throw new BadRequestException(err.message);
+      throw err;
     }
+    return this.persistState(id, next);
+  }
 
-    // Advance to next step
-    const updated = await this.prisma.pickBanDraft.update({
-      where: { id },
-      data: {
-        blueTeam: toJson(blueTeam),
-        redTeam: toJson(redTeam),
-        currentStep: draft.currentStep + 1,
-        status:
-          draft.currentStep + 1 >= config.totalSteps ? 'completed' : 'active',
-      },
-    });
-
-    return this.serialize(updated);
+  async undo(id: string, userId: string) {
+    const draft = await this.getOwned(id, userId);
+    const state = this.toState(draft);
+    if (state.currentStep === 0) throw new BadRequestException('Nothing to undo.');
+    return this.persistState(id, undoAction(state));
   }
 
   async reset(id: string, userId: string) {
-    const draft = await this.prisma.pickBanDraft.findUnique({
-      where: { id },
+    const draft = await this.getOwned(id, userId);
+    return this.persistState(id, {
+      mode: draft.mode as DraftState['mode'],
+      currentStep: 0,
+      blueTeam: emptyTeam(),
+      redTeam: emptyTeam(),
     });
-    if (!draft) throw new NotFoundException('Draft not found.');
-    if (draft.ownerId !== userId)
-      throw new ForbiddenException('Not the draft owner.');
-
-    const updated = await this.prisma.pickBanDraft.update({
-      where: { id },
-      data: {
-        blueTeam: toJson({ picks: [], bans: [] }),
-        redTeam: toJson({ picks: [], bans: [] }),
-        currentStep: 0,
-        status: 'active',
-      },
-    });
-
-    return this.serialize(updated);
   }
 
   async deleteDraft(id: string, userId: string) {
-    const draft = await this.prisma.pickBanDraft.findUnique({
-      where: { id },
-    });
-    if (!draft) throw new NotFoundException('Draft not found.');
-    if (draft.ownerId !== userId)
-      throw new ForbiddenException('Not the draft owner.');
-
+    await this.getOwned(id, userId);
     await this.prisma.pickBanDraft.delete({ where: { id } });
     return { success: true };
   }
@@ -262,146 +221,125 @@ export class PickBanService {
   /* ---------- Suggestions ---------- */
 
   async suggestNext(dto: SuggestPickBanDto): Promise<SuggestPickBanResponseDto> {
-    const config = DRAFT_ORDERS[dto.mode as keyof typeof DRAFT_ORDERS];
-    if (!config) throw new BadRequestException('Invalid draft mode.');
+    if (!isMode(dto.mode)) throw new BadRequestException('Invalid draft mode.');
+    const step = stepAt(dto.mode, Number(dto.currentStep));
+    if (!step) throw new BadRequestException('Draft already complete.');
 
-    // Get all heroes with meta
-    const allHeroes = await this.prisma.hero.findMany();
-    const heroMap = new Map(allHeroes.map((h) => [h.id, h]));
+    const state: DraftState = {
+      mode: dto.mode,
+      currentStep: dto.currentStep,
+      blueTeam: this.sanitizeTeam(dto.blueTeam),
+      redTeam: this.sanitizeTeam(dto.redTeam),
+    };
 
-    // Determine current action/team
-    if (dto.currentStep >= config.totalSteps) {
-      throw new BadRequestException('Draft already complete.');
-    }
-    const expectedStep = config.order[dto.currentStep];
-    if (!expectedStep)
-      throw new BadRequestException('Invalid step in draft order.');
+    const heroes = await this.loadCandidates();
+    const byMoontonId = new Map<number, string>();
+    for (const h of heroes) if (h.heroId != null) byMoontonId.set(h.heroId, h.id);
+    const known = new Set(heroes.map((h) => h.id));
 
-    // Build hero counter cache (with TTL fallback)
-    const heroCounters = await this.buildCounterCache(allHeroes, heroMap);
+    const allyPicks = (step.team === 'blue' ? state.blueTeam : state.redTeam).picks
+      .map((p) => p.heroId)
+      .filter((id) => known.has(id));
+    const enemyPicks = (step.team === 'blue' ? state.redTeam : state.blueTeam).picks
+      .map((p) => p.heroId)
+      .filter((id) => known.has(id));
 
-    // Prepare scoring context
-    const allPickedHeroIds = new Set([
-      ...dto.blueTeam.picks.map((p) => p.heroId),
-      ...dto.redTeam.picks.map((p) => p.heroId),
-    ]);
-    const allBannedHeroIds = new Set([
-      ...dto.blueTeam.bans.map((b) => b.heroId),
-      ...dto.redTeam.bans.map((b) => b.heroId),
-    ]);
+    const pickedMeta = new Map<string, PickedHeroMeta>();
+    const heroById = new Map(heroes.map((h) => [h.id, h]));
+    await Promise.all(
+      [...new Set([...allyPicks, ...enemyPicks])].map(async (id) => {
+        const meta = await this.getPickedMeta(heroById.get(id)!, byMoontonId);
+        if (meta) pickedMeta.set(id, meta);
+      }),
+    );
+    const metaAvailable = pickedMeta.size > 0 || allyPicks.length + enemyPicks.length === 0;
 
-    const bluePickedHeroIds = dto.blueTeam.picks.map((p) => p.heroId);
-    const redPickedHeroIds = dto.redTeam.picks.map((p) => p.heroId);
-
-    const uncoveredLanes = new Set(['gold', 'mid', 'jungle', 'exp', 'roam']);
-    if (expectedStep.action === 'pick' && expectedStep.team === 'blue') {
-      for (const pick of dto.blueTeam.picks) {
-        if (pick.lane) uncoveredLanes.delete(pick.lane);
-      }
-    } else if (expectedStep.action === 'pick' && expectedStep.team === 'red') {
-      for (const pick of dto.redTeam.picks) {
-        if (pick.lane) uncoveredLanes.delete(pick.lane);
-      }
-    }
-
-    const availableHeroes = allHeroes.map((h) => ({
-      id: h.id,
-      name: h.name,
-      image: h.image || undefined,
-      thumb: h.thumb || undefined,
-      role: h.role || undefined,
-      laneKeys: h.laneKeys || [],
-      stats: h.stats ? (h.stats as any) : undefined,
-    }));
-
-    const suggestions = this.suggestion.suggestHeroes(availableHeroes, heroCounters, {
-      action: expectedStep.action as 'pick' | 'ban',
-      team: expectedStep.team as 'blue' | 'red',
-      pickedHeroIds: allPickedHeroIds,
-      bannedHeroIds: allBannedHeroIds,
-      allyPicks:
-        expectedStep.team === 'blue' ? bluePickedHeroIds : redPickedHeroIds,
-      enemyPicks:
-        expectedStep.team === 'blue' ? redPickedHeroIds : bluePickedHeroIds,
-      allyBans: dto[expectedStep.team === 'blue' ? 'blueTeam' : 'redTeam'].bans.map(
-        (b) => b.heroId,
-      ),
-      enemyBans: dto[expectedStep.team === 'blue' ? 'redTeam' : 'blueTeam'].bans.map(
-        (b) => b.heroId,
-      ),
-      uncoveredLanes,
+    const suggestions = this.suggestion.suggest(heroes, {
+      action: step.action,
+      team: step.team,
+      allyPicks,
+      enemyPicks,
+      excluded: usedHeroIds(state),
+      pickedMeta,
+      metaAvailable,
     });
 
-    return {
-      suggestions,
-      action: expectedStep.action as 'pick' | 'ban',
-      team: expectedStep.team as 'blue' | 'red',
-    };
+    return { suggestions, action: step.action, team: step.team, metaAvailable };
+  }
+
+  // Meta (counters/synergies) of one hero on the board, cached per hero id.
+  // Returns null when the Moonton proxy is unavailable (graceful degradation).
+  private async getPickedMeta(
+    hero: HeroCandidate & { heroId: number | null },
+    byMoontonId: Map<number, string>,
+  ): Promise<PickedHeroMeta | null> {
+    if (hero.heroId == null) return null;
+    const cached = this.metaCache.get(hero.id);
+    if (cached && cached.expiresAt > Date.now()) return cached.meta;
+
+    try {
+      const raw = await this.mlbb.getHeroMeta(hero.heroId);
+      const map = (list: any[]): string[] =>
+        (Array.isArray(list) ? list : [])
+          .map((x) => byMoontonId.get(Number(x?.heroId)))
+          .filter((id): id is string => !!id);
+      const meta: PickedHeroMeta = {
+        heroId: hero.id,
+        strongAgainst: map(raw?.counters?.strong),
+        weakAgainst: map(raw?.counters?.weak),
+        bestTeammates: map(raw?.synergy?.best),
+      };
+      this.metaCache.set(hero.id, { meta, expiresAt: Date.now() + META_TTL_MS });
+      return meta;
+    } catch (err) {
+      this.logger.warn(`Meta unavailable for ${hero.name}: ${(err as Error).message}`);
+      this.metaCache.set(hero.id, { meta: null, expiresAt: Date.now() + META_FAIL_TTL_MS });
+      return null;
+    }
   }
 
   /* ---------- Helpers ---------- */
 
-  private async buildCounterCache(
-    allHeroes: any[],
-    heroMap: Map<string, any>,
-  ): Promise<Map<string, any>> {
-    const cache = new Map<string, any>();
+  private async getOwned(id: string, userId: string) {
+    const draft = await this.prisma.pickBanDraft.findUnique({ where: { id } });
+    if (!draft) throw new NotFoundException('Draft not found.');
+    if (draft.ownerId !== userId) throw new ForbiddenException('Not the draft owner.');
+    return draft;
+  }
 
-    for (const hero of allHeroes) {
-      if (!hero.heroId) continue;
+  private toState(draft: any): DraftState {
+    return {
+      mode: draft.mode,
+      currentStep: draft.currentStep,
+      blueTeam: parseJson<TeamState>(draft.blueTeam, emptyTeam()),
+      redTeam: parseJson<TeamState>(draft.redTeam, emptyTeam()),
+    };
+  }
 
-      let meta = this.metaCache.get(hero.heroId);
-      if (!meta || meta.expiresAt < Date.now()) {
-        try {
-          // Fetch from Moonton API via MlbbService (with cache)
-          const fetched = await this.mlbb.getHeroMeta(hero.heroId);
-          meta = { data: fetched, expiresAt: Date.now() + this.META_TTL };
-          this.metaCache.set(hero.heroId, meta);
-        } catch {
-          // Graceful fallback: use empty meta
-          meta = { data: {}, expiresAt: Date.now() + this.META_TTL };
-          this.metaCache.set(hero.heroId, meta);
-        }
-      }
+  private sanitizeTeam(team: any): TeamState {
+    const picks = Array.isArray(team?.picks) ? team.picks : [];
+    const bans = Array.isArray(team?.bans) ? team.bans : [];
+    return {
+      picks: picks
+        .filter((p: any) => typeof p?.heroId === 'string')
+        .map((p: any) => ({ heroId: p.heroId, heroName: p.heroName ?? '', lane: p.lane })),
+      bans: bans
+        .filter((b: any) => typeof b?.heroId === 'string')
+        .map((b: any) => ({ heroId: b.heroId, heroName: b.heroName ?? '' })),
+    };
+  }
 
-      const data = meta.data;
-      const strong = (data.counters?.strong ?? [])
-        .map((c: any) => {
-          // Map hero name from counter data to hero ID
-          const matchedHero = Array.from(heroMap.values()).find(
-            (h: any) => h.name.toLowerCase() === c.name?.toLowerCase(),
-          );
-          return matchedHero?.id;
-        })
-        .filter(Boolean);
-
-      const weak = (data.counters?.weak ?? [])
-        .map((c: any) => {
-          const matchedHero = Array.from(heroMap.values()).find(
-            (h: any) => h.name.toLowerCase() === c.name?.toLowerCase(),
-          );
-          return matchedHero?.id;
-        })
-        .filter(Boolean);
-
-      const bestTeammates = (data.synergy?.best ?? [])
-        .map((s: any) => {
-          const matchedHero = Array.from(heroMap.values()).find(
-            (h: any) => h.name.toLowerCase() === s.name?.toLowerCase(),
-          );
-          return matchedHero?.id;
-        })
-        .filter(Boolean);
-
-      cache.set(hero.id, {
-        heroId: hero.id,
-        strong: strong.length > 0 ? strong : undefined,
-        weak: weak.length > 0 ? weak : undefined,
-        bestTeammates: bestTeammates.length > 0 ? bestTeammates : undefined,
-      });
-    }
-
-    return cache;
+  private async persistState(id: string, state: DraftState) {
+    const updated = await this.prisma.pickBanDraft.update({
+      where: { id },
+      data: {
+        blueTeam: toJson(state.blueTeam),
+        redTeam: toJson(state.redTeam),
+        currentStep: state.currentStep,
+        status: isComplete(state) ? 'completed' : 'active',
+      },
+    });
+    return this.serialize(updated);
   }
 
   private serialize(draft: any) {
@@ -411,17 +349,22 @@ export class PickBanService {
       mode: draft.mode,
       shareCode: draft.shareCode,
       ownerId: draft.ownerId,
-      blueTeam: parseJson(draft.blueTeam, { picks: [], bans: [] }),
-      redTeam: parseJson(draft.redTeam, { picks: [], bans: [] }),
+      blueTeam: parseJson<TeamState>(draft.blueTeam, emptyTeam()),
+      redTeam: parseJson<TeamState>(draft.redTeam, emptyTeam()),
       currentStep: draft.currentStep,
+      totalSteps: isMode(draft.mode) ? totalSteps(draft.mode) : 0,
       status: draft.status,
       createdAt: draft.createdAt,
       updatedAt: draft.updatedAt,
     };
   }
 
-  private generateShareCode(): string {
-    // Generate a short unique code (6 chars alphanumeric)
-    return crypto.randomBytes(3).toString('hex').toUpperCase();
+  private async uniqueShareCode(): Promise<string> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 7);
+      const exists = await this.prisma.pickBanDraft.findUnique({ where: { shareCode: code } });
+      if (!exists) return code;
+    }
+    return crypto.randomBytes(6).toString('hex').toUpperCase();
   }
 }

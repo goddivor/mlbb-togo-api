@@ -693,9 +693,3 @@ model PickBanDraft {
   updatedAt   DateTime  @updatedAt
 }
 
-model PickBanDraftShare {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  draftId   String   @db.ObjectId
-  code      String   @unique @db.String
-  createdAt DateTime @default(now())
-}
