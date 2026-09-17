@@ -196,7 +196,12 @@ export class RecruitmentService {
       orderBy: { openedAt: 'desc' },
     });
     if (!manager)
-      return recs.map((r) => ({ ...r, applications: [], applicationCount: 0 }));
+      return recs.map((r) => ({
+        ...r,
+        minRankLabel: decodeRank(r.minRankLevel),
+        applications: [],
+        applicationCount: 0,
+      }));
 
     const where: Record<string, any> = {
       recruitmentId: { in: recs.map((r) => r.id) },
