@@ -4,10 +4,12 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 import { PlayerStatsService } from '../stats/player-stats.service';
+import { GamificationService } from '../gamification/gamification.service';
 import { kdaOf } from '../stats/player-stats.util';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
@@ -75,6 +77,7 @@ export class EsportService {
   constructor(
     private prisma: PrismaService,
     private playerStats: PlayerStatsService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   private async attachStats(teams: any[]) {
@@ -598,6 +601,8 @@ export class EsportService {
   private async recomputeMatchParticipants(matchId: string) {
     const ids = await this.playerStats.participantIds(matchId);
     if (ids.length) await this.playerStats.recomputeUsers(ids);
+    // XP grants are keyed by match id, so re-running is harmless.
+    void this.gamification?.syncMatch(matchId);
   }
 
   // ----- Match players (per-player stats) -----
@@ -699,6 +704,7 @@ export class EsportService {
       });
     }
     await this.playerStats.recomputeUsers([...previous, ...userIds]);
+    void this.gamification?.syncMatch(matchId);
     return this.getMatchPlayers(matchId);
   }
 

@@ -605,3 +605,53 @@ model DraftMatch {
   status       String    @default("pending") // pending | done
   createdAt    DateTime  @default(now())
 }
+
+// ----- Gamification (XP, levels, achievements, missions) -----
+// Additive models: users without rows simply have no progress yet.
+
+model UserProgress {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @unique @db.ObjectId
+  xp        Int      @default(0)
+  level     Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// One row per XP grant. The [userId, type, refId] unique index makes every
+// grant idempotent (re-submitting a match result never double counts).
+model XpEvent {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  type      String
+  amount    Int
+  refId     String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, type, refId])
+  @@index([userId, createdAt])
+}
+
+model UserAchievement {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String   @db.ObjectId
+  achievementId String
+  unlockedAt    DateTime @default(now())
+
+  @@unique([userId, achievementId])
+}
+
+// Progress of a user on a mission for a given period (day or ISO week).
+model UserMission {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String    @db.ObjectId
+  missionId   String
+  periodKey   String
+  progress    Int       @default(0)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, missionId, periodKey])
+  @@index([userId, periodKey])
+}

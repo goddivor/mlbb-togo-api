@@ -2,16 +2,21 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
+import { GamificationService } from '../gamification/gamification.service';
 
 const STAFF_ROLES = ['admin', 'moderator'];
 
 @Injectable()
 export class PostsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private gamification?: GamificationService,
+  ) {}
 
   async findAll(category?: string) {
     return this.prisma.post.findMany({
@@ -34,7 +39,7 @@ export class PostsService {
   async create(dto: CreatePostDto, user?: { id?: string; username?: string }) {
     const authorId = user?.id ?? dto.authorId;
     const authorName = user?.username ?? dto.authorName;
-    return this.prisma.post.create({
+    const post = await this.prisma.post.create({
       data: {
         authorId: authorId as string,
         authorName,
@@ -45,6 +50,8 @@ export class PostsService {
       },
       include: { comments: true },
     });
+    void this.gamification?.trackSafe(authorId, 'forum_post', post.id);
+    return post;
   }
 
   async remove(id: string, user?: { id?: string; roleUser?: string }) {
