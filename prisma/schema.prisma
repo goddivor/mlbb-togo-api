@@ -286,6 +286,9 @@ model EsportTeam {
   esportId     String?            @db.ObjectId
   esport       Esport?            @relation(fields: [esportId], references: [id], onDelete: Cascade)
   members      EsportTeamMember[]
+  staff        EsportTeamStaff[]
+  // JSON array of manual honours (titles/placements) edited by the admin.
+  honours      String?
   sort         Int                @default(0)
   foundedAt    DateTime           @default(now())
   createdAt    DateTime           @default(now())
@@ -316,6 +319,24 @@ model Sponsor {
   url       String?
   sort      Int      @default(0)
   createdAt DateTime @default(now())
+}
+
+// Non-playing staff attached to a team (coach, manager, analyst...).
+// `userId` optionally links the staff entry to a platform account.
+model EsportTeamStaff {
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  teamId    String     @db.ObjectId
+  team      EsportTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId    String?    @db.ObjectId
+  name      String
+  role      String     @default("coach")
+  avatar    String?
+  bio       String?
+  sort      Int        @default(0)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([teamId])
 }
 
 model EsportSeason {
