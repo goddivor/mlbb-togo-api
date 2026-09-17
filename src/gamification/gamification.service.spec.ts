@@ -62,6 +62,12 @@ function makePrisma() {
         Object.assign(progress.get(where.userId), data);
         return progress.get(where.userId);
       }),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const row = progress.get(where.userId);
+        if (!row || !(row.level < where.level.lt)) return { count: 0 };
+        Object.assign(row, data);
+        return { count: 1 };
+      }),
       findMany: jest.fn(async ({ take }: any) =>
         Array.from(progress.values())
           .sort((a, b) => b.xp - a.xp)
@@ -173,6 +179,18 @@ describe('GamificationService', () => {
       const levelUps = community.notifyUser.mock.calls.filter((c) => c[1].type === 'level_up');
       expect(levelUps).toHaveLength(1);
       expect(levelUps[0][1].data.level).toBe(2);
+      expect(prisma._state.progress.get(U).level).toBe(2);
+    });
+
+    it('notifies a level up only once when grants run concurrently', async () => {
+      for (let i = 0; i < 4; i++) await service.track(U, 'match_played', `m${i}`);
+      // Two overlapping grants that both cross the level 2 threshold.
+      await Promise.all([
+        service.track(U, 'match_played', 'm4'),
+        service.track(U, 'match_played', 'm5'),
+      ]);
+      const levelUps = community.notifyUser.mock.calls.filter((c) => c[1].type === 'level_up');
+      expect(levelUps).toHaveLength(1);
       expect(prisma._state.progress.get(U).level).toBe(2);
     });
 

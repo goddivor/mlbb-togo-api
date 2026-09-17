@@ -148,9 +148,20 @@ export class GamificationService {
     const row = await this.prisma.userProgress.findUnique({ where: { userId } });
     const xp = row?.xp ?? 0;
     const level = levelFromXp(xp);
-    if (row && row.level !== level)
+    let raised = false;
+    if (row && level > row.level) {
+      // Guarded write: only the call that actually raises the stored level
+      // notifies, so concurrent grants (same match result submitted twice in
+      // parallel) never send duplicate level-up notifications.
+      const { count } = await this.prisma.userProgress.updateMany({
+        where: { userId, level: { lt: level } },
+        data: { level },
+      });
+      raised = count > 0;
+    } else if (row && level < row.level) {
       await this.prisma.userProgress.update({ where: { userId }, data: { level } });
-    if (level > previousLevel) {
+    }
+    if (raised && level > previousLevel) {
       await this.notify(userId, {
         type: 'level_up',
         title: 'Niveau supérieur !',
