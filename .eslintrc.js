@@ -11,15 +11,15 @@ module.exports = {
   env: { node: true, jest: true },
   ignorePatterns: ['.eslintrc.js', 'dist/', 'node_modules/', 'coverage/', 'prisma/seed.ts'],
   rules: {
-    // Le code métier s'appuie largement sur `any` pour les payloads Prisma
-    // sérialisés ; en faire une erreur rendrait la porte de review
-    // infranchissable sans un refactor massif, hors sujet ici.
+    // Business code relies heavily on `any` for serialized Prisma payloads;
+    // making it an error would block the review gate without a massive
+    // refactor that is out of scope here.
     '@typescript-eslint/no-explicit-any': 'off',
     '@typescript-eslint/explicit-module-boundary-types': 'off',
     '@typescript-eslint/interface-name-prefix': 'off',
-    // `ignoreRestSiblings` couvre l'idiome d'omission utilise pour retirer les
-    // champs sensibles : `const { password, mlbbToken, ...rest } = user`. Sans
-    // lui, la facon meme dont on protege les donnees serait signalee.
+    // `ignoreRestSiblings` covers the omission idiom used to strip sensitive
+    // fields: `const { password, mlbbToken, ...rest } = user`. Without it, the
+    // very way we protect data would be flagged.
     '@typescript-eslint/no-unused-vars': [
       'warn',
       { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
