@@ -21,6 +21,7 @@ import { GqlModule } from './graphql/gql.module';
 import { PushModule } from './push/push.module';
 import { StreamModule } from './stream/stream.module';
 import { DraftModule } from './draft/draft.module';
+import { SearchModule } from './search/search.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { DraftModule } from './draft/draft.module';
     PushModule,
     StreamModule,
     DraftModule,
+    SearchModule,
   ],
 })
 export class AppModule {}
