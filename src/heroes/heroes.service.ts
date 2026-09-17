@@ -28,7 +28,11 @@ export class HeroesService {
         id: true,
         name: true,
         role: true,
+        roles: true,
+        laneKeys: true,
         image: true,
+        thumb: true,
+        heroId: true,
         description: true,
       },
     });
@@ -41,7 +45,11 @@ export class HeroesService {
         id: true,
         name: true,
         role: true,
+        roles: true,
+        laneKeys: true,
         image: true,
+        thumb: true,
+        heroId: true,
         description: true,
       },
     });
