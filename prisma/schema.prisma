@@ -404,6 +404,12 @@ model Recruitment {
   status      String             @default("open")
   message     String?
   slots       RecruitmentSlot[]
+  // Requirements advertised by the campaign, used by the advanced filters.
+  // minRankLevel is an in-game rank level (see decodeRank in users.service);
+  // null means the campaign accepts every rank.
+  minRankLevel Int?
+  // Expected commitment: casual | regular | competitive. Null = no expectation.
+  availability String?
   openedAt    DateTime           @default(now())
   closedAt    DateTime?
   createdAt   DateTime           @default(now())
@@ -417,7 +423,17 @@ model RecruitmentApplication {
   userId        String   @db.ObjectId
   role          String?
   message       String?
+  // pending | shortlisted | accepted | rejected | withdrawn
   status        String   @default("pending")
+  // Candidate-declared availability: casual | regular | competitive.
+  availability  String?
+  // Rank level snapshot taken when the application was submitted, so that
+  // filtering a shortlist stays stable even if the player ranks up later.
+  rankLevel     Int?
+  // Audit trail of the last status change.
+  decidedById   String?  @db.ObjectId
+  decidedAt     DateTime?
+  decisionNote  String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
