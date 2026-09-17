@@ -342,13 +342,11 @@ export class PostsService {
     await this.findRaw(id);
     const authorId = user?.id ?? dto.authorId;
     const authorName = user?.username ?? dto.authorName;
+    if (!authorId || !authorName) {
+      throw new BadRequestException('Auteur requis.');
+    }
     await this.prisma.comment.create({
-      data: {
-        postId: id,
-        authorId: authorId as string,
-        authorName,
-        content: dto.content,
-      },
+      data: { postId: id, authorId, authorName, content: dto.content },
     });
     const post = await this.prisma.post.findUnique({
       where: { id },
