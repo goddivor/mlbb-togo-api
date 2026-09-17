@@ -8,6 +8,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 import { ChatGateway } from './chat.gateway';
 import { PushService } from '../push/push.service';
+import {
+  DEFAULT_NOTIFICATIONS_LIMIT,
+  NotificationsQueryDto,
+} from './dto/notifications-query.dto';
 
 const REQUEST_STATUS = ['pending', 'in_review', 'approved', 'rejected'];
 
@@ -121,12 +125,53 @@ export class CommunityService {
 
   // ----- Notifications (API) -----
 
-  async listNotifications(userId: string) {
-    return this.prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
+  /**
+   * Paginated history for the signed-in user.
+   *
+   * `userId` is never taken from the query string: it comes from the JWT, so a
+   * user can only ever page through their own mailbox. The `counts` facet is
+   * computed over the whole mailbox (type filter excluded) so the filter chips
+   * keep showing every available type once one of them is selected.
+   */
+  async listNotifications(userId: string, query: NotificationsQueryDto = {}) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? DEFAULT_NOTIFICATIONS_LIMIT;
+    const status = query.status ?? 'all';
+
+    const where: Record<string, any> = { userId };
+    if (query.type) where.type = query.type;
+    if (status === 'unread') where.read = false;
+    if (status === 'read') where.read = true;
+
+    const [total, items, unread, grouped] = await Promise.all([
+      this.prisma.notification.count({ where }),
+      this.prisma.notification.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.notification.count({ where: { userId, read: false } }),
+      this.prisma.notification.groupBy({
+        by: ['type'],
+        where: { userId },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const counts: Record<string, number> = {};
+    for (const g of grouped) counts[g.type] = g._count._all;
+
+    return {
+      items,
+      total,
+      unread,
+      counts,
+      page,
+      limit,
+      // Always at least 1 so the pager has a page to sit on when empty.
+      pages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 
   async unreadCount(userId: string) {
@@ -137,19 +182,28 @@ export class CommunityService {
   }
 
   async markRead(userId: string, id: string) {
-    await this.prisma.notification.updateMany({
+    // updateMany (not update) so an id belonging to somebody else simply
+    // matches nothing instead of flipping their notification.
+    const { count } = await this.prisma.notification.updateMany({
       where: { id, userId },
       data: { read: true },
     });
-    return { ok: true };
+    return { ok: true, updated: count };
   }
 
-  async markAllRead(userId: string) {
-    await this.prisma.notification.updateMany({
-      where: { userId, read: false },
+  /**
+   * Marks the user's unread notifications as read. An optional type narrows it
+   * to the category currently displayed on the page, so "mark all as read"
+   * never silently clears notifications the user cannot see.
+   */
+  async markAllRead(userId: string, type?: string) {
+    const where: Record<string, any> = { userId, read: false };
+    if (type) where.type = type;
+    const { count } = await this.prisma.notification.updateMany({
+      where,
       data: { read: true },
     });
-    return { ok: true };
+    return { ok: true, updated: count };
   }
 
   // ----- Team requests -----
