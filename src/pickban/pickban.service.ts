@@ -34,6 +34,7 @@ import {
   usedHeroIds,
 } from './pickban-order';
 
+const OBJECT_ID = /^[0-9a-f]{24}$/i;
 const META_TTL_MS = 60 * 60 * 1000; // 1 hour
 const META_FAIL_TTL_MS = 5 * 60 * 1000; // retry Moonton sooner after a failure
 
@@ -152,6 +153,7 @@ export class PickBanService {
   }
 
   async getById(id: string) {
+    if (!OBJECT_ID.test(id)) throw new NotFoundException('Draft not found.');
     const draft = await this.prisma.pickBanDraft.findUnique({ where: { id } });
     if (!draft) throw new NotFoundException('Draft not found.');
     return this.serialize(draft);
@@ -237,9 +239,11 @@ export class PickBanService {
     for (const h of heroes) if (h.heroId != null) byMoontonId.set(h.heroId, h.id);
     const known = new Set(heroes.map((h) => h.id));
 
-    const allyPicks = (step.team === 'blue' ? state.blueTeam : state.redTeam).picks
-      .map((p) => p.heroId)
-      .filter((id) => known.has(id));
+    const allyTeam = step.team === 'blue' ? state.blueTeam : state.redTeam;
+    const allyPicks = allyTeam.picks.map((p) => p.heroId).filter((id) => known.has(id));
+    // Explicit lanes so a hero played off-lane covers the lane actually chosen.
+    const allyLanes: Record<string, string | undefined> = {};
+    for (const p of allyTeam.picks) if (p.lane) allyLanes[p.heroId] = p.lane;
     const enemyPicks = (step.team === 'blue' ? state.redTeam : state.blueTeam).picks
       .map((p) => p.heroId)
       .filter((id) => known.has(id));
@@ -260,6 +264,7 @@ export class PickBanService {
       allyPicks,
       enemyPicks,
       excluded: usedHeroIds(state),
+      allyLanes,
       pickedMeta,
       metaAvailable,
     });
@@ -301,6 +306,7 @@ export class PickBanService {
   /* ---------- Helpers ---------- */
 
   private async getOwned(id: string, userId: string) {
+    if (!OBJECT_ID.test(id)) throw new NotFoundException('Draft not found.');
     const draft = await this.prisma.pickBanDraft.findUnique({ where: { id } });
     if (!draft) throw new NotFoundException('Draft not found.');
     if (draft.ownerId !== userId) throw new ForbiddenException('Not the draft owner.');

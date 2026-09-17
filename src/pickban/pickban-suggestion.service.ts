@@ -34,6 +34,8 @@ export interface SuggestionContext {
   allyPicks: string[];
   enemyPicks: string[];
   excluded: Set<string>; // already picked or banned (both teams)
+  // Explicit lane chosen for an ally pick, keyed by hero id (optional).
+  allyLanes?: Record<string, string | undefined>;
   pickedMeta: Map<string, PickedHeroMeta>;
   metaAvailable: boolean;
 }
@@ -94,7 +96,7 @@ export class PickBanSuggestionService {
     limit = 5,
   ): HeroSuggestion[] {
     const byId = new Map(heroes.map((h) => [h.id, h]));
-    const uncovered = this.uncoveredLanes(ctx.allyPicks, byId);
+    const uncovered = this.uncoveredLanes(ctx.allyPicks, byId, ctx.allyLanes);
 
     const scored: Scored[] = heroes
       .filter((h) => !ctx.excluded.has(h.id))
@@ -120,10 +122,14 @@ export class PickBanSuggestionService {
 
   // Lanes not yet covered by the ally picks. A pick with an explicit lane
   // covers it; otherwise the hero's first recommended lane is used.
-  uncoveredLanes(allyPicks: string[], byId: Map<string, HeroCandidate>): Set<string> {
+  uncoveredLanes(
+    allyPicks: string[],
+    byId: Map<string, HeroCandidate>,
+    allyLanes: Record<string, string | undefined> = {},
+  ): Set<string> {
     const uncovered = new Set<string>(LANES);
     for (const id of allyPicks) {
-      const lane = byId.get(id)?.laneKeys?.[0];
+      const lane = allyLanes[id] ?? byId.get(id)?.laneKeys?.[0];
       if (lane) uncovered.delete(lane);
     }
     return uncovered;

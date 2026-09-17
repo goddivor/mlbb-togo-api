@@ -3,6 +3,7 @@ import {
   IsArray,
   IsIn,
   IsInt,
+  IsMongoId,
   IsOptional,
   IsString,
   MaxLength,
@@ -29,7 +30,7 @@ export class UpdatePickBanStepDto {
   @IsIn(['blue', 'red'])
   team!: PickBanTeam;
 
-  @IsString()
+  @IsMongoId()
   heroId!: string; // our Hero id
 
   @IsOptional()

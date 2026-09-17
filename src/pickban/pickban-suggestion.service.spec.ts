@@ -34,6 +34,17 @@ const ctx = (over: Partial<SuggestionContext> = {}): SuggestionContext => ({
 describe('PickBanSuggestionService', () => {
   const service = new PickBanSuggestionService();
 
+  it('uses the explicit lane of an ally pick for lane coverage', () => {
+    const heroes = [hero('hayabusa', { laneKeys: ['jungle'] }), hero('ling', { laneKeys: ['jungle'] })];
+    const byId = new Map(heroes.map((h) => [h.id, h]));
+    const byDefault = service.uncoveredLanes(['hayabusa'], byId);
+    expect(byDefault.has('jungle')).toBe(false);
+    expect(byDefault.has('roam')).toBe(true);
+    const offLane = service.uncoveredLanes(['hayabusa'], byId, { hayabusa: 'roam' });
+    expect(offLane.has('roam')).toBe(false);
+    expect(offLane.has('jungle')).toBe(true);
+  });
+
   it('never suggests picked or banned heroes and returns at most `limit` items', () => {
     const heroes = Array.from({ length: 12 }, (_, i) => hero(`h${i}`));
     const out = service.suggest(heroes, ctx({ excluded: new Set(['h0', 'h1']) }), 5);
