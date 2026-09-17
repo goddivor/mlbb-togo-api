@@ -25,6 +25,7 @@ import { SearchModule } from './search/search.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { PickBanModule } from './pickban/pickban.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { PickBanModule } from './pickban/pickban.module';
     DashboardModule,
     GamificationModule,
     PickBanModule,
+    AiModule,
   ],
 })
 export class AppModule {}
