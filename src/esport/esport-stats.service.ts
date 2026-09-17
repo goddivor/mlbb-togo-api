@@ -286,10 +286,13 @@ export class EsportStatsService {
   constructor(private prisma: PrismaService) {}
 
   private async assertTeam(id: string) {
-    const team = await this.prisma.esportTeam.findUnique({
-      where: { id },
-      select: { id: true, name: true, image: true, honours: true },
-    });
+    // Prisma throws on malformed ObjectIDs: treat them as "not found".
+    const team = await this.prisma.esportTeam
+      .findUnique({
+        where: { id },
+        select: { id: true, name: true, image: true, honours: true },
+      })
+      .catch(() => null);
     if (!team) throw new NotFoundException('Équipe introuvable.');
     return team;
   }
@@ -391,11 +394,12 @@ export class EsportStatsService {
   async getTeamHistory(teamId: string, page = 1, limit = 10) {
     const team = await this.assertTeam(teamId);
     const safeLimit = Math.min(50, Math.max(1, Math.floor(limit) || 10));
-    const safePage = Math.max(1, Math.floor(page) || 1);
     const raw = await this.teamMatches(teamId, { status: 'completed' });
     const chrono = completedForTeam(teamId, raw);
     const desc = [...chrono].reverse();
     const total = desc.length;
+    const pages = Math.max(1, Math.ceil(total / safeLimit));
+    const safePage = Math.min(pages, Math.max(1, Math.floor(page) || 1));
     const slice = desc.slice((safePage - 1) * safeLimit, safePage * safeLimit);
 
     const tmap = await this.teamMap(slice.map((v) => v.opponentId));
@@ -417,7 +421,7 @@ export class EsportStatsService {
       total,
       page: safePage,
       limit: safeLimit,
-      pages: Math.max(1, Math.ceil(total / safeLimit)),
+      pages,
       honours: await this.getHonours(teamId, team.honours, raw),
     };
   }
