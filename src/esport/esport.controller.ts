@@ -11,6 +11,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { EsportService } from './esport.service';
+import { EsportStatsService } from './esport-stats.service';
+import { EsportStaffService } from './esport-staff.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -18,7 +20,11 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('esport')
 export class EsportController {
-  constructor(private readonly esport: EsportService) {}
+  constructor(
+    private readonly esport: EsportService,
+    private readonly stats: EsportStatsService,
+    private readonly staff: EsportStaffService,
+  ) {}
 
   // ----- Public -----
 
@@ -33,8 +39,44 @@ export class EsportController {
   }
 
   @Get('teams/:id')
-  getTeam(@Param('id') id: string) {
-    return this.esport.getTeam(id);
+  async getTeam(@Param('id') id: string) {
+    const team = await this.esport.getTeam(id);
+    const [staff, honours] = await Promise.all([
+      this.staff.listStaff(id),
+      this.stats.getHonours(id),
+    ]);
+    return { ...team, staff, honours };
+  }
+
+  // ----- Public: team details (stats / history / schedule / staff) -----
+
+  @Get('teams/:id/stats')
+  getTeamStats(@Param('id') id: string) {
+    return this.stats.getTeamStats(id);
+  }
+
+  @Get('teams/:id/history')
+  getTeamHistory(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.stats.getTeamHistory(id, Number(page) || 1, Number(limit) || 10);
+  }
+
+  @Get('teams/:id/schedule')
+  getTeamSchedule(@Param('id') id: string) {
+    return this.stats.getTeamSchedule(id);
+  }
+
+  @Get('teams/:id/honours')
+  getTeamHonours(@Param('id') id: string) {
+    return this.stats.getHonours(id);
+  }
+
+  @Get('teams/:id/staff')
+  getTeamStaff(@Param('id') id: string) {
+    return this.staff.listStaff(id);
   }
 
   @Get('teams/:id/matches')
@@ -155,6 +197,40 @@ export class EsportController {
   @Patch('teams/:id/captain')
   setCaptain(@Param('id') id: string, @Body() body: any) {
     return this.esport.setCaptain(id, body.userId);
+  }
+
+  // ----- Admin: staff & honours -----
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('teams/:id/staff')
+  addStaff(@Param('id') id: string, @Body() body: any) {
+    return this.staff.addStaff(id, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('teams/:id/staff/:staffId')
+  updateStaff(
+    @Param('id') id: string,
+    @Param('staffId') staffId: string,
+    @Body() body: any,
+  ) {
+    return this.staff.updateStaff(id, staffId, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Delete('teams/:id/staff/:staffId')
+  removeStaff(@Param('id') id: string, @Param('staffId') staffId: string) {
+    return this.staff.removeStaff(id, staffId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Put('teams/:id/honours')
+  setHonours(@Param('id') id: string, @Body() body: any) {
+    return this.staff.setHonours(id, body?.honours ?? body);
   }
 
   // ----- Admin: sponsors -----
