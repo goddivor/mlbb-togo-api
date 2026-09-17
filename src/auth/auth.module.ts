@@ -6,10 +6,12 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy, getJwtSecret } from './jwt.strategy';
 import { UsersModule } from '../users/users.module';
+import { GamificationModule } from '../gamification/gamification.module';
 
 @Module({
   imports: [
     UsersModule,
+    GamificationModule,
     PassportModule,
     // registerAsync so the secret is resolved AFTER ConfigModule loaded .env,
     // not at import time (which happened before dotenv ran).

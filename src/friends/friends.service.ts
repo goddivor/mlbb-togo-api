@@ -3,16 +3,19 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 import { CommunityService } from '../community/community.service';
+import { GamificationService } from '../gamification/gamification.service';
 
 @Injectable()
 export class FriendsService {
   constructor(
     private prisma: PrismaService,
     private community: CommunityService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   private findBetween(a: string, b: string) {
@@ -68,6 +71,8 @@ export class FriendsService {
       where: { id: fr.id },
       data: { status: 'accepted' },
     });
+    void this.gamification?.trackSafe(me, 'friend_added', fr.id);
+    void this.gamification?.trackSafe(otherId, 'friend_added', fr.id);
     const meUser = await this.prisma.user.findUnique({ where: { id: me } });
     const who = meUser ? serializeUserCard(meUser).displayName || meUser.username : 'Un joueur';
     await this.community.notifyUser(otherId, {

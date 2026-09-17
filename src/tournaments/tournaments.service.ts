@@ -2,8 +2,10 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { GamificationService } from '../gamification/gamification.service';
 import { hydrate, parseJson, toJson } from '../common/utils/json.util';
 import { CreateTournamentDto } from './dto/create-tournament.dto';
 import { UpdateTournamentDto } from './dto/update-tournament.dto';
@@ -50,7 +52,10 @@ function serialize(tournament: any) {
 
 @Injectable()
 export class TournamentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private gamification?: GamificationService,
+  ) {}
 
   async findAll() {
     const tournaments = await this.prisma.tournament.findMany({
@@ -140,7 +145,23 @@ export class TournamentsService {
       where: { id },
       data: { registeredTeams: toJson(teams) },
     });
+    void this.rewardRegistration(id, teamId);
     return serialize(updated);
+  }
+
+  /** XP for every member of the registered team (never throws). */
+  private async rewardRegistration(tournamentId: string, teamId: string) {
+    if (!this.gamification) return;
+    try {
+      const members = await this.prisma.esportTeamMember.findMany({
+        where: { teamId },
+        select: { userId: true },
+      });
+      for (const m of members)
+        await this.gamification.trackSafe(m.userId, 'tournament_registration', tournamentId);
+    } catch {
+      /* ignore */
+    }
   }
 
   async unregister(id: string, teamId: string) {

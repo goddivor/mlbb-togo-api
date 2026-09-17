@@ -2,9 +2,11 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunityService } from '../community/community.service';
+import { GamificationService } from '../gamification/gamification.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 
 // The 5 MLBB lanes used to compose a 5v5 team.
@@ -32,6 +34,7 @@ export class DraftService {
   constructor(
     private prisma: PrismaService,
     private community: CommunityService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   /* ---------------- Helpers ---------------- */
@@ -130,7 +133,7 @@ export class DraftService {
         data: { preferredRole },
       });
     }
-    return this.prisma.draftRegistration.create({
+    const created = await this.prisma.draftRegistration.create({
       data: {
         tournamentId,
         userId,
@@ -138,6 +141,8 @@ export class DraftService {
         phase: secondPhase ? 2 : 1,
       },
     });
+    void this.gamification?.trackSafe(userId, 'tournament_registration', `draft:${tournamentId}`);
+    return created;
   }
 
   async unregister(tournamentId: string, userId: string) {

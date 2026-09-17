@@ -4,9 +4,11 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { GamificationService } from '../gamification/gamification.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -49,6 +51,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   private signToken(user: { id: string; username: string; roleUser: string }) {
@@ -104,6 +107,7 @@ export class AuthService {
     }
 
     const token = this.signToken(user);
+    void this.gamification?.trackDailyLogin(user.id);
     return { token, user: serializeUser(user) };
   }
 
@@ -410,6 +414,7 @@ export class AuthService {
       });
     }
 
+    void this.gamification?.trackDailyLogin(user.id);
     return { token: this.signToken(user), user: serializeUser(user) };
   }
 
@@ -607,6 +612,7 @@ export class AuthService {
       });
     }
 
+    void this.gamification?.trackDailyLogin(user.id);
     return { token: this.signToken(user), user: serializeUser(user) };
   }
 
