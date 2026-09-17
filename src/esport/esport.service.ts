@@ -11,6 +11,7 @@ import { serializeUserCard } from '../users/users.service';
 import { PlayerStatsService } from '../stats/player-stats.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { kdaOf } from '../stats/player-stats.util';
+import { normalizeFiguresInput, parseFigures } from './esport-figures';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
 export const MATCH_TYPES = ['friendly', 'training', 'official'];
@@ -119,6 +120,29 @@ export class EsportService {
 
   async getSponsors() {
     return this.prisma.sponsor.findMany({ orderBy: { sort: 'asc' } });
+  }
+
+  /** Public target figures (About page), defaults when no organisation exists. */
+  async getFigures() {
+    const org = await this.prisma.esport.findFirst({
+      select: { id: true, figures: true, updatedAt: true },
+    });
+    return {
+      orgId: org?.id ?? null,
+      updatedAt: org?.updatedAt ?? null,
+      ...parseFigures(org?.figures),
+    };
+  }
+
+  async updateFigures(data: unknown) {
+    const id = await this.resolveOrgId();
+    const figures = normalizeFiguresInput(data);
+    const org = await this.prisma.esport.update({
+      where: { id },
+      data: { figures },
+      select: { id: true, figures: true, updatedAt: true },
+    });
+    return { orgId: org.id, updatedAt: org.updatedAt, ...parseFigures(org.figures) };
   }
 
   async getMtl() {

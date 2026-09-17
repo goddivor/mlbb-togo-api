@@ -89,6 +89,11 @@ export class EsportController {
     return this.esport.getSponsors();
   }
 
+  @Get('org/figures')
+  getFigures() {
+    return this.esport.getFigures();
+  }
+
   @Get('mtl')
   getMtl() {
     return this.esport.getMtl();
@@ -130,6 +135,13 @@ export class EsportController {
   @Patch(':id')
   updateOrg(@Param('id') id: string, @Body() body: any) {
     return this.esport.updateOrg(id, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Put('org/figures')
+  updateFigures(@Body() body: any) {
+    return this.esport.updateFigures(body);
   }
 
   // ----- Admin: teams -----
