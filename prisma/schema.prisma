@@ -384,6 +384,7 @@ model EsportSeason {
   banner            String?
   color             String?
   summary           String?   // JSON snapshot frozen at closing
+  settings          String?   // JSON: standings settings (points, qualifyTop)
   isActive          Boolean   @default(false)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
