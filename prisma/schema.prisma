@@ -402,6 +402,19 @@ model EsportMatch {
   scoreB       Int       @default(0)
   winnerTeamId String?   @db.ObjectId
   notes        String?
+  // Competition stage: scrim | league | playoff. Legacy rows (null) derive it
+  // from `type` (friendly/training -> scrim, official -> league).
+  stage        String?
+  // Series format: bo1 | bo3 | bo5 | bo7.
+  format       String?
+  // JSON array of per-game details ({ winnerTeamId, duration, mvpUserId, screenshot }).
+  games        String?
+  // JSON array of screenshot URLs (max 10).
+  screenshots  String?
+  vodUrl       String?
+  streamUrl    String?
+  // Match MVP (mirrors the `isMvp` flag of EsportMatchPlayer when stats exist).
+  mvpUserId    String?   @db.ObjectId
   createdById  String?   @db.ObjectId
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

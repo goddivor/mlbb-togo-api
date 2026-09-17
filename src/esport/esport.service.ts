@@ -12,7 +12,25 @@ import { PlayerStatsService } from '../stats/player-stats.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { kdaOf } from '../stats/player-stats.util';
 import { normalizeFiguresInput, parseFigures } from './esport-figures';
-import { EsportSeasonsService } from './esport-seasons.service';
+import { EsportSeasonsService, resolveStatus } from './esport-seasons.service';
+import {
+  MATCH_STAGES,
+  MatchGame,
+  assertResultMatchesGames,
+  groupByDay,
+  isFormat,
+  isStage,
+  normalizeGames,
+  normalizeScreenshots,
+  normalizeUrl,
+  parseGames,
+  parseScreenshots,
+  resolveStage,
+  scoreFromGames,
+  serializeGames,
+  stageFromType,
+  typeFromStage,
+} from './esport-match-details';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
 export const MATCH_TYPES = ['friendly', 'training', 'official'];
@@ -413,11 +431,24 @@ export class EsportService {
     return new Map(teams.map((tm) => [tm.id, tm]));
   }
 
-  private serializeMatch(m: any, tmap: Map<string, any>) {
+  /** User cards (id -> card) for the MVP avatars. */
+  private async userCardMap(ids: string[]) {
+    const uniq = Array.from(new Set(ids.filter(Boolean)));
+    const users = uniq.length
+      ? await this.prisma.user.findMany({ where: { id: { in: uniq } } })
+      : [];
+    return new Map(users.map((u) => [u.id, serializeUserCard(u)]));
+  }
+
+  private serializeMatch(m: any, tmap: Map<string, any>, umap?: Map<string, any>) {
+    const games = parseGames(m.games);
+    const screenshots = parseScreenshots(m.screenshots);
     return {
       id: m.id,
       seasonId: m.seasonId ?? null,
       type: m.type,
+      stage: resolveStage(m),
+      format: isFormat(m.format) ? m.format : null,
       status: m.status,
       scheduledAt: m.scheduledAt,
       scoreA: m.scoreA ?? 0,
@@ -428,38 +459,142 @@ export class EsportService {
       teamA: tmap.get(m.teamAId) ?? { id: m.teamAId, name: '?' },
       teamB: tmap.get(m.teamBId) ?? { id: m.teamBId, name: '?' },
       winner: m.winnerTeamId ? tmap.get(m.winnerTeamId) ?? null : null,
+      games: games.map((g) => ({ ...g, mvp: g.mvpUserId ? umap?.get(g.mvpUserId) ?? null : null })),
+      gamesCount: games.length,
+      screenshots,
+      screenshotsCount: screenshots.length,
+      vodUrl: m.vodUrl ?? null,
+      streamUrl: m.streamUrl ?? null,
+      mvpUserId: m.mvpUserId ?? null,
+      mvp: m.mvpUserId ? umap?.get(m.mvpUserId) ?? null : null,
     };
   }
 
-  async listMatches(filter: { seasonId?: string; teamId?: string; status?: string } = {}) {
-    const where: any = {};
-    if (filter.seasonId) where.seasonId = filter.seasonId;
-    if (filter.status) where.status = filter.status;
-    if (filter.teamId)
-      where.OR = [{ teamAId: filter.teamId }, { teamBId: filter.teamId }];
-    const matches = await this.prisma.esportMatch.findMany({
-      where,
-      orderBy: [{ scheduledAt: 'desc' }, { createdAt: 'desc' }],
-    });
-    const tmap = await this.teamMap(
-      matches.flatMap((m) => [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
-    );
-    return matches.map((m) => this.serializeMatch(m, tmap));
+  /** Mongo filter for a stage, honouring legacy rows without `stage`. */
+  private stageWhere(stage: string) {
+    if (stage === 'playoff') return { stage: 'playoff' };
+    const legacyTypes = MATCH_TYPES.filter((t) => stageFromType(t) === stage);
+    // MongoDB: `null` only matches an explicit null, rows created before the
+    // column existed have no `stage` key at all (`isSet: false`).
+    return {
+      OR: [
+        { stage },
+        { stage: null, type: { in: legacyTypes } },
+        { stage: { isSet: false }, type: { in: legacyTypes } },
+      ],
+    };
   }
 
+  private buildMatchWhere(filter: {
+    seasonId?: string;
+    teamId?: string;
+    status?: string;
+    stage?: string;
+    from?: string;
+    to?: string;
+  }) {
+    const and: any[] = [];
+    if (filter.seasonId) and.push({ seasonId: filter.seasonId });
+    if (filter.status) and.push({ status: filter.status });
+    if (filter.teamId) and.push({ OR: [{ teamAId: filter.teamId }, { teamBId: filter.teamId }] });
+    if (filter.stage) {
+      if (!isStage(filter.stage))
+        throw new BadRequestException(`Étape invalide. Valeurs : ${MATCH_STAGES.join(', ')}.`);
+      and.push(this.stageWhere(filter.stage));
+    }
+    const range: any = {};
+    if (filter.from) {
+      const d = new Date(filter.from);
+      if (isNaN(d.getTime())) throw new BadRequestException('Date « from » invalide.');
+      range.gte = d;
+    }
+    if (filter.to) {
+      const d = new Date(filter.to);
+      if (isNaN(d.getTime())) throw new BadRequestException('Date « to » invalide.');
+      range.lte = d;
+    }
+    if (Object.keys(range).length) and.push({ scheduledAt: range });
+    return and.length ? { AND: and } : {};
+  }
+
+  private async serializeMatches(matches: any[]) {
+    const [tmap, umap] = await Promise.all([
+      this.teamMap(
+        matches.flatMap((m) => [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
+      ),
+      this.userCardMap(matches.map((m) => m.mvpUserId).filter(Boolean) as string[]),
+    ]);
+    return matches.map((m) => this.serializeMatch(m, tmap, umap));
+  }
+
+  async listMatches(
+    filter: {
+      seasonId?: string;
+      teamId?: string;
+      status?: string;
+      stage?: string;
+      from?: string;
+      to?: string;
+    } = {},
+  ) {
+    const matches = await this.prisma.esportMatch.findMany({
+      where: this.buildMatchWhere(filter),
+      orderBy: [{ scheduledAt: 'desc' }, { createdAt: 'desc' }],
+    });
+    return this.serializeMatches(matches);
+  }
+
+  /**
+   * Calendar view: matches of a period grouped by day (UTC), oldest first.
+   * Without `from`/`to` the whole season (or everything) is returned.
+   */
+  async matchesCalendar(
+    filter: { seasonId?: string; teamId?: string; stage?: string; from?: string; to?: string } = {},
+  ) {
+    const matches = await this.prisma.esportMatch.findMany({
+      where: this.buildMatchWhere(filter),
+      orderBy: [{ scheduledAt: 'asc' }, { createdAt: 'asc' }],
+    });
+    const serialized = await this.serializeMatches(matches);
+    const { days, undated } = groupByDay(serialized);
+    return {
+      from: filter.from ?? null,
+      to: filter.to ?? null,
+      total: serialized.length,
+      days,
+      undated,
+    };
+  }
+
+  /** Full match sheet: teams, result, games, screenshots, links, MVP, player stats. */
   async getMatch(id: string) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id } });
     if (!m) throw new NotFoundException('Match introuvable.');
-    const tmap = await this.teamMap(
-      [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[],
-    );
-    return this.serializeMatch(m, tmap);
+    const games = parseGames(m.games);
+    const [tmap, umap, players] = await Promise.all([
+      this.teamMap([m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
+      this.userCardMap(
+        [m.mvpUserId, ...games.map((g) => g.mvpUserId)].filter(Boolean) as string[],
+      ),
+      this.getMatchPlayers(id),
+    ]);
+    const base = this.serializeMatch(m, tmap, umap);
+    const mvpRow = players.players.find((p) => p.userId === base.mvpUserId) ?? null;
+    return {
+      ...base,
+      // Fall back to the per-player MVP flag for matches recorded before the
+      // `mvpUserId` column existed.
+      mvpUserId: base.mvpUserId ?? players.players.find((p) => p.isMvp)?.userId ?? null,
+      mvp: base.mvp ?? (players.players.find((p) => p.isMvp)?.user ?? null),
+      mvpStats: mvpRow ?? players.players.find((p) => p.isMvp) ?? null,
+      players: { teamA: players.teamA, teamB: players.teamB },
+    };
   }
 
   // Admin, or captain of one of the two teams (except official).
   private async assertMatchManager(match: any, user: any) {
     if (user?.roleUser === 'admin') return;
-    if (match.type === 'official')
+    if (resolveStage(match) !== 'scrim')
       throw new ForbiddenException(
         "Seul l'administrateur peut gérer une rencontre officielle.",
       );
@@ -483,7 +618,8 @@ export class EsportService {
       select: { id: true },
     });
     if (found.length !== 2) throw new NotFoundException('Équipe introuvable.');
-    if (data.seasonId) await this.getSeason(data.seasonId);
+    let season: any = null;
+    if (data.seasonId) season = await this.getSeason(data.seasonId);
 
     // The captain can only create friendly/training matches for his team.
     if (user && user.roleUser !== 'admin') {
@@ -497,14 +633,27 @@ export class EsportService {
         throw new ForbiddenException("Réservé au capitaine de l'équipe.");
     }
 
+    // Stage: explicit, else derived from the type (an official match created
+    // while the season is in playoffs is a playoff match).
+    let stage = isStage(data?.stage) ? data.stage : stageFromType(type);
+    if (!isStage(data?.stage) && type === 'official' && season && resolveStatus(season) === 'playoffs')
+      stage = 'playoff';
+    if (stage !== 'scrim' && user && user.roleUser !== 'admin')
+      throw new ForbiddenException("Seul l'administrateur peut planifier une rencontre officielle.");
+    const format = isFormat(data?.format) ? data.format : null;
+
     await this.prisma.esportMatch.create({
       data: {
         seasonId: data.seasonId ?? null,
-        type,
+        type: stage === 'scrim' ? type : 'official',
+        stage,
+        format,
         teamAId: data.teamAId,
         teamBId: data.teamBId,
         scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
         notes: data.notes ?? null,
+        streamUrl: normalizeUrl(data?.streamUrl, 'stream'),
+        vodUrl: normalizeUrl(data?.vodUrl, 'VOD'),
         createdById: createdById ?? null,
       },
     });
@@ -518,6 +667,25 @@ export class EsportService {
     const patch: any = {};
     if (data.type !== undefined)
       patch.type = MATCH_TYPES.includes(data.type) ? data.type : undefined;
+    // Stage and type are kept in sync: an explicit stage wins, otherwise a
+    // type change re-derives the stage (legacy clients only send `type`).
+    if (data.stage !== undefined) {
+      if (!isStage(data.stage))
+        throw new BadRequestException(`Étape invalide. Valeurs : ${MATCH_STAGES.join(', ')}.`);
+      patch.stage = data.stage;
+      patch.type = typeFromStage(data.stage, patch.type ?? raw.type);
+    } else if (patch.type && patch.type !== raw.type) {
+      patch.stage = stageFromType(patch.type);
+    }
+    if ((patch.stage ?? resolveStage(raw)) !== 'scrim' && user?.roleUser !== 'admin')
+      throw new ForbiddenException("Seul l'administrateur peut gérer une rencontre officielle.");
+    if (data.format !== undefined) {
+      if (data.format !== null && data.format !== '' && !isFormat(data.format))
+        throw new BadRequestException('Format invalide (bo1, bo3, bo5, bo7).');
+      patch.format = data.format || null;
+    }
+    if (data.vodUrl !== undefined) patch.vodUrl = normalizeUrl(data.vodUrl, 'VOD');
+    if (data.streamUrl !== undefined) patch.streamUrl = normalizeUrl(data.streamUrl, 'stream');
     if (data.seasonId !== undefined) patch.seasonId = data.seasonId || null;
     if (data.teamAId !== undefined) patch.teamAId = data.teamAId;
     if (data.teamBId !== undefined) patch.teamBId = data.teamBId;
@@ -534,28 +702,153 @@ export class EsportService {
     return this.getMatch(id);
   }
 
+  /**
+   * Result of a match. When `games` are provided the score is derived from
+   * them and any explicit score / winner must agree; details (format, MVP,
+   * screenshots, links) can be saved in the same call.
+   */
   async setMatchResult(id: string, data: any, user?: any) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id } });
     if (!m) throw new NotFoundException('Match introuvable.');
     await this.assertMatchManager(m, user);
-    const scoreA = Number.isFinite(+data?.scoreA) ? Math.max(0, +data.scoreA) : 0;
-    const scoreB = Number.isFinite(+data?.scoreB) ? Math.max(0, +data.scoreB) : 0;
+    const details = await this.normalizeDetails(m, data ?? {});
+    const games: MatchGame[] = details.games ?? parseGames(m.games);
+
+    const given = (v: any) => v !== undefined && v !== null && v !== '';
+    let scoreA = given(data?.scoreA) && Number.isFinite(+data.scoreA) ? Math.max(0, +data.scoreA) : 0;
+    let scoreB = given(data?.scoreB) && Number.isFinite(+data.scoreB) ? Math.max(0, +data.scoreB) : 0;
     let winnerTeamId: string | null = null;
     if (data?.winnerTeamId) {
       if (data.winnerTeamId !== m.teamAId && data.winnerTeamId !== m.teamBId)
         throw new BadRequestException("Le vainqueur doit être l'une des deux équipes.");
       winnerTeamId = data.winnerTeamId;
-    } else if (scoreA > scoreB) winnerTeamId = m.teamAId;
-    else if (scoreB > scoreA) winnerTeamId = m.teamBId;
+    }
+    if (games.length) {
+      assertResultMatchesGames(games, m, {
+        scoreA: given(data?.scoreA) ? scoreA : null,
+        scoreB: given(data?.scoreB) ? scoreB : null,
+        winnerTeamId,
+      });
+      const derived = scoreFromGames(games, m);
+      scoreA = derived.scoreA;
+      scoreB = derived.scoreB;
+      winnerTeamId = winnerTeamId ?? derived.winnerTeamId;
+    }
+    if (!winnerTeamId) {
+      if (scoreA > scoreB) winnerTeamId = m.teamAId;
+      else if (scoreB > scoreA) winnerTeamId = m.teamBId;
+    }
 
+    const { games: newGames, ...rest } = details;
     await this.prisma.esportMatch.update({
       where: { id },
-      data: { scoreA, scoreB, winnerTeamId, status: 'completed' },
+      data: {
+        ...rest,
+        ...(newGames ? { games: serializeGames(newGames) } : {}),
+        scoreA,
+        scoreB,
+        winnerTeamId,
+        status: 'completed',
+      },
     });
+    await this.syncMvpFlag(id, m, details.mvpUserId);
     // Player counters are derived from completed matches (never incremented),
     // so re-submitting a result can't double count.
     await this.recomputeMatchParticipants(id);
     return this.getMatch(id);
+  }
+
+  /**
+   * Match sheet details only (admin): format, games, screenshots, VOD /
+   * stream links, MVP. The status and score are untouched, but games must
+   * stay consistent with an already recorded result.
+   */
+  async setMatchDetails(id: string, data: any, user?: any) {
+    const m = await this.prisma.esportMatch.findUnique({ where: { id } });
+    if (!m) throw new NotFoundException('Match introuvable.');
+    await this.assertMatchManager(m, user);
+    const details = await this.normalizeDetails(m, data ?? {});
+    if (details.games && m.status === 'completed')
+      assertResultMatchesGames(details.games, m, {
+        scoreA: m.scoreA,
+        scoreB: m.scoreB,
+        winnerTeamId: m.winnerTeamId,
+      });
+    const { games, ...rest } = details;
+    await this.prisma.esportMatch.update({
+      where: { id },
+      data: { ...rest, ...(games ? { games: serializeGames(games) } : {}) },
+    });
+    await this.syncMvpFlag(id, m, details.mvpUserId);
+    return this.getMatch(id);
+  }
+
+  /**
+   * Validate the optional detail fields of a payload. Only the keys present
+   * in `data` are returned so callers can PATCH partially. `games` is
+   * validated against the (new or stored) format.
+   */
+  private async normalizeDetails(m: any, data: any) {
+    const out: {
+      format?: string | null;
+      games?: MatchGame[];
+      screenshots?: string | null;
+      vodUrl?: string | null;
+      streamUrl?: string | null;
+      mvpUserId?: string | null;
+    } = {};
+    if (data.format !== undefined) {
+      if (data.format !== null && data.format !== '' && !isFormat(data.format))
+        throw new BadRequestException('Format invalide (bo1, bo3, bo5, bo7).');
+      out.format = data.format || null;
+    }
+    const format = out.format !== undefined ? out.format : m.format;
+    if (data.games !== undefined) {
+      out.games = normalizeGames(data.games, m, format);
+      const mvpIds = out.games.map((g) => g.mvpUserId).filter(Boolean) as string[];
+      if (mvpIds.length) await this.assertUsersExist(mvpIds);
+    } else if (out.format !== undefined) {
+      // Shrinking the format must not leave more games than allowed.
+      const stored = parseGames(m.games);
+      if (stored.length) normalizeGames(stored, m, format);
+    }
+    if (data.screenshots !== undefined) out.screenshots = normalizeScreenshots(data.screenshots);
+    if (data.vodUrl !== undefined) out.vodUrl = normalizeUrl(data.vodUrl, 'VOD');
+    if (data.streamUrl !== undefined) out.streamUrl = normalizeUrl(data.streamUrl, 'stream');
+    if (data.mvpUserId !== undefined) {
+      if (data.mvpUserId) {
+        if (typeof data.mvpUserId !== 'string')
+          throw new BadRequestException('mvpUserId invalide.');
+        await this.assertUsersExist([data.mvpUserId]);
+        out.mvpUserId = data.mvpUserId;
+      } else out.mvpUserId = null;
+    }
+    return out;
+  }
+
+  private async assertUsersExist(ids: string[]) {
+    const uniq = Array.from(new Set(ids));
+    const found = await this.prisma.user.findMany({
+      where: { id: { in: uniq } },
+      select: { id: true },
+    });
+    if (found.length !== uniq.length) throw new NotFoundException('Joueur introuvable.');
+  }
+
+  /** Mirror the match MVP onto the per-player stats rows (single MVP). */
+  private async syncMvpFlag(matchId: string, m: any, mvpUserId: string | null | undefined) {
+    if (mvpUserId === undefined) return;
+    await this.prisma.esportMatchPlayer.updateMany({
+      where: { matchId, isMvp: true, ...(mvpUserId ? { userId: { not: mvpUserId } } : {}) },
+      data: { isMvp: false },
+    });
+    if (mvpUserId)
+      await this.prisma.esportMatchPlayer.updateMany({
+        where: { matchId, userId: mvpUserId },
+        data: { isMvp: true },
+      });
+    const ids = await this.playerStats.participantIds(matchId);
+    if (ids.length) await this.playerStats.recomputeUsers(ids);
   }
 
   async deleteMatch(id: string, user?: any) {
@@ -674,6 +967,10 @@ export class EsportService {
         update: { ...e },
       });
     }
+    // Keep the match-level MVP in sync with the per-player flag.
+    const mvp = entries.find((e) => e.isMvp)?.userId ?? null;
+    if (mvp || (m.mvpUserId && !keep.has(m.mvpUserId)))
+      await this.prisma.esportMatch.update({ where: { id: matchId }, data: { mvpUserId: mvp } });
     await this.playerStats.recomputeUsers([...previous, ...userIds]);
     void this.gamification?.syncMatch(matchId);
     return this.getMatchPlayers(matchId);
@@ -684,6 +981,8 @@ export class EsportService {
     if (!m) throw new NotFoundException('Match introuvable.');
     await this.assertMatchManager(m, user);
     await this.prisma.esportMatchPlayer.deleteMany({ where: { matchId, userId } });
+    if (m.mvpUserId === userId)
+      await this.prisma.esportMatch.update({ where: { id: matchId }, data: { mvpUserId: null } });
     await this.playerStats.recomputeUsers([userId]);
     return this.getMatchPlayers(matchId);
   }
