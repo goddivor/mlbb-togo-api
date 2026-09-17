@@ -8,3 +8,8 @@ db.User.createIndex(
   { unique: true, name: 'User_mlbbRoleId_partial', partialFilterExpression: { mlbbRoleId: { $type: 'number' } } },
 );
 print('Index partiels User (googleId, mlbbRoleId) en place.');
+db.EsportSeason.createIndex(
+  { slug: 1 },
+  { unique: true, name: 'EsportSeason_slug_partial', partialFilterExpression: { slug: { $type: 'string' } } },
+);
+print('Index partiel EsportSeason (slug) en place.');

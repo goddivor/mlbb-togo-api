@@ -13,6 +13,8 @@ import {
 import { EsportService } from './esport.service';
 import { EsportStatsService } from './esport-stats.service';
 import { EsportStaffService } from './esport-staff.service';
+import { EsportSeasonsService } from './esport-seasons.service';
+import { CloseSeasonDto, CreateSeasonDto, UpdateSeasonDto } from './dto/season.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -24,6 +26,7 @@ export class EsportController {
     private readonly esport: EsportService,
     private readonly stats: EsportStatsService,
     private readonly staff: EsportStaffService,
+    private readonly seasons: EsportSeasonsService,
   ) {}
 
   // ----- Public -----
@@ -60,8 +63,9 @@ export class EsportController {
     @Param('id') id: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('seasonId') seasonId?: string,
   ) {
-    return this.stats.getTeamHistory(id, Number(page) || 1, Number(limit) || 10);
+    return this.stats.getTeamHistory(id, Number(page) || 1, Number(limit) || 10, seasonId);
   }
 
   @Get('teams/:id/schedule')
@@ -99,14 +103,21 @@ export class EsportController {
     return this.esport.getMtl();
   }
 
+  // ----- Public: seasons (lifecycle, theme, frozen summary) -----
+
   @Get('seasons')
-  getSeasons() {
-    return this.esport.listSeasons();
+  getSeasons(@Query('status') status?: string) {
+    return this.seasons.list(status);
+  }
+
+  @Get('seasons/current')
+  getCurrentSeason() {
+    return this.seasons.current();
   }
 
   @Get('seasons/:id')
   getSeason(@Param('id') id: string) {
-    return this.esport.getSeason(id);
+    return this.seasons.get(id);
   }
 
   @Get('matches')
@@ -273,22 +284,58 @@ export class EsportController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Post('seasons')
-  createSeason(@Body() body: any) {
-    return this.esport.createSeason(body);
+  createSeason(@Body() body: CreateSeasonDto) {
+    return this.seasons.create(body);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Patch('seasons/:id')
-  updateSeason(@Param('id') id: string, @Body() body: any) {
-    return this.esport.updateSeason(id, body);
+  updateSeason(@Param('id') id: string, @Body() body: UpdateSeasonDto) {
+    return this.seasons.update(id, body);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Delete('seasons/:id')
   deleteSeason(@Param('id') id: string) {
-    return this.esport.deleteSeason(id);
+    return this.seasons.remove(id);
+  }
+
+  // Lifecycle: upcoming -> active -> playoffs -> closed (-> reopen).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons/:id/activate')
+  activateSeason(@Param('id') id: string) {
+    return this.seasons.activate(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons/:id/playoffs')
+  startSeasonPlayoffs(@Param('id') id: string) {
+    return this.seasons.startPlayoffs(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('seasons/:id/summary-preview')
+  previewSeasonSummary(@Param('id') id: string) {
+    return this.seasons.previewSummary(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons/:id/close')
+  closeSeason(@Param('id') id: string, @Body() body: CloseSeasonDto) {
+    return this.seasons.close(id, body ?? {});
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons/:id/reopen')
+  reopenSeason(@Param('id') id: string) {
+    return this.seasons.reopen(id);
   }
 
   // ----- Matches (admin, or captain for friendly/training) -----
