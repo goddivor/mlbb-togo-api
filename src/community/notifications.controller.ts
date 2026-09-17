@@ -1,16 +1,20 @@
-import { Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
 import { CommunityService } from './community.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { NotificationsQueryDto } from './dto/notifications-query.dto';
 
+// Notifications are strictly personal: every route below reads the owner from
+// the JWT (never from the request) so one account can neither read nor mutate
+// another account's mailbox.
 @UseGuards(JwtAuthGuard)
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly community: CommunityService) {}
 
   @Get()
-  list(@CurrentUser() user: any) {
-    return this.community.listNotifications(user.id);
+  list(@CurrentUser() user: any, @Query() query: NotificationsQueryDto) {
+    return this.community.listNotifications(user.id, query);
   }
 
   @Get('unread-count')
@@ -19,8 +23,8 @@ export class NotificationsController {
   }
 
   @Patch('read-all')
-  readAll(@CurrentUser() user: any) {
-    return this.community.markAllRead(user.id);
+  readAll(@CurrentUser() user: any, @Query() query: NotificationsQueryDto) {
+    return this.community.markAllRead(user.id, query.type);
   }
 
   @Patch(':id/read')
