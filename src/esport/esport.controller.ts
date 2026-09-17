@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -73,6 +74,11 @@ export class EsportController {
   @Get('matches/:id')
   getMatch(@Param('id') id: string) {
     return this.esport.getMatch(id);
+  }
+
+  @Get('matches/:id/players')
+  getMatchPlayers(@Param('id') id: string) {
+    return this.esport.getMatchPlayers(id);
   }
 
   // ----- Admin: organization -----
@@ -215,6 +221,24 @@ export class EsportController {
   @Patch('matches/:id')
   updateMatch(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
     return this.esport.updateMatch(id, body, user);
+  }
+
+  // Per-player stats of a match: full replace of the roster (admin, or
+  // captain for friendly/training).
+  @UseGuards(JwtAuthGuard)
+  @Put('matches/:id/players')
+  setMatchPlayers(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.setMatchPlayers(id, body?.players ?? body, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('matches/:id/players/:userId')
+  removeMatchPlayer(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.esport.removeMatchPlayer(id, userId, user);
   }
 
   @UseGuards(JwtAuthGuard)

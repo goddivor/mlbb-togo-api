@@ -315,6 +315,7 @@ export class UsersService {
       }),
       this.prisma.notification.deleteMany({ where: { userId: id } }),
       this.prisma.esportTeamMember.deleteMany({ where: { userId: id } }),
+      this.prisma.esportMatchPlayer.deleteMany({ where: { userId: id } }),
       this.prisma.recruitmentApplication.deleteMany({ where: { userId: id } }),
     ]);
     await this.prisma.user.delete({ where: { id } });
