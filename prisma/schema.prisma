@@ -102,8 +102,27 @@ model Post {
   views      Int       @default(0)
   isPinned   Boolean   @default(false)
   comments   Comment[]
+  // Communication feed (issue #49): share counter, rich content and sponsoring.
+  shares        Int        @default(0)
+  contentFormat String     @default("text")
+  images        String     @default("[]")
+  isSponsored   Boolean    @default(false)
+  sponsorId     String?    @db.ObjectId
+  postLikes     PostLike[]
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+}
+
+// One row per (post, user) like so the like action is an idempotent toggle.
+// `Post.likes` is kept in sync as a denormalized counter.
+model PostLike {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  postId    String   @db.ObjectId
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String   @db.ObjectId
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
 }
 
 model Comment {
