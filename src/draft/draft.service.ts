@@ -52,6 +52,7 @@ export class DraftService {
       registrationClosesAt: t.registrationClosesAt,
       secondPhaseOpen: t.secondPhaseOpen,
       secondPhaseClosesAt: t.secondPhaseClosesAt,
+      city: t.city ?? null,
       createdAt: t.createdAt,
       ...extra,
     };
@@ -227,6 +228,7 @@ export class DraftService {
         teamSize,
         roles: toJson(roles),
         createdById: adminId,
+        city: (dto.city || '').trim() || null,
       },
     });
     return this.serializeTournament(created);
@@ -244,6 +246,7 @@ export class DraftService {
       data.registrationOpensAt = dto.registrationOpensAt ? new Date(dto.registrationOpensAt) : null;
     if (dto.registrationClosesAt !== undefined)
       data.registrationClosesAt = dto.registrationClosesAt ? new Date(dto.registrationClosesAt) : null;
+    if (dto.city !== undefined) data.city = String(dto.city).trim() || null;
     const updated = await this.prisma.draftTournament.update({ where: { id }, data });
     return this.serializeTournament(updated);
   }

@@ -39,4 +39,8 @@ export class CreateEventDto {
   @IsOptional()
   @IsBoolean()
   isPublic?: boolean;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
 }

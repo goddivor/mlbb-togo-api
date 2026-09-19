@@ -37,6 +37,7 @@ export class EventsService {
         participants: toJson(dto.participants ?? []),
         organizer: dto.organizer,
         ...(dto.isPublic !== undefined ? { isPublic: dto.isPublic } : {}),
+        city: dto.city?.trim() || null,
       },
     });
     return serialize(event);

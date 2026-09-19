@@ -56,4 +56,8 @@ export class UpdateTournamentDto {
   @IsOptional()
   @IsString()
   streamUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
 }

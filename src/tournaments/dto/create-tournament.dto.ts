@@ -60,4 +60,8 @@ export class CreateTournamentDto {
   @IsOptional()
   @IsString()
   streamUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
 }

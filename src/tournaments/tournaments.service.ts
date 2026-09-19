@@ -89,6 +89,7 @@ export class TournamentsService {
         rules: dto.rules,
         banner: dto.banner,
         streamUrl: dto.streamUrl,
+        city: dto.city?.trim() || null,
       },
     });
     return serialize(tournament);
@@ -112,6 +113,7 @@ export class TournamentsService {
     if (dto.rules !== undefined) data.rules = dto.rules;
     if (dto.banner !== undefined) data.banner = dto.banner;
     if (dto.streamUrl !== undefined) data.streamUrl = dto.streamUrl;
+    if (dto.city !== undefined) data.city = dto.city?.trim() || null;
 
     const tournament = await this.prisma.tournament.update({
       where: { id },

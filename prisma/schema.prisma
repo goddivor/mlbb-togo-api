@@ -153,6 +153,8 @@ model Tournament {
   brackets        String   @default("[]")
   streamUrl       String?
   mvpUserId       String?  @db.ObjectId
+  // Host city (Togo map, issue #70). Free text normalized by src/geo.
+  city            String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
@@ -168,6 +170,8 @@ model Event {
   participants String   @default("[]")
   organizer    String?
   isPublic     Boolean  @default(true)
+  // Host city (Togo map, issue #70).
+  city         String?
   createdAt    DateTime @default(now())
 }
 
@@ -365,6 +369,8 @@ model EsportTeam {
   staff        EsportTeamStaff[]
   // JSON array of manual honours (titles/placements) edited by the admin.
   honours      String?
+  // Home city (Togo map, issue #70).
+  city         String?
   sort         Int                @default(0)
   foundedAt    DateTime           @default(now())
   createdAt    DateTime           @default(now())
@@ -757,6 +763,8 @@ model DraftTournament {
   secondPhaseOpen      Boolean   @default(false)
   secondPhaseClosesAt  DateTime?
   createdById          String?   @db.ObjectId
+  // Host city (Togo map, issue #70).
+  city                 String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 }

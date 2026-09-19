@@ -23,6 +23,11 @@ export class CreateDraftTournamentDto {
   @IsArray()
   @IsString({ each: true })
   roles?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  city?: string;
 }
 
 export class UpdateDraftTournamentDto {
@@ -48,6 +53,11 @@ export class UpdateDraftTournamentDto {
   @IsOptional()
   @IsString()
   registrationClosesAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  city?: string;
 }
 
 export class RegisterDto {
