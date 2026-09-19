@@ -177,6 +177,8 @@ describe('EsportSeasonsService', () => {
       },
       esportMatch: { findMany: jest.fn(() => Promise.resolve(matches)) },
       esportTeam: { findMany: jest.fn(() => Promise.resolve(teams)) },
+      seasonAward: { findMany: jest.fn(() => Promise.resolve([])) },
+      user: { findMany: jest.fn(() => Promise.resolve([])) },
     };
     service = new EsportSeasonsService(prisma as unknown as PrismaService);
   });

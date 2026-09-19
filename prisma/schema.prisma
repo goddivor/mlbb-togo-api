@@ -435,6 +435,26 @@ model SponsorshipRequest {
   updatedAt   DateTime @updatedAt
 }
 
+// Season distinctions (#46): MVP, best player per lane and custom awards.
+// The fixed categories are unique per season (partial index, see
+// prisma/mongo-indexes.js); `criteria` is a JSON snapshot of the stats used.
+model SeasonAward {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  seasonId    String   @db.ObjectId
+  category    String   // mvp | best_gold | best_mid | best_jungle | best_roam | best_exp | custom
+  title       String?  // label of a custom award
+  userId      String?  @db.ObjectId
+  teamId      String?  @db.ObjectId
+  description String?
+  imageUrl    String?
+  criteria    String?  // JSON: stats snapshot (games, kda, mvpCount, ...)
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([seasonId])
+}
+
 // Non-playing staff attached to a team (coach, manager, analyst...).
 // `userId` optionally links the staff entry to a platform account.
 model EsportTeamStaff {
@@ -476,6 +496,8 @@ model EsportSeason {
   color             String?
   summary           String?   // JSON snapshot frozen at closing
   settings          String?   // JSON: standings settings (points, qualifyTop)
+  // JSON: manual podium overrides { regular: [{placement, teamId}] | null, playoffs: [...] | null } (#46)
+  podiums           String?
   isActive          Boolean   @default(false)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt

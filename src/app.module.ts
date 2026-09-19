@@ -33,6 +33,7 @@ import { AiModule } from './ai/ai.module';
 import { LeagueStatsModule } from './league-stats/league-stats.module';
 import { StandingsModule } from './standings/standings.module';
 import { SponsorsModule } from './sponsors/sponsors.module';
+import { AwardsModule } from './awards/awards.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { SponsorsModule } from './sponsors/sponsors.module';
     LeagueStatsModule,
     StandingsModule,
     SponsorsModule,
+    AwardsModule,
   ],
 })
 export class AppModule {}
