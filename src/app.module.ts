@@ -17,6 +17,10 @@ import { CommunityModule } from './community/community.module';
 import { FriendsModule } from './friends/friends.module';
 import { RecruitmentModule } from './recruitment/recruitment.module';
 import { LanesModule } from './lanes/lanes.module';
+import { ItemsModule } from './items/items.module';
+import { EmblemsModule } from './emblems/emblems.module';
+import { BattleSpellsModule } from './battle-spells/battle-spells.module';
+import { BuildsModule } from './builds/builds.module';
 import { GqlModule } from './graphql/gql.module';
 import { PushModule } from './push/push.module';
 import { StreamModule } from './stream/stream.module';
@@ -49,6 +53,10 @@ import { StandingsModule } from './standings/standings.module';
     FriendsModule,
     RecruitmentModule,
     LanesModule,
+    ItemsModule,
+    EmblemsModule,
+    BattleSpellsModule,
+    BuildsModule,
     GqlModule,
     PushModule,
     StreamModule,
