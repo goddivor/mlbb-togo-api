@@ -12,8 +12,16 @@ import {
   DEFAULT_NOTIFICATIONS_LIMIT,
   NotificationsQueryDto,
 } from './dto/notifications-query.dto';
+import { ROOM_KINDS } from './rooms.util';
 
 const REQUEST_STATUS = ['pending', 'in_review', 'approved', 'rejected'];
+
+/**
+ * Prisma filter for a message that has not been read yet. On MongoDB
+ * `readAt: null` only matches an explicit null, not a missing field (which is
+ * how `message.create` stores an unset optional), so both cases are covered.
+ */
+export const UNREAD_MESSAGE = { OR: [{ readAt: null }, { readAt: { isSet: false } }] };
 
 // Maps a notification type to the preference category the user can toggle
 // in their settings. Types without an entry are always delivered.
@@ -21,6 +29,7 @@ const NOTIF_CATEGORY: Record<string, string> = {
   friend_request: 'friends',
   friend_accept: 'friends',
   message: 'messages',
+  mention: 'messages',
   team_request: 'teams',
   request_decision: 'teams',
   recruitment_application: 'teams',
@@ -326,8 +335,13 @@ export class CommunityService {
   }
 
   async listThreads(userId: string) {
+    // Group rooms (team / tournament) live in the same collection but are
+    // listed by RoomsService; keep this list to 1-1 conversations only.
     const threads = await this.prisma.messageThread.findMany({
-      where: { participantIds: { has: userId } },
+      where: {
+        participantIds: { has: userId },
+        NOT: { kind: { in: [...ROOM_KINDS] } },
+      },
       orderBy: { lastMessageAt: 'desc' },
     });
     const otherIds = threads.map(
@@ -337,15 +351,21 @@ export class CommunityService {
     const result = [];
     for (const th of threads) {
       const otherId = th.participantIds.find((p) => p !== userId);
-      const last = await this.prisma.message.findFirst({
-        where: { threadId: th.id },
-        orderBy: { createdAt: 'desc' },
-      });
+      const [last, unread] = await Promise.all([
+        this.prisma.message.findFirst({
+          where: { threadId: th.id },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.message.count({
+          where: { threadId: th.id, senderId: { not: userId }, ...UNREAD_MESSAGE },
+        }),
+      ]);
       result.push({
         id: th.id,
         subject: th.subject,
         requestId: th.requestId,
         lastMessageAt: th.lastMessageAt,
+        unread,
         other: otherId ? pmap.get(otherId) ?? null : null,
         lastMessage: last ? { body: last.body, senderId: last.senderId, createdAt: last.createdAt } : null,
       });
@@ -391,7 +411,7 @@ export class CommunityService {
       throw new ForbiddenException('Accès refusé à cette conversation.');
     const readAt = new Date();
     const res = await this.prisma.message.updateMany({
-      where: { threadId, senderId: { not: userId }, readAt: null },
+      where: { threadId, senderId: { not: userId }, ...UNREAD_MESSAGE },
       data: { readAt },
     });
     if (res.count > 0) {

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CommunityService } from './community.service';
+import { RoomsService } from './rooms.service';
 import { ChatGateway } from './chat.gateway';
 import { NotificationsController } from './notifications.controller';
 import { TeamRequestsController } from './team-requests.controller';
@@ -23,7 +24,7 @@ import { PushModule } from '../push/push.module';
     TeamRequestsController,
     MessagesController,
   ],
-  providers: [CommunityService, ChatGateway],
-  exports: [CommunityService],
+  providers: [CommunityService, RoomsService, ChatGateway],
+  exports: [CommunityService, RoomsService],
 })
 export class CommunityModule {}
