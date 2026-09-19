@@ -629,9 +629,26 @@ model MessageThread {
   subject        String?
   requestId      String?  @db.ObjectId
   participantIds String[]
+  // Group rooms: "direct" (1-1, participantIds) | "team" (esport roster) |
+  // "tournament" (registered teams / draft registrations) | "draft_team".
+  // Membership of group kinds is derived from the scope, never stored.
+  kind           String   @default("direct")
+  scopeId        String?
+  title          String?
+  avatar         String?
   lastMessageAt  DateTime @default(now())
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+}
+
+// Per-user read cursor for group rooms (Message.readAt only fits 1-1 chats).
+model ThreadRead {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  threadId   String   @db.ObjectId
+  userId     String   @db.ObjectId
+  lastReadAt DateTime @default(now())
+
+  @@unique([threadId, userId])
 }
 
 model Message {

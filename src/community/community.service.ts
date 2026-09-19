@@ -12,6 +12,7 @@ import {
   DEFAULT_NOTIFICATIONS_LIMIT,
   NotificationsQueryDto,
 } from './dto/notifications-query.dto';
+import { ROOM_KINDS } from './rooms.util';
 
 const REQUEST_STATUS = ['pending', 'in_review', 'approved', 'rejected'];
 
@@ -21,6 +22,7 @@ const NOTIF_CATEGORY: Record<string, string> = {
   friend_request: 'friends',
   friend_accept: 'friends',
   message: 'messages',
+  mention: 'messages',
   team_request: 'teams',
   request_decision: 'teams',
   recruitment_application: 'teams',
@@ -326,8 +328,13 @@ export class CommunityService {
   }
 
   async listThreads(userId: string) {
+    // Group rooms (team / tournament) live in the same collection but are
+    // listed by RoomsService; keep this list to 1-1 conversations only.
     const threads = await this.prisma.messageThread.findMany({
-      where: { participantIds: { has: userId } },
+      where: {
+        participantIds: { has: userId },
+        NOT: { kind: { in: [...ROOM_KINDS] } },
+      },
       orderBy: { lastMessageAt: 'desc' },
     });
     const otherIds = threads.map(
@@ -337,15 +344,21 @@ export class CommunityService {
     const result = [];
     for (const th of threads) {
       const otherId = th.participantIds.find((p) => p !== userId);
-      const last = await this.prisma.message.findFirst({
-        where: { threadId: th.id },
-        orderBy: { createdAt: 'desc' },
-      });
+      const [last, unread] = await Promise.all([
+        this.prisma.message.findFirst({
+          where: { threadId: th.id },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.message.count({
+          where: { threadId: th.id, senderId: { not: userId }, readAt: null },
+        }),
+      ]);
       result.push({
         id: th.id,
         subject: th.subject,
         requestId: th.requestId,
         lastMessageAt: th.lastMessageAt,
+        unread,
         other: otherId ? pmap.get(otherId) ?? null : null,
         lastMessage: last ? { body: last.body, senderId: last.senderId, createdAt: last.createdAt } : null,
       });
