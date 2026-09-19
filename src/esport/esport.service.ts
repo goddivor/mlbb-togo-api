@@ -6,6 +6,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { normalizeSponsorInput, serializeSponsor } from '../sponsors/sponsors.logic';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 import { PlayerStatsService } from '../stats/player-stats.service';
@@ -139,7 +140,8 @@ export class EsportService {
   }
 
   async getSponsors() {
-    return this.prisma.sponsor.findMany({ orderBy: { sort: 'asc' } });
+    const rows = await this.prisma.sponsor.findMany({ orderBy: { sort: 'asc' } });
+    return rows.map(serializeSponsor);
   }
 
   /** Public target figures (About page), defaults when no organisation exists. */
@@ -374,30 +376,28 @@ export class EsportService {
   // ----- Admin: sponsors -----
 
   async createSponsor(data: any) {
-    if (!data?.logo)
-      throw new BadRequestException('Le logo du sponsor est requis.');
-    return this.prisma.sponsor.create({
+    const input = normalizeSponsorInput(data, false);
+    const row = await this.prisma.sponsor.create({
       data: {
-        name: data.name ?? null,
-        logo: data.logo,
-        url: data.url ?? null,
-        sort: typeof data.sort === 'number' ? data.sort : 0,
+        name: input.name ?? null,
+        logo: input.logo!,
+        url: input.url ?? null,
+        sort: input.sort ?? 0,
+        tier: input.tier ?? null,
+        description: input.description ?? null,
+        seasonIds: input.seasonIds ?? [],
+        isActive: input.isActive ?? true,
       },
     });
+    return serializeSponsor(row);
   }
 
   async updateSponsor(id: string, data: any) {
     const sponsor = await this.prisma.sponsor.findUnique({ where: { id } });
     if (!sponsor) throw new NotFoundException('Sponsor introuvable.');
-    return this.prisma.sponsor.update({
-      where: { id },
-      data: {
-        name: data.name === undefined ? undefined : data.name,
-        logo: data.logo ?? undefined,
-        url: data.url === undefined ? undefined : data.url,
-        sort: typeof data.sort === 'number' ? data.sort : undefined,
-      },
-    });
+    const input = normalizeSponsorInput(data, true);
+    const row = await this.prisma.sponsor.update({ where: { id }, data: input });
+    return serializeSponsor(row);
   }
 
   async deleteSponsor(id: string) {
