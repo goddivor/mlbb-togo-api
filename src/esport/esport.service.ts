@@ -806,7 +806,7 @@ export class EsportService {
     if (data.games !== undefined) {
       out.games = normalizeGames(data.games, m, format);
       const mvpIds = out.games.map((g) => g.mvpUserId).filter(Boolean) as string[];
-      if (mvpIds.length) await this.assertUsersExist(mvpIds);
+      if (mvpIds.length) await this.assertMatchMvpCandidates(m, mvpIds);
     } else if (out.format !== undefined) {
       // Shrinking the format must not leave more games than allowed.
       const stored = parseGames(m.games);
@@ -819,11 +819,34 @@ export class EsportService {
       if (data.mvpUserId) {
         if (typeof data.mvpUserId !== 'string')
           throw new BadRequestException('mvpUserId invalide.');
-        await this.assertUsersExist([data.mvpUserId]);
+        await this.assertMatchMvpCandidates(m, [data.mvpUserId]);
         out.mvpUserId = data.mvpUserId;
       } else out.mvpUserId = null;
     }
     return out;
+  }
+
+  /**
+   * An MVP (match or game) must be a player of the match: a member of one of
+   * the two rosters, or someone already listed in the match player stats
+   * (players who left the team since keep their record).
+   */
+  private async assertMatchMvpCandidates(m: any, ids: string[]) {
+    const uniq = Array.from(new Set(ids));
+    await this.assertUsersExist(uniq);
+    const [members, stats] = await Promise.all([
+      this.prisma.esportTeamMember.findMany({
+        where: { teamId: { in: [m.teamAId, m.teamBId] }, userId: { in: uniq } },
+        select: { userId: true },
+      }),
+      this.prisma.esportMatchPlayer.findMany({
+        where: { matchId: m.id, userId: { in: uniq } },
+        select: { userId: true },
+      }),
+    ]);
+    const allowed = new Set([...members, ...stats].map((r) => r.userId));
+    if (uniq.some((id) => !allowed.has(id)))
+      throw new BadRequestException("Le MVP doit être un joueur de l'une des deux équipes.");
   }
 
   private async assertUsersExist(ids: string[]) {
