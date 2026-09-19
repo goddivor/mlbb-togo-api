@@ -296,7 +296,7 @@ export class AwardsService {
     const [awards, matches, sponsors] = await Promise.all([
       this.awardRows(season.id),
       this.seasonMatches(season.id),
-      this.prisma.sponsor.findMany({ where: { seasonIds: { has: season.id } }, orderBy: { sort: 'asc' } }),
+      this.prisma.sponsor.findMany({ where: { seasonIds: { has: season.id }, isActive: true }, orderBy: { sort: 'asc' } }),
     ]);
     const podiums = await this.podiumsOf(season, matches);
     const [users, teams] = await Promise.all([
@@ -322,7 +322,7 @@ export class AwardsService {
     const [rows, awards, sponsors] = await Promise.all([
       this.prisma.esportSeason.findMany({ where: { id: { in: ids } } }) as Promise<SeasonRow[]>,
       this.prisma.seasonAward.findMany({ where: { seasonId: { in: ids } } }) as Promise<AwardRecord[]>,
-      this.prisma.sponsor.findMany({ where: { seasonIds: { hasSome: ids } }, orderBy: { sort: 'asc' } }),
+      this.prisma.sponsor.findMany({ where: { seasonIds: { hasSome: ids }, isActive: true }, orderBy: { sort: 'asc' } }),
     ]);
     const byId = new Map(rows.map((r) => [r.id, r]));
     const [users, teams] = await Promise.all([
