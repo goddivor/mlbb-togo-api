@@ -13,6 +13,15 @@ import {
   SeasonStatus,
   UpdateSeasonDto,
 } from './dto/season.dto';
+import {
+  AwardRecord,
+  compareAwards,
+  decoratePodium,
+  derivePlayoffsPodium,
+  parsePodiums,
+  serializeAward,
+} from '../awards/awards.logic';
+import { serializeUserCard } from '../users/users.service';
 
 /**
  * League seasons: theme, lifecycle (upcoming -> active -> playoffs -> closed)
@@ -71,10 +80,19 @@ export type SeasonSummary = {
   matches: { total: number; completed: number };
   standings: SummaryStanding[];
   podium: { placement: 1 | 2 | 3; teamId: string; team: TeamRef }[];
+  /** Playoffs podium (#46): manual override or derived from the playoff matches. */
+  playoffsPodium?: { placement: 1 | 2 | 3; teamId: string; team: TeamRef }[];
   champion: { teamId: string; team: TeamRef } | null;
-  /** Reserved for #46 (season awards) and #45 (player stats). */
+  /** Season awards (#46, serialized) and player stats (#45). */
   awards: any[];
   players: any[];
+};
+
+/** Optional extras merged into the frozen summary (awards + podium overrides). */
+export type SummaryExtras = {
+  awards?: any[];
+  regularPodium?: { placement: 1 | 2 | 3; teamId: string; team: TeamRef }[] | null;
+  playoffsPodium?: { placement: 1 | 2 | 3; teamId: string; team: TeamRef }[] | null;
 };
 
 /** Statuses during which the season is "live" (mirrors the legacy isActive flag). */
@@ -153,6 +171,7 @@ export function buildSeasonSummary(
   matches: MatchLike[],
   teams: Map<string, TeamRef>,
   now = new Date(),
+  extras: SummaryExtras = {},
 ): SeasonSummary {
   const completed = matches.filter((m) => m.status === 'completed');
   const ref = (id: string): TeamRef => teams.get(id) ?? { id, name: '?', image: null };
@@ -169,11 +188,14 @@ export function buildSeasonSummary(
     scoreAgainst: row.scoreAgainst,
     scoreDiff: row.scoreDiff,
   }));
-  const podium = standings.slice(0, 3).map((r) => ({
-    placement: r.rank as 1 | 2 | 3,
-    teamId: r.teamId,
-    team: r.team,
-  }));
+  const podium =
+    extras.regularPodium?.length
+      ? extras.regularPodium
+      : standings.slice(0, 3).map((r) => ({
+          placement: r.rank as 1 | 2 | 3,
+          teamId: r.teamId,
+          team: r.team,
+        }));
   return {
     version: 1,
     frozenAt: now.toISOString(),
@@ -185,8 +207,9 @@ export function buildSeasonSummary(
     matches: { total: matches.length, completed: completed.length },
     standings,
     podium,
+    playoffsPodium: extras.playoffsPodium ?? [],
     champion: podium[0] ? { teamId: podium[0].teamId, team: podium[0].team } : null,
-    awards: [],
+    awards: extras.awards ?? [],
     players: [],
   };
 }
@@ -422,14 +445,40 @@ export class EsportSeasonsService {
     const matches = (await this.prisma.esportMatch.findMany({
       where: { seasonId: season.id },
     })) as MatchLike[];
-    const ids = Array.from(new Set(matches.flatMap((m) => [m.teamAId, m.teamBId])));
+    // Awards and manual podiums (#46) are frozen alongside the standings.
+    const awards = ((await this.prisma.seasonAward.findMany({ where: { seasonId: season.id } })) as AwardRecord[]).sort(
+      compareAwards,
+    );
+    const podiums = parsePodiums((season as SeasonRecord & { podiums?: string | null }).podiums);
+    const playoffs = podiums.playoffs ?? derivePlayoffsPodium(matches as any, season);
+    const ids = Array.from(
+      new Set([
+        ...matches.flatMap((m) => [m.teamAId, m.teamBId]),
+        ...awards.map((a) => a.teamId).filter(Boolean),
+        ...(podiums.regular ?? []).map((p) => p.teamId),
+        ...(playoffs ?? []).map((p) => p.teamId),
+      ] as string[]),
+    );
     const teams = ids.length
       ? await this.prisma.esportTeam.findMany({
           where: { id: { in: ids } },
           select: { id: true, name: true, image: true },
         })
       : [];
-    return buildSeasonSummary(season, matches, new Map(teams.map((t) => [t.id, t])), now);
+    const teamMap = new Map(teams.map((t) => [t.id, t]));
+    const userIds = Array.from(new Set(awards.map((a) => a.userId).filter(Boolean) as string[]));
+    const users = userIds.length ? await this.prisma.user.findMany({ where: { id: { in: userIds } } }) : [];
+    const userMap = new Map(
+      users.map((u) => {
+        const card = serializeUserCard(u);
+        return [u.id, { id: u.id, username: card.username, displayName: card.displayName, avatar: card.avatar ?? null }];
+      }),
+    );
+    return buildSeasonSummary(season, matches, teamMap, now, {
+      awards: awards.map((a) => serializeAward(a, userMap, teamMap)),
+      regularPodium: podiums.regular ? decoratePodium(podiums.regular, teamMap) : null,
+      playoffsPodium: playoffs ? decoratePodium(playoffs, teamMap) : null,
+    });
   }
 
   // ----- Helpers -----
