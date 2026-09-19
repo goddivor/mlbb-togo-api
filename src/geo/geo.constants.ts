@@ -43,7 +43,7 @@ export const TOGO_CITIES: TogoCity[] = [
     aliases: ['agoe', 'agoe-nyive', 'agoe nyive', 'baguida', 'adidogome', 'be-kpota', 'tokoin', 'grand lome', 'lome togo'],
   },
   { id: 'tsevie', name: 'Tsévié', region: 'maritime', lat: 6.4261, lng: 1.2133 },
-  { id: 'aneho', name: 'Aného', region: 'maritime', lat: 6.2278, lng: 1.5919, aliases: ['anecho'] },
+  { id: 'aneho', name: 'Aného', region: 'maritime', lat: 6.2333, lng: 1.6, aliases: ['anecho'] },
   { id: 'vogan', name: 'Vogan', region: 'maritime', lat: 6.3333, lng: 1.5333 },
   { id: 'tabligbo', name: 'Tabligbo', region: 'maritime', lat: 6.5833, lng: 1.5 },
   { id: 'keve', name: 'Kévé', region: 'maritime', lat: 6.4333, lng: 0.9167 },
@@ -56,8 +56,8 @@ export const TOGO_CITIES: TogoCity[] = [
   { id: 'badou', name: 'Badou', region: 'plateaux', lat: 7.5833, lng: 0.6 },
   { id: 'anie', name: 'Anié', region: 'plateaux', lat: 7.75, lng: 1.2 },
   { id: 'amlame', name: 'Amlamé', region: 'plateaux', lat: 7.4667, lng: 0.9 },
-  { id: 'danyi', name: 'Danyi', region: 'plateaux', lat: 7.1833, lng: 0.6167, aliases: ['danyi-apeyeme', 'apeyeme'] },
-  { id: 'tohoun', name: 'Tohoun', region: 'plateaux', lat: 7.0, lng: 1.6667 },
+  { id: 'danyi', name: 'Danyi', region: 'plateaux', lat: 7.18, lng: 0.63, aliases: ['danyi-apeyeme', 'apeyeme'] },
+  { id: 'tohoun', name: 'Tohoun', region: 'plateaux', lat: 7.0, lng: 1.62 },
   { id: 'kougnohou', name: 'Kougnohou', region: 'plateaux', lat: 7.7, lng: 0.8167 },
   // Centrale
   { id: 'sokode', name: 'Sokodé', region: 'centrale', lat: 8.9833, lng: 1.1333 },
@@ -74,7 +74,7 @@ export const TOGO_CITIES: TogoCity[] = [
   { id: 'ketao', name: 'Kétao', region: 'kara', lat: 9.6, lng: 1.35 },
   { id: 'guerin-kouka', name: 'Guérin-Kouka', region: 'kara', lat: 9.6833, lng: 0.6, aliases: ['guerin kouka'] },
   // Savanes
-  { id: 'dapaong', name: 'Dapaong', region: 'savanes', lat: 10.8667, lng: 0.2, aliases: ['dapaongo', 'dapango'] },
+  { id: 'dapaong', name: 'Dapaong', region: 'savanes', lat: 10.8626, lng: 0.2076, aliases: ['dapaongo', 'dapango'] },
   { id: 'mango', name: 'Mango', region: 'savanes', lat: 10.3667, lng: 0.4667, aliases: ['sansanne-mango', 'sansanne mango', 'sansanne'] },
   { id: 'cinkasse', name: 'Cinkassé', region: 'savanes', lat: 11.0167, lng: 0.0333, aliases: ['cinkasse', 'sinkasse'] },
   { id: 'tandjouare', name: 'Tandjouaré', region: 'savanes', lat: 10.7, lng: 0.15 },
@@ -84,7 +84,7 @@ export const TOGO_CITIES: TogoCity[] = [
 export function cityKey(raw: string): string {
   return raw
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
