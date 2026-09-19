@@ -27,6 +27,7 @@ import { GamificationModule } from './gamification/gamification.module';
 import { PickBanModule } from './pickban/pickban.module';
 import { AiModule } from './ai/ai.module';
 import { LeagueStatsModule } from './league-stats/league-stats.module';
+import { StandingsModule } from './standings/standings.module';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { LeagueStatsModule } from './league-stats/league-stats.module';
     PickBanModule,
     AiModule,
     LeagueStatsModule,
+    StandingsModule,
   ],
 })
 export class AppModule {}
