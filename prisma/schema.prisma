@@ -225,6 +225,59 @@ model Lane {
   updatedAt         DateTime @updatedAt
 }
 
+// ---- Game Items (edited by admin) ----
+model Item {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  icon        String?  // URL to item icon
+  type        String?  // e.g. "defense", "attack", "attack_speed", "mana", "cooldown"
+  gold        Int?     // cost in gold
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ---- Emblems (edited by admin) ----
+model Emblem {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  icon        String?  // URL to emblem icon
+  type        String?  // e.g. "support", "order", "chaos"
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ---- Battle Spells (edited by admin) ----
+model BattleSpell {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  icon        String?  // URL to battle spell icon
+  cooldown    String?  // e.g. "60s"
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ---- Hero Builds (recommended by admin per hero) ----
+model HeroBuild {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  heroId        String   @db.ObjectId
+  heroName      String   // denormalized for convenience (hero.name at creation time)
+  name          String?  // e.g. "Recommended", "Offlane", "Burst"
+  description   String?
+  itemIds       String[] // array of Item IDs in order
+  emblemId      String?  @db.ObjectId // single emblem per build
+  battleSpellId String?  @db.ObjectId // single battle spell per build
+  priority      Int      @default(0)  // higher = higher priority (displayed first)
+  sort          Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 model AdminLog {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   action    String

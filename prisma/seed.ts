@@ -339,6 +339,61 @@ const mockFormResponses: any[] = [
   { id: 'resp_3', formId: 'form_2', data: { 'Pseudo MLBB': 'NewPlayer123', 'ID MLBB': '987654321', 'Rang actuel': 'Epic', 'Rôle principal': 'Mage' }, submittedAt: '2024-03-23T09:00:00Z' },
 ];
 
+// ---- Game catalog reference data (official MLBB names) ----
+// Only names, categories and shop prices: no hero-specific recommendation is
+// seeded, builds are curated by admins from the catalog admin page.
+const GAME_ITEMS: Array<{ name: string; type: string; gold: number; sort: number }> = [
+  { name: 'Warrior Boots', type: 'movement', gold: 710, sort: 0 },
+  { name: 'Magic Shoes', type: 'movement', gold: 710, sort: 1 },
+  { name: 'Swift Boots', type: 'movement', gold: 710, sort: 2 },
+  { name: 'Tough Boots', type: 'movement', gold: 710, sort: 3 },
+  { name: 'Demon Boots', type: 'movement', gold: 710, sort: 4 },
+  { name: 'Blade of Despair', type: 'attack', gold: 2260, sort: 10 },
+  { name: 'Endless Battle', type: 'attack', gold: 2470, sort: 11 },
+  { name: "Berserker's Fury", type: 'attack', gold: 2570, sort: 12 },
+  { name: 'Malefic Roar', type: 'attack', gold: 2060, sort: 13 },
+  { name: 'Hunter Strike', type: 'attack', gold: 2010, sort: 14 },
+  { name: "Haas's Claws", type: 'attack', gold: 2050, sort: 15 },
+  { name: 'Windtalker', type: 'attack_speed', gold: 1850, sort: 16 },
+  { name: 'Corrosion Scythe', type: 'attack_speed', gold: 1920, sort: 17 },
+  { name: 'Blood Wings', type: 'magic', gold: 2800, sort: 20 },
+  { name: 'Holy Crystal', type: 'magic', gold: 2120, sort: 21 },
+  { name: 'Lightning Truncheon', type: 'magic', gold: 2250, sort: 22 },
+  { name: 'Genius Wand', type: 'magic', gold: 2000, sort: 23 },
+  { name: 'Divine Glaive', type: 'magic', gold: 2250, sort: 24 },
+  { name: 'Clock of Destiny', type: 'magic', gold: 2150, sort: 25 },
+  { name: 'Immortality', type: 'defense', gold: 2120, sort: 30 },
+  { name: 'Antique Cuirass', type: 'defense', gold: 1910, sort: 31 },
+  { name: "Athena's Shield", type: 'defense', gold: 2150, sort: 32 },
+  { name: 'Oracle', type: 'defense', gold: 2000, sort: 33 },
+  { name: 'Dominance Ice', type: 'defense', gold: 2010, sort: 34 },
+  { name: 'Blade Armor', type: 'defense', gold: 1800, sort: 35 },
+];
+
+const GAME_EMBLEMS: Array<{ name: string; type: string; sort: number }> = [
+  { name: 'Assassin Emblem', type: 'assassin', sort: 0 },
+  { name: 'Mage Emblem', type: 'mage', sort: 1 },
+  { name: 'Marksman Emblem', type: 'marksman', sort: 2 },
+  { name: 'Fighter Emblem', type: 'fighter', sort: 3 },
+  { name: 'Tank Emblem', type: 'tank', sort: 4 },
+  { name: 'Support Emblem', type: 'support', sort: 5 },
+  { name: 'Common Emblem', type: 'common', sort: 6 },
+];
+
+const GAME_BATTLE_SPELLS: Array<{ name: string; cooldown: string; sort: number }> = [
+  { name: 'Flicker', cooldown: '120s', sort: 0 },
+  { name: 'Retribution', cooldown: '35s', sort: 1 },
+  { name: 'Execute', cooldown: '90s', sort: 2 },
+  { name: 'Inspire', cooldown: '75s', sort: 3 },
+  { name: 'Sprint', cooldown: '100s', sort: 4 },
+  { name: 'Petrify', cooldown: '60s', sort: 5 },
+  { name: 'Flameshot', cooldown: '50s', sort: 6 },
+  { name: 'Aegis', cooldown: '60s', sort: 7 },
+  { name: 'Purify', cooldown: '90s', sort: 8 },
+  { name: 'Vengeance', cooldown: '75s', sort: 9 },
+  { name: 'Arrival', cooldown: '60s', sort: 10 },
+];
+
 async function main() {
   console.log('🌱 Démarrage du seed MLBB Togo...');
 
@@ -397,6 +452,33 @@ async function main() {
     });
   }
   console.log(`   - Héros          : ${(heroes as any[]).length}`);
+
+  // Game catalog (items / emblems / battle spells) used by the hero builds tab.
+  // Upserted by name so admin edits (icon, description) survive a re-seed.
+  for (const it of GAME_ITEMS) {
+    await prisma.item.upsert({
+      where: { name: it.name },
+      update: { type: it.type, gold: it.gold, sort: it.sort },
+      create: it,
+    });
+  }
+  for (const em of GAME_EMBLEMS) {
+    await prisma.emblem.upsert({
+      where: { name: em.name },
+      update: { type: em.type, sort: em.sort },
+      create: em,
+    });
+  }
+  for (const sp of GAME_BATTLE_SPELLS) {
+    await prisma.battleSpell.upsert({
+      where: { name: sp.name },
+      update: { cooldown: sp.cooldown, sort: sp.sort },
+      create: sp,
+    });
+  }
+  console.log(
+    `   - Catalogue jeu  : ${GAME_ITEMS.length} objets, ${GAME_EMBLEMS.length} emblèmes, ${GAME_BATTLE_SPELLS.length} sorts`,
+  );
 
   const eternum = await prisma.esport.create({
     data: {
