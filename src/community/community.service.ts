@@ -16,6 +16,13 @@ import { ROOM_KINDS } from './rooms.util';
 
 const REQUEST_STATUS = ['pending', 'in_review', 'approved', 'rejected'];
 
+/**
+ * Prisma filter for a message that has not been read yet. On MongoDB
+ * `readAt: null` only matches an explicit null, not a missing field (which is
+ * how `message.create` stores an unset optional), so both cases are covered.
+ */
+export const UNREAD_MESSAGE = { OR: [{ readAt: null }, { readAt: { isSet: false } }] };
+
 // Maps a notification type to the preference category the user can toggle
 // in their settings. Types without an entry are always delivered.
 const NOTIF_CATEGORY: Record<string, string> = {
@@ -350,7 +357,7 @@ export class CommunityService {
           orderBy: { createdAt: 'desc' },
         }),
         this.prisma.message.count({
-          where: { threadId: th.id, senderId: { not: userId }, readAt: null },
+          where: { threadId: th.id, senderId: { not: userId }, ...UNREAD_MESSAGE },
         }),
       ]);
       result.push({
@@ -404,7 +411,7 @@ export class CommunityService {
       throw new ForbiddenException('Accès refusé à cette conversation.');
     const readAt = new Date();
     const res = await this.prisma.message.updateMany({
-      where: { threadId, senderId: { not: userId }, readAt: null },
+      where: { threadId, senderId: { not: userId }, ...UNREAD_MESSAGE },
       data: { readAt },
     });
     if (res.count > 0) {

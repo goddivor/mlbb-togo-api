@@ -7,7 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 import { ChatGateway } from './chat.gateway';
-import { CommunityService } from './community.service';
+import { CommunityService, UNREAD_MESSAGE } from './community.service';
 import {
   isRoomKind,
   parseMentions,
@@ -476,7 +476,7 @@ export class RoomsService {
           where: {
             threadId: { in: directThreads.map((t) => t.id) },
             senderId: { not: userId },
-            readAt: null,
+            ...UNREAD_MESSAGE,
           },
         })
       : 0;
