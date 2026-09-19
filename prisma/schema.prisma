@@ -388,13 +388,51 @@ model EsportTeamMember {
   @@unique([teamId, userId])
 }
 
+// Partner / sponsor. `tier` ranks the partnership (title | gold | silver |
+// partner), `seasonIds` links it to the league seasons it sponsors (empty =
+// every season), `isActive` hides it from public pages without deleting it.
 model Sponsor {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  name      String?
-  logo      String
-  url       String?
-  sort      Int      @default(0)
-  createdAt DateTime @default(now())
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String?
+  logo        String
+  url         String?
+  sort        Int      @default(0)
+  tier        String?
+  description String?
+  seasonIds   String[] @default([])
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+// Sponsoring package shown on the public "Become a sponsor" page.
+// `benefits` is a JSON array of strings.
+model SponsorOffer {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  name       String
+  tier       String?
+  priceLabel String?
+  benefits   String   @default("[]")
+  highlight  Boolean  @default(false)
+  isActive   Boolean  @default(true)
+  sort       Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Partnership request sent from the public sponsoring form.
+// Lifecycle: new -> contacted -> accepted | declined.
+model SponsorshipRequest {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  company     String
+  contactName String
+  email       String
+  phone       String?
+  message     String
+  offerId     String?  @db.ObjectId
+  status      String   @default("new")
+  adminNote   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // Non-playing staff attached to a team (coach, manager, analyst...).

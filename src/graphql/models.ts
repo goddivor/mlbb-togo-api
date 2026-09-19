@@ -67,4 +67,6 @@ export class SponsorModel {
   @Field() logo: string;
   @Field({ nullable: true }) url?: string;
   @Field(() => Int) sort: number;
+  @Field({ nullable: true }) tier?: string;
+  @Field({ nullable: true }) description?: string;
 }

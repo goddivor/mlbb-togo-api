@@ -8,6 +8,7 @@ import {
   LaneModel,
   SponsorModel,
 } from './models';
+import { filterForSeason } from '../sponsors/sponsors.logic';
 
 // Catalog read resolver. All data comes from OUR database
 // (MLBB cache filled by the seed + admin refresh), which avoids
@@ -62,7 +63,8 @@ export class CatalogResolver {
 
   @Query(() => [SponsorModel])
   sponsors() {
-    return this.prisma.sponsor.findMany({ orderBy: { sort: 'asc' } });
+    // Public catalogue: active sponsors only, tiered order.
+    return this.prisma.sponsor.findMany().then((rows) => filterForSeason(rows, null));
   }
 
   @Query(() => [EsportTeamModel], { description: 'Équipes esport (filtre par type optionnel).' })

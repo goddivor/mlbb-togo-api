@@ -32,6 +32,7 @@ import { PickBanModule } from './pickban/pickban.module';
 import { AiModule } from './ai/ai.module';
 import { LeagueStatsModule } from './league-stats/league-stats.module';
 import { StandingsModule } from './standings/standings.module';
+import { SponsorsModule } from './sponsors/sponsors.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { StandingsModule } from './standings/standings.module';
     AiModule,
     LeagueStatsModule,
     StandingsModule,
+    SponsorsModule,
   ],
 })
 export class AppModule {}
