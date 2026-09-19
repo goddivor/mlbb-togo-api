@@ -125,8 +125,23 @@ export class EsportController {
     @Query('seasonId') seasonId?: string,
     @Query('teamId') teamId?: string,
     @Query('status') status?: string,
+    @Query('stage') stage?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.esport.listMatches({ seasonId, teamId, status });
+    return this.esport.listMatches({ seasonId, teamId, status, stage, from, to });
+  }
+
+  // Matches of a period grouped by day (calendar view).
+  @Get('matches/calendar')
+  getMatchesCalendar(
+    @Query('seasonId') seasonId?: string,
+    @Query('teamId') teamId?: string,
+    @Query('stage') stage?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.esport.matchesCalendar({ seasonId, teamId, stage, from, to });
   }
 
   @Get('matches/:id')
@@ -350,6 +365,13 @@ export class EsportController {
   @Patch('matches/:id/result')
   setMatchResult(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
     return this.esport.setMatchResult(id, body, user);
+  }
+
+  // Match sheet details: format, games, screenshots, VOD / stream, MVP.
+  @UseGuards(JwtAuthGuard)
+  @Patch('matches/:id/details')
+  setMatchDetails(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.setMatchDetails(id, body, user);
   }
 
   @UseGuards(JwtAuthGuard)
