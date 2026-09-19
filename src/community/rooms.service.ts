@@ -431,7 +431,13 @@ export class RoomsService {
           title: `${who} vous a mentionné dans « ${scope.title} »`,
           message: text.slice(0, 120),
           link: `/messages?room=${scope.kind}:${scope.scopeId}`,
-          data: { threadId: thread.id, kind: scope.kind, scopeId: scope.scopeId },
+          data: {
+            who,
+            room: scope.title,
+            threadId: thread.id,
+            kind: scope.kind,
+            scopeId: scope.scopeId,
+          },
         }),
       ),
     );
