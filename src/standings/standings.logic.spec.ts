@@ -186,20 +186,28 @@ describe('computeStandings', () => {
 });
 
 describe('frozen standings', () => {
-  it('keeps the frozen order / records and adds points + live extras', () => {
+  it('re-ranks the snapshot with the module tie-breakers and adds live extras', () => {
     const list = [match(A, B, 2, 0), match(A, B, 0, 2), match(A, B, 2, 1)];
     const computed = computeStandings(list, DEFAULT_SETTINGS, teams);
     const frozen = [
       { rank: 1, teamId: B, team: teams.get(B)!, played: 3, wins: 1, losses: 2, draws: 0, winRate: 33, scoreFor: 3, scoreAgainst: 4, scoreDiff: -1 },
       { rank: 2, teamId: A, team: teams.get(A)!, played: 3, wins: 2, losses: 1, draws: 0, winRate: 67, scoreFor: 4, scoreAgainst: 3, scoreDiff: 1 },
     ];
-    const rows = enrichFrozenRows(frozen, computed, { ...DEFAULT_SETTINGS, qualifyTop: 1 });
-    expect(rows.map((r) => r.teamId)).toEqual([B, A]);
-    expect(rows[0].points).toBe(3);
-    expect(rows[1].points).toBe(6);
-    expect(rows[1].streak).toEqual({ type: 'W', count: 1 });
+    const rows = enrichFrozenRows(frozen, computed, { ...DEFAULT_SETTINGS, qualifyTop: 1 }, list);
+
+    // The snapshot listed B first (it was ordered on wins); points rule first.
+    expect(rows.map((r) => r.teamId)).toEqual([A, B]);
+    expect(rows.map((r) => r.rank)).toEqual([1, 2]);
+    expect(rows.map((r) => r.snapshotRank)).toEqual([2, 1]);
+    expect(rows[0].points).toBe(6);
+    expect(rows[1].points).toBe(3);
+    expect(rows[0].streak).toEqual({ type: 'W', count: 1 });
     expect(rows[0].qualified).toBe(true);
     expect(rows[1].qualified).toBe(false);
+
+    // Records still come from the snapshot, not from a recomputation.
+    expect(rows[0].wins).toBe(2);
+    expect(rows[1].wins).toBe(1);
   });
 });
 

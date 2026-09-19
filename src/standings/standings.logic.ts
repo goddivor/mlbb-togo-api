@@ -56,6 +56,8 @@ export type StandingRow = {
   /** Rank change since N days ago (positive = climbed), null when unranked then. */
   delta: { d7: number | null; d30: number | null };
   qualified: boolean;
+  /** Position in a closed season's frozen snapshot, when the row comes from one. */
+  snapshotRank?: number;
 };
 
 export type H2HMatch = {
@@ -283,13 +285,14 @@ export function enrichFrozenRows(
   }[],
   computed: StandingRow[],
   settings: StandingsSettings,
+  matches: MatchLike[] = [],
 ): StandingRow[] {
   const byTeam = new Map(computed.map((r) => [r.teamId, r]));
-  return frozen.map((f, i) => {
+  const rows = frozen.map((f, i) => {
     const live = byTeam.get(f.teamId);
-    const rank = f.rank || i + 1;
     return {
-      rank,
+      /** Position in the snapshot, kept for reference (ordered on wins). */
+      snapshotRank: f.rank || i + 1,
       teamId: f.teamId,
       team: f.team,
       played: f.played,
@@ -305,9 +308,16 @@ export function enrichFrozenRows(
       form: live?.form ?? [],
       sos: live?.sos ?? null,
       delta: live?.delta ?? { d7: null, d30: null },
-      qualified: rank <= settings.qualifyTop,
+      rank: 0,
+      qualified: false,
     };
   });
+
+  // The snapshot was ordered on wins; re-apply the module's tie-breakers so the
+  // frozen table agrees with its own Pts column and qualification highlight.
+  return rows
+    .sort((a, b) => compareRows(a, b, matches))
+    .map((row, i) => ({ ...row, rank: i + 1, qualified: i + 1 <= settings.qualifyTop }));
 }
 
 /** Head-to-head record between two teams (chronological match list). */

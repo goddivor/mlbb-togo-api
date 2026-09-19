@@ -117,7 +117,7 @@ export class StandingsService {
     // match, hence the `all` scope) enriched with the computed extras.
     const summary = closed ? parseSummary(season.summary) : null;
     const frozen = !!summary?.standings && type === 'all';
-    const rows = frozen ? enrichFrozenRows(summary!.standings, computed, settings) : computed;
+    const rows = frozen ? enrichFrozenRows(summary!.standings, computed, settings, scoped) : computed;
 
     return {
       season: {
