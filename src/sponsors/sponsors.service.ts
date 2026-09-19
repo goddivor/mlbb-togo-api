@@ -8,6 +8,7 @@ import {
   SPONSOR_TIERS,
 } from './sponsors.constants';
 import {
+  cleanBenefits,
   filterForSeason,
   groupByTier,
   serializeOffer,
@@ -79,7 +80,7 @@ export class SponsorsService {
         name: dto.name.trim(),
         tier: dto.tier || null,
         priceLabel: dto.priceLabel?.trim() || null,
-        benefits: JSON.stringify((dto.benefits ?? []).map((b) => b.trim()).filter(Boolean)),
+        benefits: JSON.stringify(cleanBenefits(dto.benefits)),
         highlight: dto.highlight ?? false,
         isActive: dto.isActive ?? true,
         sort: dto.sort ?? 0,
@@ -96,10 +97,7 @@ export class SponsorsService {
         name: dto.name === undefined ? undefined : dto.name.trim(),
         tier: dto.tier === undefined ? undefined : dto.tier || null,
         priceLabel: dto.priceLabel === undefined ? undefined : dto.priceLabel.trim() || null,
-        benefits:
-          dto.benefits === undefined
-            ? undefined
-            : JSON.stringify(dto.benefits.map((b) => b.trim()).filter(Boolean)),
+        benefits: dto.benefits === undefined ? undefined : JSON.stringify(cleanBenefits(dto.benefits)),
         highlight: dto.highlight,
         isActive: dto.isActive,
         sort: dto.sort,

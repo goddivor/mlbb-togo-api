@@ -149,6 +149,11 @@ export function parseBenefits(raw: string | null | undefined): string[] {
   }
 }
 
+/** Trimmed, non-empty, de-duplicated benefit lines (they are React keys on the public page). */
+export function cleanBenefits(raw: string[] | null | undefined): string[] {
+  return Array.from(new Set((raw ?? []).map((b) => b.trim()).filter(Boolean)));
+}
+
 export function serializeOffer(o: OfferRecord) {
   return {
     id: o.id,

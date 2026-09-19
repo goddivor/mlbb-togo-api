@@ -23,28 +23,28 @@ export interface SponsorFaqItem {
 export const SPONSOR_FAQ: Record<Lang, SponsorFaqItem[]> = {
   fr: [
     {
-      q: 'Quels types de partenariats proposez-vous ?',
-      a: 'Quatre niveaux : sponsor titre (naming de la saison), or, argent et partenaire. Chaque offre précise ses contreparties : logo sur le site et les overlays de stream, mentions à l’antenne, activations lors des finales en présentiel, contenus dédiés sur nos réseaux.',
+      q: 'Quels types de partenariats proposez-vous ?',
+      a: 'Quatre niveaux : sponsor titre (naming de la saison), or, argent et partenaire. Chaque offre précise ses contreparties : logo sur le site et les overlays de stream, mentions à l’antenne, activations lors des finales en présentiel, contenus dédiés sur nos réseaux.',
     },
     {
-      q: 'Un partenariat couvre-t-il une saison ou l’année entière ?',
+      q: 'Un partenariat couvre-t-il une saison ou l’année entière ?',
       a: 'Les offres sont rattachées à une saison de ligue (environ trois mois). Un engagement sur plusieurs saisons bénéficie d’une remise et d’une visibilité continue sur le site entre deux saisons.',
     },
     {
-      q: 'Quelle audience touchez-vous ?',
-      a: 'Des joueurs de 15 à 30 ans, urbains, connectés tous les jours : matchs diffusés en direct sur YouTube, classements et forum consultés chaque semaine, événements en présentiel à Lomé. Les chiffres cibles de la saison sont affichés sur cette page.',
+      q: 'Quelle audience touchez-vous ?',
+      a: 'Des joueurs de 15 à 30 ans, urbains, connectés tous les jours : matchs diffusés en direct sur YouTube, classements et forum consultés chaque semaine, événements en présentiel à Lomé. Les chiffres cibles de la saison sont affichés sur cette page.',
     },
     {
-      q: 'Peut-on sponsoriser un seul événement ou un contenu ?',
-      a: 'Oui. En dehors des offres saisonnières, nous proposons des activations ponctuelles : tournoi sponsorisé, annonce sponsorisée dans le fil de communication, finale en présentiel, ou dotation en lots.',
+      q: 'Peut-on sponsoriser un seul événement ou un contenu ?',
+      a: 'Oui. En dehors des offres saisonnières, nous proposons des activations ponctuelles : tournoi sponsorisé, annonce sponsorisée dans le fil de communication, finale en présentiel, ou dotation en lots.',
     },
     {
-      q: 'Comment mesurez-vous les retombées ?',
-      a: 'Chaque partenaire reçoit un bilan de fin de saison : vues cumulées des diffusions, portée des publications, participation aux événements et clics sur son lien depuis le site.',
+      q: 'Comment mesurez-vous les retombées ?',
+      a: 'Chaque partenaire reçoit un bilan de fin de saison : vues cumulées des diffusions, portée des publications, participation aux événements et clics sur son lien depuis le site.',
     },
     {
-      q: 'Quels sont les délais et le processus ?',
-      a: 'Envoyez le formulaire ci-dessous : nous revenons vers vous sous 48 heures ouvrées avec une proposition détaillée. La signature intervient avant le début de la saison pour garantir la présence sur tous les supports.',
+      q: 'Quels sont les délais et le processus ?',
+      a: 'Envoyez le formulaire ci-dessous : nous revenons vers vous sous 48 heures ouvrées avec une proposition détaillée. La signature intervient avant le début de la saison pour garantir la présence sur tous les supports.',
     },
   ],
   en: [

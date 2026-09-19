@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import {
   RateLimiter,
+  cleanBenefits,
   clientIp,
   filterForSeason,
   groupByTier,
@@ -121,5 +122,12 @@ describe('clientIp', () => {
     expect(clientIp({ headers: {}, ip: '9.9.9.9' })).toBe('9.9.9.9');
     expect(clientIp({ headers: {}, socket: { remoteAddress: '::1' } })).toBe('::1');
     expect(clientIp({})).toBe('unknown');
+  });
+});
+
+describe('cleanBenefits', () => {
+  it('trims, drops empty lines and duplicates', () => {
+    expect(cleanBenefits([' Logo ', '', 'Logo', 'Mentions'])).toEqual(['Logo', 'Mentions']);
+    expect(cleanBenefits(undefined)).toEqual([]);
   });
 });
