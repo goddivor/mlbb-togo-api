@@ -1,4 +1,4 @@
-import { IsArray, IsInt, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateTournamentDto {
   @IsOptional()
@@ -59,5 +59,6 @@ export class UpdateTournamentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(80)
   city?: string;
 }
