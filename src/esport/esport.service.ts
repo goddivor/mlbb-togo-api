@@ -448,7 +448,7 @@ export class EsportService {
     return new Map(users.map((u) => [u.id, serializeUserCard(u)]));
   }
 
-  private serializeMatch(m: any, tmap: Map<string, any>, umap?: Map<string, any>) {
+  private serializeMatch(m: any, tmap: Map<string, any>, umap?: Map<string, any>, playersCount = 0) {
     const games = parseGames(m.games);
     const screenshots = parseScreenshots(m.screenshots);
     return {
@@ -469,6 +469,8 @@ export class EsportService {
       winner: m.winnerTeamId ? tmap.get(m.winnerTeamId) ?? null : null,
       games: games.map((g) => ({ ...g, mvp: g.mvpUserId ? umap?.get(g.mvpUserId) ?? null : null })),
       gamesCount: games.length,
+      // Player stat rows: with the games, tells whether a scoresheet exists.
+      playersCount,
       screenshots,
       screenshotsCount: screenshots.length,
       vodUrl: m.vodUrl ?? null,
@@ -526,13 +528,21 @@ export class EsportService {
   }
 
   private async serializeMatches(matches: any[]) {
-    const [tmap, umap] = await Promise.all([
+    const [tmap, umap, playerRows] = await Promise.all([
       this.teamMap(
         matches.flatMap((m) => [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
       ),
       this.userCardMap(matches.map((m) => m.mvpUserId).filter(Boolean) as string[]),
+      matches.length
+        ? this.prisma.esportMatchPlayer.groupBy({
+            by: ['matchId'],
+            where: { matchId: { in: matches.map((m) => m.id) } },
+            _count: { _all: true },
+          })
+        : Promise.resolve([] as { matchId: string; _count: { _all: number } }[]),
     ]);
-    return matches.map((m) => this.serializeMatch(m, tmap, umap));
+    const counts = new Map(playerRows.map((r) => [r.matchId, r._count._all]));
+    return matches.map((m) => this.serializeMatch(m, tmap, umap, counts.get(m.id) ?? 0));
   }
 
   async listMatches(
@@ -586,7 +596,7 @@ export class EsportService {
       ),
       this.getMatchPlayers(id),
     ]);
-    const base = this.serializeMatch(m, tmap, umap);
+    const base = this.serializeMatch(m, tmap, umap, players.players.length);
     const mvpRow = players.players.find((p) => p.userId === base.mvpUserId) ?? null;
     return {
       ...base,
