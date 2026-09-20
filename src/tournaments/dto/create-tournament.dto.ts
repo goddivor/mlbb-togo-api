@@ -3,6 +3,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  MaxLength,
 } from 'class-validator';
 
 export class CreateTournamentDto {
@@ -60,4 +61,9 @@ export class CreateTournamentDto {
   @IsOptional()
   @IsString()
   streamUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  city?: string;
 }

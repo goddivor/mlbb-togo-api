@@ -80,6 +80,7 @@ function serializeTeam(team: any) {
     type: team.type ?? 'community',
     esportId: team.esportId ?? null,
     sort: team.sort ?? 0,
+    city: team.city ?? null,
     foundedAt: team.foundedAt,
     memberCount: members.length,
     starterCount: members.filter((m) => !m.isSubstitute).length,
@@ -214,6 +215,7 @@ export class EsportService {
         type,
         sort: typeof data.sort === 'number' ? data.sort : 0,
         esportId,
+        city: typeof data.city === 'string' && data.city.trim() ? data.city.trim() : null,
       },
     });
 
@@ -251,6 +253,12 @@ export class EsportService {
         description:
           data.description === undefined ? undefined : data.description,
         sort: typeof data.sort === 'number' ? data.sort : undefined,
+        city:
+          data.city === undefined
+            ? undefined
+            : typeof data.city === 'string' && data.city.trim()
+              ? data.city.trim()
+              : null,
       },
       include: teamInclude,
     });
