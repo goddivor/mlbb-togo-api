@@ -24,17 +24,15 @@ export const LIMITS = {
   hideReasonMax: 300,
   /** Builds a player may own (drafts + published + hidden). */
   buildsPerUser: 60,
-  /** Publications (first publish or republish) per rolling 24 hours. */
+  /** Publications (first publish and every republish) per UTC day. */
   publishesPerDay: 5,
-  /** Reports a player may file per rolling 24 hours. */
+  /** Reports a player may file per UTC day. */
   reportsPerDay: 20,
   pageSizeMax: 50,
   /** Deepest page served (keeps `skip` a finite, bounded integer). */
   pageMax: 1000,
   pageSizeDefault: 20,
 } as const;
-
-export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Raised by the rules; the service maps it to a 400. */
 export class BuildRuleError extends Error {
@@ -222,9 +220,29 @@ export function normalizePage(page: unknown, limit: unknown): { page: number; li
   return { page: p, limit: l, skip: (p - 1) * l };
 }
 
-/** Rolling-window quota check (`count` events already in the window). */
-export function assertQuota(count: number, max: number, code: string, what: string): void {
-  if (count >= max) {
-    throw new BuildRuleError(`Limit reached: ${max} ${what} per 24 hours.`, code);
+export type QuotaKind = 'publish' | 'report' | 'builds';
+
+export const QUOTA_MAX: Record<QuotaKind, number> = {
+  publish: LIMITS.publishesPerDay,
+  report: LIMITS.reportsPerDay,
+  builds: LIMITS.buildsPerUser,
+};
+
+/**
+ * Counter document key of a quota: daily ledgers (publish, report) per UTC
+ * day, a single running counter for the builds owned.
+ */
+export function quotaKey(kind: QuotaKind, userId: string, now: Date = new Date()): string {
+  if (kind === 'builds') return `builds:${userId}`;
+  return `${kind}:${userId}:${now.toISOString().slice(0, 10)}`;
+}
+
+export function quotaError(kind: QuotaKind): BuildRuleError {
+  const max = QUOTA_MAX[kind];
+  if (kind === 'builds') {
+    return new BuildRuleError(`Limit reached: ${max} builds in total.`, 'quota_builds');
   }
+  return kind === 'publish'
+    ? new BuildRuleError(`Limit reached: ${max} publications per day.`, 'quota_publish')
+    : new BuildRuleError(`Limit reached: ${max} reports per day.`, 'quota_reports');
 }

@@ -20,10 +20,21 @@ function matches(row: any, where: any = {}): boolean {
       const c = cond as any;
       if ('in' in c) return c.in.includes(value);
       if ('gt' in c) return value > c.gt;
+      if ('lt' in c) return value < c.lt;
       if ('gte' in c) return value != null && value >= c.gte;
     }
     return value === cond;
   });
+}
+
+function applyData(row: any, data: any) {
+  for (const [k, v] of Object.entries(data)) {
+    const op = v as any;
+    if (op && typeof op === 'object' && 'increment' in op) row[k] = (row[k] ?? 0) + op.increment;
+    else if (op && typeof op === 'object' && 'decrement' in op) row[k] = (row[k] ?? 0) - op.decrement;
+    else row[k] = v;
+  }
+  row.updatedAt = new Date();
 }
 
 function table(name: string, unique: string[][] = [], defaults: Record<string, unknown> = {}) {
@@ -63,18 +74,12 @@ function table(name: string, unique: string[][] = [], defaults: Record<string, u
     update: jest.fn(async ({ where, data }: any) => {
       const row = rows.find((r) => matches(r, where));
       if (!row) throw new Error(`${name} not found`);
-      for (const [k, v] of Object.entries(data)) {
-        const op = v as any;
-        if (op && typeof op === 'object' && 'increment' in op) row[k] = (row[k] ?? 0) + op.increment;
-        else if (op && typeof op === 'object' && 'decrement' in op) row[k] = (row[k] ?? 0) - op.decrement;
-        else row[k] = v;
-      }
-      row.updatedAt = new Date();
+      applyData(row, data);
       return row;
     }),
     updateMany: jest.fn(async ({ where, data }: any) => {
       const list = rows.filter((r) => matches(r, where));
-      list.forEach((r) => Object.assign(r, data));
+      list.forEach((r) => applyData(r, data));
       return { count: list.length };
     }),
     delete: jest.fn(async ({ where }: any) => {
@@ -132,6 +137,7 @@ describe('CommunityBuildsService', () => {
       }),
       communityBuildLike: table('like', [['buildId', 'userId']]),
       communityBuildReport: table('report', [['buildId', 'reporterId']], { status: 'open' }),
+      communityBuildQuota: table('quota', [['key']], { count: 0 }),
       adminLog: table('adminLog'),
       item: table('item'),
       emblem: table('emblem'),
@@ -351,6 +357,72 @@ describe('CommunityBuildsService', () => {
       await expect(service.moderatorDelete(draft.id, moderator)).rejects.toThrow(NotFoundException);
       expect((await service.moderationList({ filter: 'all' }, moderator)).total).toBe(0);
     });
+  });
+
+  describe('quotas', () => {
+    const quota = (prefix: string) => db.communityBuildQuota.rows.find((r: any) => r.key.startsWith(prefix));
+
+    it('counts every republication, keeps the first publication date and emits `published` once', async () => {
+      const build = await publishedBuild();
+      const firstAt = db.communityBuild.rows[0].publishedAt;
+      for (let i = 0; i < LIMITS.publishesPerDay - 1; i++) {
+        await service.unpublish(build.id, author);
+        await service.publish(build.id, author);
+      }
+      await service.unpublish(build.id, author);
+      await expect(service.publish(build.id, author)).rejects.toMatchObject({ response: { code: 'quota_publish' } });
+      expect(db.communityBuild.rows[0].publishedAt).toBe(firstAt);
+      expect(emitted.filter((e) => e.type === 'published')).toHaveLength(1);
+    });
+
+    it('does not give publications back when the build is deleted', async () => {
+      for (let i = 0; i < LIMITS.publishesPerDay; i++) {
+        const b = await publishedBuild();
+        await service.remove(b.id, author);
+      }
+      await expect(publishedBuild()).rejects.toMatchObject({ response: { code: 'quota_publish' } });
+    });
+
+    it('holds the caps under parallel requests', async () => {
+      const results = await Promise.allSettled(
+        Array.from({ length: LIMITS.publishesPerDay + 3 }, () => publishedBuild()),
+      );
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      expect(rejected.map((r) => r.reason?.response?.code)).toEqual(['quota_publish', 'quota_publish', 'quota_publish']);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(LIMITS.publishesPerDay);
+      expect(db.communityBuild.rows).toHaveLength(LIMITS.publishesPerDay);
+      // Rejected creations gave their "builds owned" unit back.
+      expect(quota('builds:').count).toBe(LIMITS.publishesPerDay);
+    });
+
+    it('caps the builds owned and frees a unit on deletion', async () => {
+      quota('builds:') ?? (await service.create(author, draftInput()));
+      quota('builds:').count = LIMITS.buildsPerUser;
+      await expect(service.create(author, draftInput())).rejects.toMatchObject({ response: { code: 'quota_builds' } });
+      await service.remove(db.communityBuild.rows[0].id, author);
+      await expect(service.create(author, draftInput())).resolves.toMatchObject({ status: 'draft' });
+    });
+
+    it('keeps reports in the daily ledger after the build is deleted', async () => {
+      const build = await publishedBuild();
+      await service.report(build.id, player, { reason: 'spam' });
+      await service.remove(build.id, author);
+      expect(quota(`report:${player.id}:`).count).toBe(1);
+      quota(`report:${player.id}:`).count = LIMITS.reportsPerDay;
+      const other = await publishedBuild();
+      await expect(service.report(other.id, player, { reason: 'spam' })).rejects.toMatchObject({
+        response: { code: 'quota_reports' },
+      });
+    });
+  });
+
+  it('re-validates a hidden build before unhiding it', async () => {
+    const build = await publishedBuild();
+    await service.hide(build.id, moderator, {});
+    await service.update(build.id, author, { itemIds: [] });
+    await expect(service.unhide(build.id, moderator)).rejects.toMatchObject({ response: { code: 'publish_no_items' } });
+    await service.update(build.id, author, { itemIds: [items[0]] });
+    await expect(service.unhide(build.id, moderator)).resolves.toMatchObject({ status: 'published' });
   });
 
   it('keeps serving the request when an event listener fails', async () => {

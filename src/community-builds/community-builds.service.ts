@@ -20,13 +20,11 @@ import {
   assertOwner,
   assertPickable,
   assertPublishable,
-  assertQuota,
   assertReportable,
   assertTalentTiers,
   BuildRuleError,
   canView,
   cleanText,
-  DAY_MS,
   isOwner,
   LIMITS,
   normalizeItemIds,
@@ -36,6 +34,10 @@ import {
   normalizeReportReason,
   normalizeSort,
   normalizeTitle,
+  QUOTA_MAX,
+  QuotaKind,
+  quotaError,
+  quotaKey,
   Viewer,
 } from './community-builds.rules';
 
@@ -142,16 +144,35 @@ export class CommunityBuildsService {
   // ---------------------------------------------------------------- owner writes
 
   async create(user: RequestUser, dto: CreateCommunityBuildDto) {
-    const owned = await this.prisma.communityBuild.count({ where: { authorId: user.id } });
-    this.rule(() => assertQuota(owned, LIMITS.buildsPerUser, 'quota_builds', 'builds in total'));
     const hero = await this.findHero(dto.heroId);
     if (!hero) throw this.badRequest('Unknown hero.', 'hero_unknown');
-
     const data = await this.normalizeContent(dto, null, !!dto.publish);
     const now = new Date();
-    if (dto.publish) await this.assertPublishQuota(user.id);
 
-    const build = await this.prisma.communityBuild.create({
+    // Quotas are claimed atomically before writing and given back on failure.
+    const buildsKey = await this.claimQuota('builds', user.id);
+    let publishKey: string | null = null;
+    let build: BuildRow;
+    try {
+      if (dto.publish) publishKey = await this.claimQuota('publish', user.id);
+      build = await this.createRow(user, hero, data, !!dto.publish, now);
+    } catch (err) {
+      await this.releaseQuota(buildsKey);
+      if (publishKey) await this.releaseQuota(publishKey);
+      throw err;
+    }
+    if (dto.publish) await this.emit('published', build, user.id);
+    return this.findOne(build.id, user);
+  }
+
+  private createRow(
+    user: RequestUser,
+    hero: { id: string; heroId: number | null; name: string },
+    data: Awaited<ReturnType<CommunityBuildsService['normalizeContent']>>,
+    publish: boolean,
+    now: Date,
+  ) {
+    return this.prisma.communityBuild.create({
       data: {
         authorId: user.id,
         heroId: hero.id,
@@ -164,12 +185,10 @@ export class CommunityBuildsService {
         emblemId: data.emblemId,
         talentIds: data.talentIds,
         battleSpellId: data.battleSpellId,
-        status: dto.publish ? 'published' : 'draft',
-        publishedAt: dto.publish ? now : null,
+        status: publish ? 'published' : 'draft',
+        publishedAt: publish ? now : null,
       },
     });
-    if (dto.publish) await this.emit('published', build, user.id);
-    return this.findOne(build.id, user);
   }
 
   async update(id: string, user: RequestUser, dto: UpdateCommunityBuildDto) {
@@ -192,7 +211,7 @@ export class CommunityBuildsService {
 
   async remove(id: string, user: RequestUser) {
     const build = await this.getOwned(id, user);
-    await this.deleteCascade(build.id);
+    await this.deleteCascade(build);
     await this.emit('deleted', build, user.id);
     return { success: true };
   }
@@ -203,12 +222,25 @@ export class CommunityBuildsService {
     if (build.status === 'published') return this.findOne(build.id, user);
     // Publishing requires every entry to be currently available.
     await this.normalizeContent(build, null, true);
-    await this.assertPublishQuota(user.id);
-    const updated = await this.prisma.communityBuild.update({
-      where: { id: build.id },
-      data: { status: 'published', publishedAt: new Date() },
+    // Every publication counts, republishing included.
+    const publishKey = await this.claimQuota('publish', user.id);
+    const { count } = await this.prisma.communityBuild.updateMany({
+      where: { id: build.id, status: 'draft' },
+      data: { status: 'published' },
     });
-    await this.emit('published', updated, user.id);
+    if (!count) {
+      // A concurrent request published (or hid) it first.
+      await this.releaseQuota(publishKey);
+      return this.findOne(build.id, user);
+    }
+    // `publishedAt` is the first publication: it drives the "recent" order and
+    // the `published` event fires once per build (no XP farming by
+    // unpublishing and republishing).
+    const first = await this.prisma.communityBuild.updateMany({
+      where: { id: build.id, publishedAt: null },
+      data: { publishedAt: new Date() },
+    });
+    if (first.count) await this.emit('published', { ...build, status: 'published' }, user.id);
     return this.findOne(build.id, user);
   }
 
@@ -263,20 +295,27 @@ export class CommunityBuildsService {
       where: { buildId_reporterId: { buildId: build.id, reporterId: user.id } },
     });
     if (existing?.status === 'open') throw this.badRequest('You already reported this build.', 'already_reported');
-    const recent = await this.prisma.communityBuildReport.count({
-      where: { reporterId: user.id, createdAt: { gte: new Date(Date.now() - DAY_MS) } },
-    });
-    this.rule(() => assertQuota(recent, LIMITS.reportsPerDay, 'quota_reports', 'reports'));
+    // Daily ledger: deleting builds or reports never gives quota back.
+    const reportKey = await this.claimQuota('report', user.id);
 
-    if (existing) {
-      await this.prisma.communityBuildReport.update({
-        where: { id: existing.id },
-        data: { reason, details, status: 'open', resolvedById: null, resolvedAt: null, createdAt: new Date() },
-      });
-    } else {
-      await this.prisma.communityBuildReport.create({
-        data: { buildId: build.id, reporterId: user.id, reason, details },
-      });
+    try {
+      if (existing) {
+        await this.prisma.communityBuildReport.update({
+          where: { id: existing.id },
+          data: { reason, details, status: 'open', resolvedById: null, resolvedAt: null, createdAt: new Date() },
+        });
+      } else {
+        await this.prisma.communityBuildReport.create({
+          data: { buildId: build.id, reporterId: user.id, reason, details },
+        });
+      }
+    } catch (err) {
+      await this.releaseQuota(reportKey);
+      // Same report sent twice in parallel.
+      if ((err as { code?: string })?.code === 'P2002') {
+        throw this.badRequest('You already reported this build.', 'already_reported');
+      }
+      throw err;
     }
     await this.syncReports(build.id);
     return { reported: true };
@@ -355,6 +394,9 @@ export class CommunityBuildsService {
   async unhide(id: string, user: RequestUser) {
     const build = await this.getModeratable(id);
     if (build.status === 'hidden') {
+      // The author may have edited the hidden build with draft rules: it must
+      // be publishable again (entries disabled since are tolerated).
+      await this.normalizeContent(build, build, true);
       const updated = await this.prisma.communityBuild.update({
         where: { id: build.id },
         data: { status: 'published', hiddenAt: null, hiddenById: null, hiddenReason: null },
@@ -375,7 +417,7 @@ export class CommunityBuildsService {
 
   async moderatorDelete(id: string, user: RequestUser) {
     const build = await this.getModeratable(id);
-    await this.deleteCascade(build.id);
+    await this.deleteCascade(build);
     await this.log('community_build.delete', user, build);
     await this.emit('deleted', build, user.id);
     return { success: true };
@@ -439,11 +481,51 @@ export class CommunityBuildsService {
     return null;
   }
 
-  private async assertPublishQuota(userId: string) {
-    const recent = await this.prisma.communityBuild.count({
-      where: { authorId: userId, publishedAt: { gte: new Date(Date.now() - DAY_MS) } },
+  /**
+   * Takes one unit of a quota with a conditional atomic increment of its
+   * counter document (`count < max`), so parallel requests cannot exceed the
+   * cap. Returns the counter key (to give the unit back on failure).
+   */
+  private async claimQuota(kind: QuotaKind, userId: string): Promise<string> {
+    const key = quotaKey(kind, userId);
+    const max = QUOTA_MAX[kind];
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const { count } = await this.prisma.communityBuildQuota.updateMany({
+        where: { key, count: { lt: max } },
+        data: { count: { increment: 1 } },
+      });
+      if (count) return key;
+      const existing = await this.prisma.communityBuildQuota.findUnique({ where: { key } });
+      if (existing) {
+        if (existing.count >= max) throw this.quotaExceeded(kind);
+        continue; // created or decremented meanwhile: retry the increment
+      }
+      // First use of this counter. The builds counter starts from the builds
+      // already owned (rows written before the counter existed).
+      const start =
+        kind === 'builds' ? await this.prisma.communityBuild.count({ where: { authorId: userId } }) : 0;
+      if (start >= max) throw this.quotaExceeded(kind);
+      try {
+        await this.prisma.communityBuildQuota.create({ data: { key, userId, kind, count: start + 1 } });
+        return key;
+      } catch (err) {
+        if ((err as { code?: string })?.code !== 'P2002') throw err;
+        // Created concurrently: retry the conditional increment.
+      }
+    }
+    throw this.quotaExceeded(kind);
+  }
+
+  private quotaExceeded(kind: QuotaKind) {
+    const err = quotaError(kind);
+    return this.badRequest(err.message, err.code);
+  }
+
+  private async releaseQuota(key: string) {
+    await this.prisma.communityBuildQuota.updateMany({
+      where: { key, count: { gt: 0 } },
+      data: { count: { decrement: 1 } },
     });
-    this.rule(() => assertQuota(recent, LIMITS.publishesPerDay, 'quota_publish', 'publications'));
   }
 
   /**
@@ -538,12 +620,15 @@ export class CommunityBuildsService {
     return count;
   }
 
-  private async deleteCascade(buildId: string) {
+  /** Deletes a build with its likes and reports; frees one "builds owned" unit. */
+  private async deleteCascade(build: BuildRow) {
+    const buildId = build.id;
     await this.prisma.$transaction([
       this.prisma.communityBuildLike.deleteMany({ where: { buildId } }),
       this.prisma.communityBuildReport.deleteMany({ where: { buildId } }),
       this.prisma.communityBuild.delete({ where: { id: buildId } }),
     ]);
+    await this.releaseQuota(quotaKey('builds', build.authorId));
   }
 
   private async emit(type: CommunityBuildEventType, build: BuildRow, actorId: string) {

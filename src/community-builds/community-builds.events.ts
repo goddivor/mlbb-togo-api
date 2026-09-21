@@ -4,7 +4,9 @@ import { Injectable, Logger } from '@nestjs/common';
  * Domain events of the community builds, for other modules to hook into
  * (e.g. XP / achievements) without this module knowing about them.
  *
- * - `published`: a build became public (first publish or republish);
+ * - `published`: a build became public for the FIRST time (republishing
+ *   after an unpublish emits nothing, so XP cannot be farmed that way);
+ * - `unpublished`: the author moved a published build back to drafts;
  * - `liked` / `unliked`: a like was actually added / removed (idempotent
  *   calls that change nothing emit nothing);
  * - `hidden` / `unhidden` / `deleted`: moderation or author deletion.

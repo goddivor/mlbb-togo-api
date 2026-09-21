@@ -366,6 +366,20 @@ model CommunityBuild {
   @@index([authorId])
 }
 
+// Quota counters of the community builds (#129). One document per window:
+// `publish:<userId>:<UTC day>`, `report:<userId>:<UTC day>` (ledgers that
+// survive deleting builds or reports) and `builds:<userId>` (builds owned,
+// decremented on deletion). Incremented atomically under the cap.
+model CommunityBuildQuota {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String   @unique
+  userId    String   @db.ObjectId
+  kind      String   // publish | report | builds
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model CommunityBuildLike {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   buildId   String   @db.ObjectId

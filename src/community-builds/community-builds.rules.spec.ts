@@ -3,7 +3,6 @@ import {
   assertOwner,
   assertPickable,
   assertPublishable,
-  assertQuota,
   assertReportable,
   assertTalentTiers,
   BuildRuleError,
@@ -17,6 +16,8 @@ import {
   normalizeReportReason,
   normalizeSort,
   normalizeTitle,
+  quotaError,
+  quotaKey,
 } from './community-builds.rules';
 
 const codeOf = (fn: () => unknown): string | null => {
@@ -145,10 +146,16 @@ describe('community builds rules: queries and quotas', () => {
     expect(codeOf(() => normalizeReportReason('boring'))).toBe('report_reason');
   });
 
-  it('blocks once the rolling quota is used', () => {
-    expect(codeOf(() => assertQuota(LIMITS.publishesPerDay - 1, LIMITS.publishesPerDay, 'quota_publish', 'x'))).toBeNull();
-    expect(codeOf(() => assertQuota(LIMITS.publishesPerDay, LIMITS.publishesPerDay, 'quota_publish', 'x'))).toBe(
+  it('keys daily quotas by UTC day and the builds counter by user', () => {
+    const at = new Date('2026-09-21T23:30:00.000Z');
+    expect(quotaKey('publish', 'u1', at)).toBe('publish:u1:2026-09-21');
+    expect(quotaKey('report', 'u1', at)).toBe('report:u1:2026-09-21');
+    expect(quotaKey('publish', 'u1', new Date('2026-09-22T00:00:01.000Z'))).toBe('publish:u1:2026-09-22');
+    expect(quotaKey('builds', 'u1', at)).toBe('builds:u1');
+    expect([quotaError('publish').code, quotaError('report').code, quotaError('builds').code]).toEqual([
       'quota_publish',
-    );
+      'quota_reports',
+      'quota_builds',
+    ]);
   });
 });
