@@ -32,6 +32,7 @@ import { GamificationModule } from './gamification/gamification.module';
 import { PickBanModule } from './pickban/pickban.module';
 import { AiModule } from './ai/ai.module';
 import { IntegrationsModule } from './integrations/integrations.module';
+import { MediaModule } from './media/media.module';
 import { LeagueStatsModule } from './league-stats/league-stats.module';
 import { StandingsModule } from './standings/standings.module';
 import { SponsorsModule } from './sponsors/sponsors.module';
@@ -77,6 +78,7 @@ import { RewardsModule } from './rewards/rewards.module';
     PickBanModule,
     AiModule,
     IntegrationsModule,
+    MediaModule,
     LeagueStatsModule,
     StandingsModule,
     SponsorsModule,
