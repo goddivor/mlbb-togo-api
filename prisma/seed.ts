@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import heroes from './heroes.json';
+import { defaultEvents } from '../src/gamification/reward-events.logic';
 
 const prisma = new PrismaClient();
 
@@ -573,6 +574,31 @@ async function main() {
     });
   }
   console.log(`   - MTL            : Saison 1, ${mtlImages.length} images`);
+
+  // Reward events of catalogue §6.5 as drafts (idempotent: one per slug family,
+  // an edition already created or renamed by an admin is left alone).
+  const firstUser = await prisma.user.findFirst({ orderBy: { joinedAt: 'asc' }, select: { joinedAt: true } });
+  const familyOf = (slug: string) => slug.replace(/_\d{4}(_\d+)?$/, '');
+  const eventFamilies = new Set((await prisma.rewardEvent.findMany({ select: { slug: true } })).map((e) => familyOf(e.slug)));
+  let seededEvents = 0;
+  for (const e of defaultEvents(new Date(), firstUser?.joinedAt ?? new Date())) {
+    if (eventFamilies.has(familyOf(e.slug))) continue;
+    await prisma.rewardEvent.create({
+      data: {
+        slug: e.slug,
+        name: e.name,
+        description: e.description,
+        startsAt: e.startsAt,
+        endsAt: e.endsAt,
+        recurrence: e.recurrence,
+        status: 'draft',
+        conditions: e.conditions as any,
+        rewards: e.rewards as any,
+      },
+    });
+    seededEvents++;
+  }
+  console.log(`   - Événements     : ${seededEvents} événement(s) de récompense par défaut (brouillons)`);
 
   const SEED_DEMO =
     process.env.SEED_DEMO === '1' || process.env.SEED_DEMO === 'true';
