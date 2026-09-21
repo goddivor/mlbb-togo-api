@@ -74,7 +74,7 @@ export function defaultModeratorPermissions(): string[] {
   return [...MODERATOR_PERMISSIONS];
 }
 
-export type RbacViolation = 'last_admin' | 'self_lockout' | null;
+export type RbacViolation = 'last_admin' | 'self_lockout' | 'escalation' | null;
 
 /**
  * Checks a change of one user's role set.
@@ -144,11 +144,81 @@ export function checkUserRemoval(input: {
   return input.adminHolderIds.some((id) => id !== input.targetId) ? null : 'last_admin';
 }
 
+/**
+ * Anti privilege escalation: an actor may only grant (or take away) what he
+ * holds himself. Holders of Administrateur may delegate anything; anyone else
+ * may only handle permissions included in his own effective permissions, and
+ * never the Administrateur role itself.
+ */
+export function canDelegatePermissions(
+  actorRoles: readonly RoleLike[],
+  permissions: readonly string[],
+): boolean {
+  if (actorRoles.some(isAdminRole)) return true;
+  const held = new Set(resolvePermissions(actorRoles));
+  return normalizePermissions(permissions).every((p) => held.has(p));
+}
+
+export function canDelegateRole(actorRoles: readonly RoleLike[], role: RoleLike): boolean {
+  if (actorRoles.some(isAdminRole)) return true;
+  if (isAdminRole(role)) return false;
+  return canDelegatePermissions(actorRoles, rolePermissions(role));
+}
+
+/**
+ * Checks that every role added to or removed from a user can be delegated by
+ * the actor (see `canDelegateRole`).
+ */
+export function checkRoleDelegation(input: {
+  actorRoleIds: readonly string[];
+  currentRoleIds: readonly string[];
+  nextRoleIds: readonly string[];
+  roles: readonly RoleLike[];
+}): RbacViolation {
+  const byId = new Map(input.roles.map((r) => [r.id, r]));
+  const actorRoles = input.actorRoleIds
+    .map((id) => byId.get(id))
+    .filter((r): r is RoleLike => !!r);
+  const changed = [
+    ...input.nextRoleIds.filter((id) => !input.currentRoleIds.includes(id)),
+    ...input.currentRoleIds.filter((id) => !input.nextRoleIds.includes(id)),
+  ];
+  for (const id of changed) {
+    const role = byId.get(id);
+    if (role && !canDelegateRole(actorRoles, role)) return 'escalation';
+  }
+  return null;
+}
+
+/**
+ * Account management (ban, deletion, profile edit, system flag) of another
+ * user: the actor must hold every permission the target holds, so staff can
+ * never act on an account ranking above them. Acting on oneself is allowed
+ * here (self-deletion has its own last-admin rule).
+ */
+export function checkUserManagement(input: {
+  actorId: string;
+  targetId: string;
+  actorRoleIds: readonly string[];
+  targetRoleIds: readonly string[];
+  roles: readonly RoleLike[];
+}): RbacViolation {
+  if (input.actorId === input.targetId) return null;
+  const pick = (ids: readonly string[]) => input.roles.filter((r) => ids.includes(r.id));
+  const actorRoles = pick(input.actorRoleIds);
+  const targetRoles = pick(input.targetRoleIds);
+  if (actorRoles.some(isAdminRole)) return null;
+  if (targetRoles.some(isAdminRole)) return 'escalation';
+  return canDelegatePermissions(actorRoles, resolvePermissions(targetRoles)) ? null : 'escalation';
+}
+
 export const VIOLATION_MESSAGES: Record<Exclude<RbacViolation, null>, string> = {
   last_admin:
     'Impossible : il doit toujours rester au moins un titulaire du rôle Administrateur.',
   self_lockout:
     'Impossible : vous ne pouvez pas retirer votre propre accès à la gestion des rôles.',
+  escalation:
+    'Impossible : vous ne pouvez attribuer ou gérer que des droits que vous détenez vous-même.',
 };
 
 const HEX = /^#[0-9a-fA-F]{6}$/;

@@ -1,5 +1,8 @@
 import { ALL_PERMISSIONS, MODERATOR_PERMISSIONS } from './permissions';
 import {
+  canDelegatePermissions,
+  checkRoleDelegation,
+  checkUserManagement,
   checkRoleEdit,
   checkUserRemoval,
   checkUserRolesChange,
@@ -149,5 +152,53 @@ describe('normalizeColor', () => {
   it('accepts #rrggbb only', () => {
     expect(normalizeColor('#A1b2C3')).toBe('#A1b2C3');
     expect(normalizeColor('red', '#000000')).toBe('#000000');
+  });
+});
+
+describe('privilege escalation rules', () => {
+  it('only lets an actor delegate permissions he holds (Administrateur: all)', () => {
+    expect(canDelegatePermissions([roleManager], ['admin.roles'])).toBe(true);
+    expect(canDelegatePermissions([roleManager], ['admin.users'])).toBe(false);
+    expect(canDelegatePermissions([admin], [...ALL_PERMISSIONS])).toBe(true);
+  });
+
+  it('refuses granting or revoking Administrateur or a wider role', () => {
+    const base = { actorRoleIds: ['r-roles', 'r-edit'], roles };
+    expect(
+      checkRoleDelegation({ ...base, currentRoleIds: [], nextRoleIds: ['r-admin'] }),
+    ).toBe('escalation');
+    expect(
+      checkRoleDelegation({ ...base, currentRoleIds: ['r-admin'], nextRoleIds: [] }),
+    ).toBe('escalation');
+    expect(
+      checkRoleDelegation({ ...base, currentRoleIds: [], nextRoleIds: ['r-mod'] }),
+    ).toBe('escalation');
+    expect(
+      checkRoleDelegation({ ...base, currentRoleIds: ['r-mod'], nextRoleIds: ['r-mod', 'r-edit'] }),
+    ).toBeNull();
+    expect(
+      checkRoleDelegation({
+        actorRoleIds: ['r-admin'],
+        roles,
+        currentRoleIds: [],
+        nextRoleIds: ['r-admin'],
+      }),
+    ).toBeNull();
+  });
+
+  it('refuses managing an account holding permissions the actor lacks', () => {
+    const base = { actorId: 'x', targetId: 'y', roles };
+    expect(
+      checkUserManagement({ ...base, actorRoleIds: ['r-mod'], targetRoleIds: ['r-admin'] }),
+    ).toBe('escalation');
+    expect(
+      checkUserManagement({ ...base, actorRoleIds: ['r-mod'], targetRoleIds: ['r-roles'] }),
+    ).toBe('escalation');
+    expect(
+      checkUserManagement({ ...base, actorRoleIds: ['r-mod'], targetRoleIds: [] }),
+    ).toBeNull();
+    expect(
+      checkUserManagement({ ...base, actorRoleIds: ['r-admin'], targetRoleIds: ['r-admin'] }),
+    ).toBeNull();
   });
 });

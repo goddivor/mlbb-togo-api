@@ -69,7 +69,7 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard)
   @Patch(':id')
-  update(
+  async update(
     @CurrentUser() user: any,
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
@@ -78,6 +78,7 @@ export class UsersController {
     if (user.id !== id && !hasPermission(user, 'admin.users')) {
       throw new ForbiddenException('Modification non autorisée.');
     }
+    await this.access.assertCanManageUser(user, id);
     return this.usersService.update(id, dto);
   }
 
@@ -91,7 +92,8 @@ export class UsersController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('users.delete')
   @Delete(':id')
-  async remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string, @CurrentUser() user: any) {
+    await this.access.assertCanManageUser(user, id);
     await this.access.assertUserRemovable(id);
     return this.usersService.remove(id);
   }
@@ -99,7 +101,13 @@ export class UsersController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('admin.users')
   @Patch(':id/ban')
-  ban(@Param('id') id: string, @Body('isBanned') isBanned: boolean) {
+  async ban(
+    @Param('id') id: string,
+    @Body('isBanned') isBanned: boolean,
+    @CurrentUser() user: any,
+  ) {
+    if (isBanned) await this.access.assertUserBannable(user, id);
+    else await this.access.assertCanManageUser(user, id);
     return this.usersService.setBan(id, isBanned);
   }
 
@@ -131,7 +139,12 @@ export class UsersController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('admin.users')
   @Patch(':id/system-account')
-  setSystemAccount(@Param('id') id: string, @Body('isSystemAccount') value: boolean) {
+  async setSystemAccount(
+    @Param('id') id: string,
+    @Body('isSystemAccount') value: boolean,
+    @CurrentUser() user: any,
+  ) {
+    await this.access.assertCanManageUser(user, id);
     return this.usersService.setSystemAccount(id, value === true);
   }
 }

@@ -7,7 +7,7 @@ import {
   NotFoundException,
   OnApplicationBootstrap,
 } from '@nestjs/common';
-import { Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   ADMIN_ROLE_NAME,
@@ -16,12 +16,16 @@ import {
   PERMISSION_GROUPS,
   SYSTEM_ROLE_ADMIN,
   SYSTEM_ROLE_MODERATOR,
+  isKnownPermission,
   normalizePermissions,
 } from './permissions';
 import {
   RbacViolation,
   VIOLATION_MESSAGES,
+  canDelegatePermissions,
+  checkRoleDelegation,
   checkRoleEdit,
+  checkUserManagement,
   checkUserRemoval,
   checkUserRolesChange,
   defaultModeratorPermissions,
@@ -116,6 +120,28 @@ export class AccessService implements OnApplicationBootstrap {
     return this.prisma.role.findFirst({ where: { systemKey: key } });
   }
 
+  /**
+   * Creates a system role, tolerating concurrent creators (serverless cold
+   * starts running the boot migration in parallel): `name` is unique, so a
+   * losing racer gets P2002 and simply reads the winner's row.
+   */
+  private async createSystemRole(data: Prisma.RoleCreateInput): Promise<Role> {
+    try {
+      return await this.prisma.role.create({ data });
+    } catch (err) {
+      if ((err as { code?: string })?.code !== 'P2002') throw err;
+      const winner = await this.prisma.role.findUnique({ where: { name: data.name } });
+      if (!winner) throw err;
+      if (winner.systemKey !== data.systemKey || winner.isSystem !== data.isSystem) {
+        return this.prisma.role.update({
+          where: { id: winner.id },
+          data: { systemKey: data.systemKey, isSystem: data.isSystem },
+        });
+      }
+      return winner;
+    }
+  }
+
   /** Creates (or repairs) the locked Administrateur role. */
   async ensureAdminRole(): Promise<Role> {
     const existing = await this.findSystemRole(SYSTEM_ROLE_ADMIN);
@@ -134,7 +160,7 @@ export class AccessService implements OnApplicationBootstrap {
       color: '#ef4444',
     };
     if (byName) return this.prisma.role.update({ where: { id: byName.id }, data });
-    return this.prisma.role.create({ data: { name: ADMIN_ROLE_NAME, ...data } });
+    return this.createSystemRole({ name: ADMIN_ROLE_NAME, ...data });
   }
 
   /** Creates the editable Modérateur role if it does not exist. */
@@ -148,15 +174,13 @@ export class AccessService implements OnApplicationBootstrap {
         data: { systemKey: SYSTEM_ROLE_MODERATOR },
       });
     }
-    return this.prisma.role.create({
-      data: {
-        name: MODERATOR_ROLE_NAME,
-        description: 'Modération du forum, du catalogue et de la communauté.',
-        permissions: defaultModeratorPermissions(),
-        isSystem: false,
-        systemKey: SYSTEM_ROLE_MODERATOR,
-        color: '#f59e0b',
-      },
+    return this.createSystemRole({
+      name: MODERATOR_ROLE_NAME,
+      description: 'Modération du forum, du catalogue et de la communauté.',
+      permissions: defaultModeratorPermissions(),
+      isSystem: false,
+      systemKey: SYSTEM_ROLE_MODERATOR,
+      color: '#f59e0b',
     });
   }
 
@@ -355,15 +379,36 @@ export class AccessService implements OnApplicationBootstrap {
     }
   }
 
+  /** Rejects unknown permission keys instead of silently dropping them. */
+  private assertKnownPermissions(keys: readonly string[]) {
+    const unknown = keys.filter((k) => !isKnownPermission(k));
+    if (unknown.length) {
+      throw new BadRequestException(`Permission(s) inconnue(s) : ${unknown.join(', ')}.`);
+    }
+  }
+
+  /** The actor may only put in a role permissions he holds himself. */
+  private async assertCanDelegate(actor: Actor, permissions: readonly string[]) {
+    const roles = await this.prisma.role.findMany();
+    const actorIds = await this.actorRoleIds(actor);
+    const actorRoles = roles.filter((r) => actorIds.includes(r.id));
+    if (!canDelegatePermissions(actorRoles, permissions)) {
+      throw new ForbiddenException(VIOLATION_MESSAGES.escalation);
+    }
+  }
+
   async createRole(dto: CreateRoleDto, actor: Actor) {
     const name = dto.name.trim();
+    this.assertKnownPermissions(dto.permissions ?? []);
+    const permissions = normalizePermissions(dto.permissions ?? []);
+    await this.assertCanDelegate(actor, permissions);
     await this.assertNameFree(name);
     const role = await this.prisma.role.create({
       data: {
         name,
         description: dto.description?.trim() || null,
         color: normalizeColor(dto.color),
-        permissions: normalizePermissions(dto.permissions ?? []),
+        permissions,
         isSystem: false,
       },
     });
@@ -376,6 +421,8 @@ export class AccessService implements OnApplicationBootstrap {
     if (isAdminRole(role)) {
       throw new ForbiddenException('Le rôle Administrateur est un rôle système non modifiable.');
     }
+    // Editing a role (even its name) requires holding everything it grants.
+    await this.assertCanDelegate(actor, rolePermissions(role));
     const data: Record<string, unknown> = {};
     if (dto.name !== undefined) {
       const name = dto.name.trim();
@@ -385,7 +432,9 @@ export class AccessService implements OnApplicationBootstrap {
     if (dto.description !== undefined) data.description = dto.description.trim() || null;
     if (dto.color !== undefined) data.color = normalizeColor(dto.color, role.color);
     if (dto.permissions !== undefined) {
+      this.assertKnownPermissions(dto.permissions);
       const next = normalizePermissions(dto.permissions);
+      await this.assertCanDelegate(actor, next);
       await this.assertNoViolation(
         checkRoleEdit({
           actorRoleIds: await this.actorRoleIds(actor),
@@ -410,6 +459,7 @@ export class AccessService implements OnApplicationBootstrap {
     if (role.isSystem) {
       throw new ForbiddenException('Un rôle système ne peut pas être supprimé.');
     }
+    await this.assertCanDelegate(actor, rolePermissions(role));
     await this.assertNoViolation(
       checkRoleEdit({
         actorRoleIds: await this.actorRoleIds(actor),
@@ -453,9 +503,14 @@ export class AccessService implements OnApplicationBootstrap {
     return row?.roleIds ?? [];
   }
 
+  /** Usable Administrateur holders (a banned holder cannot log in). */
   private async adminHolderIds(): Promise<string[]> {
     const admin = await this.ensureAdminRole();
-    return this.memberIds(admin.id);
+    const rows = await this.prisma.user.findMany({
+      where: { roleIds: { has: admin.id }, isBanned: false },
+      select: { id: true },
+    });
+    return rows.map((r) => r.id);
   }
 
   private async assertNoViolation(v: RbacViolation) {
@@ -486,6 +541,16 @@ export class AccessService implements OnApplicationBootstrap {
         adminHolderIds: await this.adminHolderIds(),
       }),
     );
+    if (
+      checkRoleDelegation({
+        actorRoleIds: await this.actorRoleIds(actor),
+        currentRoleIds: current,
+        nextRoleIds: next,
+        roles,
+      })
+    ) {
+      throw new ForbiddenException(VIOLATION_MESSAGES.escalation);
+    }
     const held = roles.filter((r) => next.includes(r.id));
     const updated = await this.prisma.user.update({
       where: { id: userId },
@@ -557,6 +622,43 @@ export class AccessService implements OnApplicationBootstrap {
         adminHolderIds: await this.adminHolderIds(),
       }),
     );
+  }
+
+  /**
+   * Guard for account management of another user (ban, deletion, profile
+   * edit, system flag): the actor must outrank or equal the target.
+   */
+  async assertCanManageUser(actor: Actor, targetId: string) {
+    if (actor.id === targetId) return;
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, roleUser: true, roleIds: true },
+    });
+    if (!target) throw new NotFoundException('Utilisateur introuvable.');
+    const targetRoleIds = (await this.migrateUser(target)).roleIds;
+    if (
+      checkUserManagement({
+        actorId: actor.id,
+        targetId,
+        actorRoleIds: await this.actorRoleIds(actor),
+        targetRoleIds,
+        roles: await this.prisma.role.findMany(),
+      })
+    ) {
+      throw new ForbiddenException(VIOLATION_MESSAGES.escalation);
+    }
+  }
+
+  /**
+   * Guard before banning: never ban yourself (instant lock-out) nor the last
+   * usable Administrateur holder.
+   */
+  async assertUserBannable(actor: Actor, targetId: string) {
+    if (actor.id === targetId) {
+      throw new BadRequestException('Impossible : vous ne pouvez pas suspendre votre propre compte.');
+    }
+    await this.assertCanManageUser(actor, targetId);
+    await this.assertUserRemovable(targetId);
   }
 
   private async log(action: string, actor: Actor, target?: string, details?: string) {

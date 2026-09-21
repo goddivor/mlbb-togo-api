@@ -100,6 +100,18 @@ describe('AccessService', () => {
       expect(users[0].roleIds).toHaveLength(1);
     });
 
+    it('survives concurrent cold starts creating the same system role', async () => {
+      const create = prisma.role.create.getMockImplementation()!;
+      // Another instance wins the race: the unique name index rejects ours.
+      prisma.role.create.mockImplementationOnce(async (args: any) => {
+        await create(args);
+        throw Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+      });
+      const role = await service.ensureAdminRole();
+      expect(role).toMatchObject({ name: 'Administrateur', systemKey: 'admin' });
+      expect(prisma.roles).toHaveLength(1);
+    });
+
     it('runs the raw backfill for the new user fields', async () => {
       await service.runMigration();
       const cmds = prisma.$runCommandRaw.mock.calls.map((c: any[]) => c[0].updates[0]);
@@ -114,9 +126,19 @@ describe('AccessService', () => {
       await service.migrateLegacyUsers();
     });
 
+    it('rejects unknown permission keys at role creation and edition', async () => {
+      await expect(
+        service.createRole({ name: 'Bad', permissions: ['admin.league', 'bogus'] }, { id: 'a1' }),
+      ).rejects.toThrow(/bogus/);
+      const role = await service.createRole({ name: 'Ok', permissions: [] }, { id: 'a1' });
+      await expect(
+        service.updateRole(role.id, { permissions: ['hack.all'] }, { id: 'a1' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
     it('creates a custom role with normalized permissions and assigns it', async () => {
       const role = await service.createRole(
-        { name: 'Rédacteur', permissions: ['forum.announce', 'admin.league', 'bogus'] },
+        { name: 'Rédacteur', permissions: ['forum.announce', 'admin.league', 'forum.announce'] },
         { id: 'a1' },
       );
       expect(role.permissions).toEqual(['admin.league', 'forum.announce']);
@@ -155,6 +177,80 @@ describe('AccessService', () => {
       await service.updateRole(role.id, { permissions: ['admin.stream'] }, { id: 'a1' });
       await service.deleteRole(role.id, { id: 'a1' });
       expect(users[2]).toMatchObject({ roleUser: 'user', roleIds: [] });
+    });
+
+    describe('privilege escalation', () => {
+      let rolesMgr: any;
+      beforeEach(async () => {
+        rolesMgr = await service.createRole(
+          { name: 'Gestion des rôles', permissions: ['admin.roles', 'admin.stream'] },
+          { id: 'a1' },
+        );
+        await service.setUserRoles('u1', [rolesMgr.id], { id: 'a1' });
+      });
+
+      it('cannot create or widen a role beyond its own permissions', async () => {
+        await expect(
+          service.createRole({ name: 'Evil', permissions: ['users.delete'] }, { id: 'u1' }),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        const own = await service.createRole(
+          { name: 'Stream', permissions: ['admin.stream'] },
+          { id: 'u1' },
+        );
+        await expect(
+          service.updateRole(own.id, { permissions: ['admin.stream', 'admin.users'] }, { id: 'u1' }),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        const mod = prisma.roles.find((r) => r.systemKey === 'moderator');
+        await expect(service.updateRole(mod.id, { name: 'Mods' }, { id: 'u1' })).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        await expect(service.deleteRole(mod.id, { id: 'u1' })).rejects.toBeInstanceOf(ForbiddenException);
+      });
+
+      it('cannot grant Administrateur or a role holding permissions it lacks', async () => {
+        const admin = prisma.roles.find((r) => r.systemKey === 'admin');
+        const mod = prisma.roles.find((r) => r.systemKey === 'moderator');
+        await expect(
+          service.setUserRoles('u1', [rolesMgr.id, admin.id], { id: 'u1' }),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        await expect(service.setLegacyRole('u1', 'admin', { id: 'u1' })).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        await expect(service.addMember(mod.id, 'u1', { id: 'u1' })).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        // Nor strip Administrateur from someone else.
+        await service.setUserRoles('m1', [admin.id], { id: 'a1' });
+        await expect(service.setUserRoles('m1', [], { id: 'u1' })).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        expect(users[2].roleIds).toEqual([rolesMgr.id]);
+      });
+
+      it('may delegate roles within its own permissions', async () => {
+        const own = await service.createRole({ name: 'Stream', permissions: ['admin.stream'] }, { id: 'u1' });
+        const mod = prisma.roles.find((r) => r.systemKey === 'moderator');
+        // Adding a role it can delegate is fine, even on a user holding more.
+        await service.setUserRoles('m1', [mod.id, own.id], { id: 'u1' });
+        expect(users[1].roleIds).toEqual([mod.id, own.id]);
+        // ...but removing the Modérateur role it does not fully hold is not.
+        await expect(service.setUserRoles('m1', [own.id], { id: 'u1' })).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+      });
+
+      it('cannot manage (ban, delete, edit) an account ranking above it', async () => {
+        await expect(service.assertCanManageUser({ id: 'u1' }, 'a1')).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        await expect(service.assertCanManageUser({ id: 'u1' }, 'm1')).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        await expect(service.assertCanManageUser({ id: 'a1' }, 'u1')).resolves.toBeUndefined();
+        await expect(service.assertUserBannable({ id: 'a1' }, 'a1')).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+      });
     });
 
     it('lists the users holding a permission', async () => {
