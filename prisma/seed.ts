@@ -394,7 +394,27 @@ const GAME_BATTLE_SPELLS: Array<{ name: string; cooldown: string; sort: number }
   { name: 'Arrival', cooldown: '60s', sort: 10 },
 ];
 
+/**
+ * The seed wipes users, posts, tournaments, teams, sponsors and admin logs
+ * before recreating demo data. It must never run against a shared or
+ * production database: only local hosts are accepted unless the operator
+ * explicitly opts in with SEED_ALLOW_REMOTE_WIPE=1.
+ */
+function assertSafeTarget() {
+  const url = process.env.DATABASE_URL || '';
+  const host = (url.match(/^mongodb(?:\+srv)?:\/\/(?:[^@/]*@)?([^/:?,]+)/) || [])[1] || '';
+  const local = ['localhost', '127.0.0.1', '::1', 'mongo', 'mongodb'].includes(host);
+  if (!local && process.env.SEED_ALLOW_REMOTE_WIPE !== '1') {
+    console.error(
+      `Refusing to seed "${host || 'unknown host'}": the seed deletes every user. ` +
+        'Use a local database, or set SEED_ALLOW_REMOTE_WIPE=1 if you really mean it.',
+    );
+    process.exit(1);
+  }
+}
+
 async function main() {
+  assertSafeTarget();
   console.log('🌱 Démarrage du seed MLBB Togo...');
 
   await prisma.comment.deleteMany();
