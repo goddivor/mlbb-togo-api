@@ -1,4 +1,5 @@
 import {
+  ADMIN_PAGE_ACTIONS,
   ALL_PERMISSIONS,
   ANY_ADMIN,
   MODERATOR_PERMISSIONS,
@@ -7,6 +8,7 @@ import {
   hasAdminAccess,
   hasAnyPermission,
   hasPermission,
+  isKnownPermission,
   normalizePermissions,
   permissionsOf,
 } from './permissions';
@@ -82,6 +84,16 @@ describe('permission checks', () => {
     expect(hasPermission(editor, ANY_ADMIN)).toBe(true);
     expect(hasAdminAccess({ permissions: ['forum.announce'] })).toBe(false);
     expect(hasAdminAccess({ permissions: [] })).toBe(false);
+  });
+
+  it('an action permission with its own admin page opens the admin interface', () => {
+    expect(ADMIN_PAGE_ACTIONS).toEqual(['builds.moderate']);
+    for (const key of ADMIN_PAGE_ACTIONS) {
+      expect(isKnownPermission(key)).toBe(true);
+      expect(PERMISSIONS.find((p) => p.key === key)?.route).toMatch(/^\/admin\//);
+    }
+    expect(hasAdminAccess({ permissions: ['builds.moderate'] })).toBe(true);
+    expect(hasPermission({ permissions: ['builds.moderate'] }, ANY_ADMIN)).toBe(false);
   });
 
   it('resolved permissions take precedence over the legacy roleUser', () => {

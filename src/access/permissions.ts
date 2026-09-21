@@ -25,7 +25,7 @@ export interface PermissionDef {
   group: PermissionGroup;
   label: { fr: string; en: string };
   description?: { fr: string; en: string };
-  /** Admin area route opened by this permission (admin.* only). */
+  /** Admin page opened by this permission (admin.* areas and ADMIN_PAGE_ACTIONS). */
   route?: string;
 }
 
@@ -186,6 +186,16 @@ export const PERMISSIONS: readonly PermissionDef[] = [
       en: 'Pin and delete other members’ posts.',
     },
   },
+  {
+    key: 'builds.moderate',
+    group: 'community',
+    route: '/admin/builds',
+    label: { fr: 'Modérer les builds de la communauté', en: 'Moderate community builds' },
+    description: {
+      fr: 'Traiter les signalements, masquer, réafficher et supprimer les builds publiés par les joueurs.',
+      en: 'Handle reports, hide, unhide and delete builds published by players.',
+    },
+  },
   // Partners
   {
     key: 'admin.sponsors',
@@ -344,6 +354,14 @@ export function hasAnyPermission(
   return keys.some((k) => hasPermission(user, k));
 }
 
+/**
+ * Action permissions that open an admin page of their own (see `route`): a
+ * holder may enter the admin interface without any `admin.*` area.
+ */
+export const ADMIN_PAGE_ACTIONS: readonly string[] = ['builds.moderate'];
+
 export function hasAdminAccess(user?: PermissionSubject | null): boolean {
-  return hasPermission(user, ANY_ADMIN);
+  return (
+    hasPermission(user, ANY_ADMIN) || ADMIN_PAGE_ACTIONS.some((key) => hasPermission(user, key))
+  );
 }
