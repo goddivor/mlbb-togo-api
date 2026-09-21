@@ -118,8 +118,8 @@ describe('GameService', () => {
     expect(await service.listMatches(ID, null, {})).toMatchObject({ visible: false, items: [], total: 0 });
   });
 
-  it('never serves staff accounts or invalid ids', async () => {
-    const service = new GameService(makePrisma(userRow({ roleUser: 'admin' })) as unknown as PrismaService);
+  it('never serves system accounts or invalid ids', async () => {
+    const service = new GameService(makePrisma(userRow({ isSystemAccount: true })) as unknown as PrismaService);
     await expect(service.getSummary(ID)).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.getSummary('not-an-id')).rejects.toBeInstanceOf(NotFoundException);
   });
