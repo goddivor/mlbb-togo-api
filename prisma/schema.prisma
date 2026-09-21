@@ -262,6 +262,12 @@ model Item {
   icon        String?  // URL to item icon
   type        String?  // e.g. "defense", "attack", "attack_speed", "mana", "cooldown"
   gold        Int?     // cost in gold
+  gameId      Int?      // Moonton GMS id, set by the catalog sync (partial unique index)
+  syncedAt    DateTime? // last write by the catalog sync (later edits are kept)
+  enabled     Boolean?  @default(true) // false = hidden from players and pickers (null/missing = enabled)
+  stats       String?   // item attributes text from Moonton ("+160 Extra Physical Attack\n...")
+  passive     String?   // item passive / unique skills text from Moonton
+  gameMeta    String?   // JSON: { categoryId, category, isComponent, tier, buildsFrom, buildsInto } (Moonton ids)
   sort        Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -274,6 +280,9 @@ model Emblem {
   description String?
   icon        String?  // URL to emblem icon
   type        String?  // e.g. "support", "order", "chaos"
+  gameId      Int?      // Moonton GMS id, set by the catalog sync (partial unique index)
+  syncedAt    DateTime? // last write by the catalog sync (later edits are kept)
+  enabled     Boolean?  @default(true) // false = hidden from players and pickers (null/missing = enabled)
   sort        Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -286,6 +295,9 @@ model BattleSpell {
   description String?
   icon        String?  // URL to battle spell icon
   cooldown    String?  // e.g. "60s"
+  gameId      Int?      // Moonton GMS id, set by the catalog sync (partial unique index)
+  syncedAt    DateTime? // last write by the catalog sync (later edits are kept)
+  enabled     Boolean?  @default(true) // false = hidden from players and pickers (null/missing = enabled)
   sort        Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

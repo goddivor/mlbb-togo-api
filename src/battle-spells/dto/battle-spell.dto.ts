@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean } from 'class-validator';
 
 export class CreateBattleSpellDto {
   @IsString()
@@ -19,6 +19,10 @@ export class CreateBattleSpellDto {
   @IsOptional()
   @IsInt()
   sort?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
 }
 
 export class UpdateBattleSpellDto {
@@ -41,4 +45,8 @@ export class UpdateBattleSpellDto {
   @IsOptional()
   @IsInt()
   sort?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
 }

@@ -14,6 +14,14 @@ export class EmblemsController {
     return this.emblemsService.findAll();
   }
 
+  // Admin list: includes disabled entries (with their `enabled` flag).
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
+  @Get('all')
+  async findAllForAdmin() {
+    return this.emblemsService.findAll(true);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.emblemsService.findOne(id);

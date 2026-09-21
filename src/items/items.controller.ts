@@ -14,6 +14,14 @@ export class ItemsController {
     return this.itemsService.findAll();
   }
 
+  // Admin list: includes disabled entries (with their `enabled` flag).
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
+  @Get('all')
+  async findAllForAdmin() {
+    return this.itemsService.findAll(true);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.itemsService.findOne(id);

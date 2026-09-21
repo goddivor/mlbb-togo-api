@@ -64,6 +64,16 @@ describe('ItemsService', () => {
     });
   });
 
+  describe('findAll visibility', () => {
+    it('hides disabled items from the public list, keeps rows without the flag', async () => {
+      const rows = [itemRow({ name: 'A' }), itemRow({ name: 'B', enabled: false }), itemRow({ name: 'C', enabled: true })];
+      prisma.item.findMany.mockResolvedValue(rows);
+
+      expect((await service.findAll()).map((r: any) => r.name)).toEqual(['A', 'C']);
+      expect((await service.findAll(true)).map((r: any) => r.name)).toEqual(['A', 'B', 'C']);
+    });
+  });
+
   describe('create', () => {
     it('creates a new item', async () => {
       const newItem = itemRow();
@@ -78,6 +88,7 @@ describe('ItemsService', () => {
           type: 'movement',
           gold: 390,
           sort: 0,
+          enabled: true,
           description: undefined,
           icon: undefined,
         },
