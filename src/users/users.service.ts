@@ -311,26 +311,41 @@ export class UsersService {
 
   async remove(id: string) {
     await this.findOne(id);
-    await this.prisma.user.delete({ where: { id } });
+    await this.purgeUser(id);
     return { success: true };
   }
 
   /** Self-deletion: remove the account and clean up its owned relations. */
   async deleteSelf(id: string) {
     await this.findOne(id);
-    await Promise.all([
-      this.prisma.friendship.deleteMany({
+    await this.purgeUser(id);
+    return { success: true };
+  }
+
+  /**
+   * Deletes a user and every row that references him, in ONE transaction:
+   * either the whole account goes, or nothing is touched. Rows whose Prisma
+   * relation to User would block the delete (posts, comments, Pick & Ban
+   * drafts) are removed first; comments of others on his posts go with the
+   * posts.
+   */
+  private async purgeUser(id: string) {
+    const p = this.prisma;
+    await p.$transaction([
+      p.friendship.deleteMany({
         where: { OR: [{ requesterId: id }, { addresseeId: id }] },
       }),
-      this.prisma.notification.deleteMany({ where: { userId: id } }),
-      this.prisma.esportTeamMember.deleteMany({ where: { userId: id } }),
-      this.prisma.esportMatchPlayer.deleteMany({ where: { userId: id } }),
-      this.prisma.recruitmentApplication.deleteMany({ where: { userId: id } }),
-      this.prisma.gameMatch.deleteMany({ where: { userId: id } }),
-      this.prisma.gameSeasonStats.deleteMany({ where: { userId: id } }),
+      p.notification.deleteMany({ where: { userId: id } }),
+      p.esportTeamMember.deleteMany({ where: { userId: id } }),
+      p.esportMatchPlayer.deleteMany({ where: { userId: id } }),
+      p.recruitmentApplication.deleteMany({ where: { userId: id } }),
+      p.gameMatch.deleteMany({ where: { userId: id } }),
+      p.gameSeasonStats.deleteMany({ where: { userId: id } }),
+      p.pickBanDraft.deleteMany({ where: { ownerId: id } }),
+      p.comment.deleteMany({ where: { OR: [{ authorId: id }, { post: { authorId: id } }] } }),
+      p.post.deleteMany({ where: { authorId: id } }),
+      p.user.delete({ where: { id } }),
     ]);
-    await this.prisma.user.delete({ where: { id } });
-    return { success: true };
   }
 
   async setBan(id: string, isBanned: boolean) {
