@@ -98,6 +98,16 @@ export const PERMISSIONS: readonly PermissionDef[] = [
     label: { fr: 'Récompenses', en: 'Awards' },
   },
   {
+    key: 'admin.rewards',
+    group: 'esport',
+    route: '/admin/rewards',
+    label: { fr: 'Récompenses et cadres', en: 'Rewards and frames' },
+    description: {
+      fr: 'Cadres d’avatar, titres, corrections d’XP, résultats de tournoi et élections.',
+      en: 'Avatar frames, titles, XP corrections, tournament results and elections.',
+    },
+  },
+  {
     key: 'admin.tournaments',
     group: 'esport',
     route: '/admin/tournaments',

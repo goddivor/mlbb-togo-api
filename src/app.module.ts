@@ -37,6 +37,7 @@ import { AwardsModule } from './awards/awards.module';
 import { GeoModule } from './geo/geo.module';
 import { GameModule } from './game/game.module';
 import { AccessModule } from './access/access.module';
+import { RewardsModule } from './rewards/rewards.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { AccessModule } from './access/access.module';
     AwardsModule,
     GeoModule,
     GameModule,
+    RewardsModule,
   ],
 })
 export class AppModule {}

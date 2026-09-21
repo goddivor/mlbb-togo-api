@@ -7,6 +7,7 @@ import {
   LeaderboardQueryDto,
 } from './dto/leaderboard-query.dto';
 import { PUBLIC_USER_WHERE, isHiddenAccount } from './public-user.filter';
+import { resolveEquippedFrame } from '../rewards/rewards.logic';
 
 export function decodeRank(level?: number | null): string | null {
   if (level == null) return null;
@@ -95,6 +96,10 @@ export function serializeUser(user: any) {
 
     gameRank: decodeRank(user.gameRankLevel),
     gamePeakRank: decodeRank(user.gamePeakRankLevel),
+
+    // Rewards (#122): frame to display (null when expired or none) and title.
+    equippedFrame: resolveEquippedFrame(user),
+    equippedTitle: user.equippedTitle ?? null,
   };
 }
 
@@ -133,6 +138,8 @@ const PUBLIC_FIELDS = [
   'gameFrequentHeroes',
   'gameRoles',
   'gameSeasons',
+  'equippedFrame',
+  'equippedTitle',
 ];
 
 function pick(obj: any, fields: string[]) {
@@ -163,6 +170,8 @@ export function serializeUserCard(user: any) {
     'gameRank',
     'gameRankLevel',
     'gameLevel',
+    'equippedFrame',
+    'equippedTitle',
   ]);
 }
 
