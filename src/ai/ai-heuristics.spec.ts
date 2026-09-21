@@ -137,6 +137,59 @@ describe('counterPicksHeuristic', () => {
   });
 });
 
+describe('counterPicksHeuristic (full matrix)', () => {
+  const layla = catalog.find((h) => h.name === 'Layla')!;
+  const kagura = catalog.find((h) => h.name === 'Kagura')!;
+  const ref = (name: string, increaseWinRate: number) => ({ heroId: 1, name, image: null, winRate: 50, increaseWinRate });
+  const withMatrix = (counters: ReturnType<typeof ref>[]): HeroMeta => ({ ...meta([]), matrix: { counters, teammates: [] } });
+
+  it('scores every hero against every enemy and names only real counters', () => {
+    const metas = new Map<string, HeroMeta | null>([
+      [layla.id, withMatrix([ref('Atlas', -4), ref('Gusion', -2), ref('Chou', 3), ref('Kagura', -1.2), ref('Angela', 0.2)])],
+      [kagura.id, withMatrix([ref('Gusion', -3), ref('Atlas', 1), ref('Chou', -0.5), ref('Layla', -6)])],
+    ]);
+    const r = counterPicksHeuristic({ enemies: [layla, kagura], metaByEnemyId: metas, catalog, lang: 'en' });
+    expect(r.metaAvailable).toBe(true);
+    const names = r.counters.map((c) => c.name);
+    // Gusion answers both enemies (2+2 + 2+3) and beats Atlas (2+4 - 0.5).
+    expect(names[0]).toBe('Gusion');
+    expect(r.counters[0].against).toEqual(['Kagura', 'Layla']);
+    expect(names[1]).toBe('Atlas');
+    expect(r.counters[1].against).toEqual(['Layla']);
+    // Enemies are never suggested; Chou (beaten by Layla) is ranked below neutral heroes.
+    expect(names).not.toContain('Layla');
+    expect(names).not.toContain('Kagura');
+    expect(names.indexOf('Chou') === -1 || names.indexOf('Chou') > names.indexOf('Angela')).toBe(true);
+    expect(r.counters[0].reason).toContain('+3');
+  });
+
+  it('skips the class fallback for enemies covered by the matrix', () => {
+    const metas = new Map<string, HeroMeta | null>([[layla.id, withMatrix([ref('Atlas', -2)])]]);
+    const r = counterPicksHeuristic({ enemies: [layla], metaByEnemyId: metas, catalog, lang: 'en' });
+    expect(r.counters.map((c) => c.name)).toEqual(['Atlas']);
+  });
+
+  it('resolves matrix entries by Moonton hero id when names are missing', () => {
+    const cat = catalog.map((h) => (h.name === 'Khufra' ? { ...h, heroId: 78 } : h));
+    const metas = new Map<string, HeroMeta | null>([
+      [layla.id, withMatrix([{ heroId: 78, name: null, image: null, winRate: 50, increaseWinRate: -3 }])],
+    ]);
+    const r = counterPicksHeuristic({ enemies: [layla], metaByEnemyId: metas, catalog: cat, lang: 'en' });
+    expect(r.counters.map((c) => c.name)).toEqual(['Khufra']);
+  });
+
+  it('uses the matrix threats to pick the defensive build item', () => {
+    const b = buildHeuristic({
+      hero: layla,
+      meta: withMatrix([ref('Kagura', -3), ref('Lunox', -2.5), ref('Gusion', -1.5), ref('Chou', 4)]),
+      catalog,
+      lang: 'en',
+    });
+    expect(b.metaAvailable).toBe(true);
+    expect(b.items.find((i) => i.priority === 'situational')!.name).toBe("Athena's Shield");
+  });
+});
+
 describe('buildHeuristic', () => {
   it('only uses curated real items, lane-driven spell, and flags missing meta', () => {
     const ling = catalog.find((h) => h.name === 'Ling')!;

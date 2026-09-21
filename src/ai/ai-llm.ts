@@ -214,6 +214,13 @@ export function metaBlock(name: string, meta: HeroMeta | null): string {
     `  strong against: ${list(meta.counters.strong)}`,
     `  weak against (heroes that beat ${name}): ${list(meta.counters.weak)}`,
     `  best teammates: ${list(meta.synergy.best)}`,
+    ...(meta.matrix?.counters?.length
+      ? [
+          `  hardest matchups (full matrix, ${name}'s win rate change): ${list(
+            [...meta.matrix.counters].sort((a, b) => a.increaseWinRate - b.increaseWinRate),
+          )}`,
+        ]
+      : []),
   ].join('\n');
 }
 

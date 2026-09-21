@@ -39,6 +39,11 @@ export interface HeroMeta {
   banRate: number;
   synergy: { best: MetaHeroRef[]; worst: MetaHeroRef[] };
   counters: { strong: MetaHeroRef[]; weak: MetaHeroRef[] };
+  /**
+   * Full Academy matrix: every enemy (`counters`) and every teammate, where
+   * `increaseWinRate` is the change (points) of THIS hero's win rate.
+   */
+  matrix?: { counters: MetaHeroRef[]; teammates: MetaHeroRef[] };
 }
 
 export interface MetaHeroRef {
