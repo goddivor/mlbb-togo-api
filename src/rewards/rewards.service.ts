@@ -294,13 +294,22 @@ export class RewardsService {
     return rows.length;
   }
 
-  /** Swaps a user wearing `key` back to his fallback frame (or none). */
+  /**
+   * Swaps a user wearing `key` back to his fallback frame (or none), and
+   * forgets `key` as the fallback so an ended frame is never restored.
+   */
   private async unequipExpired(userId: string, key: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { equippedFrame: true, fallbackFrame: true },
     });
-    if (!user || user.equippedFrame !== key) return;
+    if (!user) return;
+    if (user.equippedFrame !== key) {
+      if (user.fallbackFrame === key) {
+        await this.prisma.user.update({ where: { id: userId }, data: { fallbackFrame: null } });
+      }
+      return;
+    }
     const fallback = user.fallbackFrame && user.fallbackFrame !== key ? user.fallbackFrame : null;
     await this.prisma.user.update({
       where: { id: userId },

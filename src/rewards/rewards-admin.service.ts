@@ -4,7 +4,7 @@ import { GamificationService } from '../gamification/gamification.service';
 import { MAX_LEVEL, XpType, xpForLevel } from '../gamification/gamification.rules';
 import { serializeUserCard } from '../users/users.service';
 import { PUBLIC_USER_WHERE } from '../users/public-user.filter';
-import { FRAMES, TITLES, badgeTierFor, framesForAchievement, getFrame } from './frames.catalog';
+import { FRAMES, TITLES, badgeTierFor, framesForAchievement, getFrame, isTemporaryFrame } from './frames.catalog';
 import {
   MvpCandidate,
   XpCandidate,
@@ -25,6 +25,7 @@ import {
 } from './dto/rewards.dto';
 
 const DAY = 86_400_000;
+const OBJECT_ID = /^[a-f\d]{24}$/i;
 /** A weekly/monthly holder re-elected right after his period keeps one continuous period. */
 const ELECTION_GRACE_MS = 3 * DAY;
 
@@ -119,6 +120,7 @@ export class RewardsAdminService {
   }
 
   async userCollection(userId: string) {
+    if (!OBJECT_ID.test(userId)) throw new BadRequestException('Identifiant invalide.');
     return this.rewards.collection(userId);
   }
 
@@ -143,8 +145,19 @@ export class RewardsAdminService {
   }
 
   async end(actor: Actor, dto: EndFrameDto) {
-    if (!getFrame(dto.frameId)) throw new BadRequestException('Cadre inconnu.');
-    const res = await this.rewards.endFrame(dto.userId, dto.frameId, dto.variant ?? '');
+    const frame = getFrame(dto.frameId);
+    if (!frame) throw new BadRequestException('Cadre inconnu.');
+    const variant = dto.variant ?? '';
+    // Permanent frames are never removed (owner decision 9): only temporary
+    // ones (catalogue expiry or granted with a duration) can be ended.
+    const row = await this.prisma.userFrame.findUnique({
+      where: { userId_frameId_variant: { userId: dto.userId, frameId: dto.frameId, variant } },
+      select: { expiresAt: true },
+    });
+    if (row && !isTemporaryFrame(frame) && !row.expiresAt) {
+      throw new BadRequestException('Un cadre permanent ne peut pas être retiré.');
+    }
+    const res = await this.rewards.endFrame(dto.userId, dto.frameId, variant);
     await this.log('rewards.frame.end', actor, dto.userId, { frameId: dto.frameId, variant: dto.variant, ended: res.ended });
     return res;
   }
