@@ -71,13 +71,13 @@ describe('UsersService.leaderboard', () => {
     expect(res.entries.map((e: any) => e.position)).toEqual([1, 2, 3]);
   });
 
-  it('excludes banned accounts and staff at the query level', async () => {
+  it('excludes banned and system accounts (not staff) at the query level', async () => {
     prisma.user.findMany.mockResolvedValue([]);
 
     await service.leaderboard();
 
     expect(prisma.user.findMany).toHaveBeenCalledWith({
-      where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
+      where: { isBanned: false, isSystemAccount: false },
     });
   });
 
@@ -149,7 +149,7 @@ describe('UsersService.leaderboard', () => {
     expect(prisma.user.findMany).toHaveBeenCalledWith({
       where: {
         isBanned: false,
-        roleUser: { notIn: ['admin', 'moderator'] },
+        isSystemAccount: false,
         role: 'tank',
       },
     });
@@ -191,7 +191,7 @@ describe('UsersService.leaderboard', () => {
     expect(prisma.user.findMany).toHaveBeenCalledWith({
       where: {
         isBanned: false,
-        roleUser: { notIn: ['admin', 'moderator'] },
+        isSystemAccount: false,
         id: { in: ['u1', 'u2'] },
       },
     });

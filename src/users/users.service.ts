@@ -6,6 +6,7 @@ import {
   LeaderboardMetric,
   LeaderboardQueryDto,
 } from './dto/leaderboard-query.dto';
+import { PUBLIC_USER_WHERE, isHiddenAccount } from './public-user.filter';
 
 export function decodeRank(level?: number | null): string | null {
   if (level == null) return null;
@@ -172,7 +173,7 @@ export class UsersService {
   async findAll() {
     // Staff accounts (admin/moderator) are special control accounts, not players.
     const users = await this.prisma.user.findMany({
-      where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
+      where: { ...PUBLIC_USER_WHERE },
     });
     // Gamification level shown on player cards (users without progress: null).
     const levels = new Map(
@@ -203,6 +204,8 @@ export class UsersService {
       avatar: serializeUserCard(u).avatar,
       email: u.email,
       roleUser: u.roleUser,
+      roleIds: u.roleIds ?? [],
+      isSystemAccount: u.isSystemAccount === true,
       isBanned: u.isBanned,
       isOnline: u.isOnline,
       country: u.country,
@@ -218,7 +221,7 @@ export class UsersService {
 
   async findPublic(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user || user.roleUser === 'admin' || user.roleUser === 'moderator') {
+    if (!user || isHiddenAccount(user)) {
       throw new NotFoundException('Utilisateur introuvable.');
     }
     return serializePublicUser(user);
@@ -252,11 +255,8 @@ export class UsersService {
     const minGames = query.minGames ?? 0;
 
     // Public endpoint: never leak PII (email, googleId, tokens, prefs...) and
-    // exclude staff/banned accounts, exactly like the public directory.
-    const where: Record<string, any> = {
-      isBanned: false,
-      roleUser: { notIn: ['admin', 'moderator'] },
-    };
+    // exclude banned/system accounts, exactly like the public directory.
+    const where: Record<string, any> = { ...PUBLIC_USER_WHERE };
     if (query.role) where.role = query.role;
 
     if (query.seasonId) {
@@ -342,11 +342,11 @@ export class UsersService {
     return serializeUser(user);
   }
 
-  async setRole(id: string, roleUser: string) {
+  async setSystemAccount(id: string, isSystemAccount: boolean) {
     await this.findOne(id);
     const user = await this.prisma.user.update({
       where: { id },
-      data: { roleUser },
+      data: { isSystemAccount },
     });
     return serializeUser(user);
   }
