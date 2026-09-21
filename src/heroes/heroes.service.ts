@@ -38,9 +38,16 @@ export class HeroesService {
     });
   }
 
+  /** Accepts either the Mongo id or the numeric MLBB hero id. */
   async findOne(id: string) {
-    const hero = await this.prisma.hero.findUnique({
-      where: { id },
+    const where = /^[0-9a-f]{24}$/i.test(id)
+      ? { id }
+      : /^\d+$/.test(id)
+        ? { heroId: Number(id) }
+        : null;
+    if (!where) throw new NotFoundException('Héros introuvable.');
+    const hero = await this.prisma.hero.findFirst({
+      where,
       select: {
         id: true,
         name: true,
