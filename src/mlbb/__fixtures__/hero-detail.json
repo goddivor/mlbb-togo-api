@@ -1,0 +1,287 @@
+{
+  "_request": {
+    "url": "https://api.gms.moontontech.com/api/gms/source/2669606/2756564",
+    "body": {
+      "pageSize": 20,
+      "filters": [
+        {
+          "field": "hero_id",
+          "operator": "eq",
+          "value": 18
+        }
+      ],
+      "sorts": [],
+      "pageIndex": 1,
+      "object": []
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "OK",
+    "data": {
+      "records": [
+        {
+          "_id": "65f2e27efd1bb8e47d25df41",
+          "caption": "018蕾拉",
+          "configId": 144237,
+          "createdAt": 1710416510999,
+          "createdUser": "nickjin",
+          "data": {
+            "_object": 2667538,
+            "head": "https://akmweb.youngjoygame.com/web/gms/image/f222c954b85dce735916d61fc355668a.jpg",
+            "head_big": "https://akmweb.youngjoygame.com/web/svnres/file/mlbb/homepage/100_0db5131842bec1fdbdf5f8533ebada2c.jpg",
+            "hero": {
+              "_createdAt": 1724837697935,
+              "_id": "66ceef41af5771f18c500997",
+              "_updatedAt": 1789542899945,
+              "data": {
+                "abilityshow": [
+                  "10",
+                  "80",
+                  "10",
+                  "20"
+                ],
+                "difficulty": "20",
+                "head": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_b2b38e9406ea0de0b866db7674feea0f.png",
+                "heroid": 18,
+                "heroskilllist": [
+                  {
+                    "skilllist": [
+                      {
+                        "skillcd&cost": "",
+                        "skilldesc": "Layla deals increased damage to targets farther away from her (starting at 100% and increasing to 115% at 6 units away). This does not apply to Turrets.",
+                        "skillicon": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_ba25b082b2a373138d398a32499e0544.png",
+                        "skillid": 1840,
+                        "skillname": "Malefic Gun",
+                        "skilltag": [
+                          {
+                            "tagid": 62,
+                            "tagname": "Buff",
+                            "tagrgb": "79,156,184"
+                          }
+                        ],
+                        "skillvideo": ""
+                      },
+                      {
+                        "skillcd&cost": "CD: 6   Mana Cost: 35",
+                        "skilldesc": "Layla fires a Malefic Bomb in the target direction, dealing 200<font color=\"fba51f\"> (+80% Total Physical Attack)</font> <font color=\"fb1f1f\">Physical Damage</font> to the first enemy hit (can Crit).\n\nUpon hitting an enemy, Layla's Basic Attacks and <font color=\"a6aafb\">Void Projectile</font> gain extra range for 3s, and she gains 60% extra Movement Speed that decays over 1.2s. The duration of the Movement Speed boost is doubled if an enemy hero is hit.",
+                        "skillicon": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_b00ff9edafd44eeee4af815f24c14653.png",
+                        "skillid": 1810,
+                        "skillname": "Malefic Bomb",
+                        "skilltag": [
+                          {
+                            "tagid": 31,
+                            "tagname": "Burst",
+                            "tagrgb": "199,121,85"
+                          },
+                          {
+                            "tagid": 62,
+                            "tagname": "Buff",
+                            "tagrgb": "79,156,184"
+                          }
+                        ],
+                        "skillvideo": ""
+                      },
+                      {
+                        "skillcd&cost": "CD: 7.5   Mana Cost: 70",
+                        "skilldesc": "Layla fires an orb of Malefic Energy at the target, dealing 170<font color=\"fba51f\"> (+65% Total Physical Attack)</font> <font color=\"fb1f1f\">Physical Damage</font> to the target and nearby enemies and applying a <font color=\"a6aafb\">Magic Mark</font> to the target for 3s.\nWhen Layla hits an enemy with a <font color=\"a6aafb\">Magic Mark</font>, she deals 100<font color=\"fba51f\"> (+35% Total Physical Attack)</font> <font color=\"fb1f1f\">Physical Damage</font> to the target and nearby enemies, stunning them for 0.25s.",
+                        "skillicon": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_03f3b37b699108735c77c0197acac646.png",
+                        "skillid": 1820,
+                        "skillname": "Void Projectile",
+                        "skilltag": [
+                          {
+                            "tagid": 32,
+                            "tagname": "AOE",
+                            "tagrgb": "199,121,85"
+                          },
+                          {
+                            "tagid": 21,
+                            "tagname": "CC",
+                            "tagrgb": "205,93,109"
+                          }
+                        ],
+                        "skillvideo": ""
+                      },
+                      {
+                        "skillcd&cost": "CD: 37   Mana Cost: 130",
+                        "skilldesc": "<font color=\"a6aafb\">Passive</font>: The range of <font color=\"a6aafb\">Void Projectile</font> and Basic Attacks is increased by 0.6 units. Layla's sight range is slightly increased each time this skill is upgraded. \n<font color=\"a6aafb\">Active</font>: Layla fires a blast of Malefic Energy in the target direction, dealing 500<font color=\"fba51f\"> (+150% Total Physical Attack)</font> <font color=\"fb1f1f\">Physical Damage</font> to enemies in a line.",
+                        "skillicon": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_8410070e72f25785078a91c793a39cc0.png",
+                        "skillid": 1830,
+                        "skillname": "Destruction Rush",
+                        "skilltag": [
+                          {
+                            "tagid": 31,
+                            "tagname": "Burst",
+                            "tagrgb": "199,121,85"
+                          },
+                          {
+                            "tagid": 62,
+                            "tagname": "Buff",
+                            "tagrgb": "79,156,184"
+                          }
+                        ],
+                        "skillvideo": ""
+                      }
+                    ],
+                    "skilllistid": "181"
+                  }
+                ],
+                "heroskin": null,
+                "name": "Layla",
+                "painting": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_5a532838b7358fed58458c612da3d59b.png",
+                "recommendlevel": [
+                  "3",
+                  "1",
+                  "2"
+                ],
+                "recommendlevellabel": "3-1-2",
+                "recommendmasterplan": [],
+                "roadsort": [
+                  {
+                    "_id": "668541a2aa8e7f6ec4703d86",
+                    "caption": "金币路",
+                    "configId": 144237,
+                    "createdAt": 1720009122589,
+                    "createdUser": "nickjin",
+                    "data": {
+                      "_object": 2732073,
+                      "road_sort_icon": "https://akmweb.youngjoygame.com/web/gms/image/91f817c656908a83c2e24eecb3b70986.svg",
+                      "road_sort_id": "5",
+                      "road_sort_title": "Gold Lane"
+                    },
+                    "dynamic": null,
+                    "id": 2732079,
+                    "linkId": [
+                      2732073
+                    ],
+                    "sort": 0,
+                    "updatedAt": 1723022953428,
+                    "updatedUser": "nickjin"
+                  },
+                  ""
+                ],
+                "roadsorticon1": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_b4302450af5d1f55adf07399b4d3ed95.png",
+                "roadsorticon2": "",
+                "roadsortlabel": [
+                  "Gold Lane",
+                  ""
+                ],
+                "smallmap": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_6efe9abc2047f59d45fa1c88fb1261b7.png",
+                "sorticon1": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_094c17e22ff5e8086641e9a2c67dd81e.png",
+                "sorticon2": "",
+                "sortid": [
+                  {
+                    "_id": "6698c04f613093b976b4a978",
+                    "caption": "5射手",
+                    "configId": 144237,
+                    "createdAt": 1721286735503,
+                    "createdUser": "nickjin",
+                    "data": {
+                      "_object": 2740651,
+                      "sort_icon": "https://akmweb.youngjoygame.com/web/gms/image/025c69a764924f4bac526a2662f1a0b9.png",
+                      "sort_id": "5",
+                      "sort_title": "Marksman"
+                    },
+                    "dynamic": null,
+                    "id": 2740665,
+                    "linkId": [
+                      2740651
+                    ],
+                    "sort": 0,
+                    "updatedAt": 1723023126452,
+                    "updatedUser": "nickjin"
+                  },
+                  ""
+                ],
+                "sortlabel": [
+                  "Marksman",
+                  ""
+                ],
+                "speciality": [
+                  "Finisher",
+                  "Damage"
+                ],
+                "squarehead": "https://akmweb.youngjoygame.com/web/svnres/file/test/homepage_2_2_16_1232_1/100_995227993612d04468f763d6c66dcd1a.jpg",
+                "squareheadbig": "https://akmweb.youngjoygame.com/web/svnres/file/test/homepage_2_2_16_1232_1/100_0db5131842bec1fdbdf5f8533ebada2c.jpg",
+                "story": "The backbone of the Eruditio Rangers who is also known as the Shining Star.",
+                "tale": ""
+              },
+              "id": 100391,
+              "sourceId": 2756563
+            },
+            "hero_id": 18,
+            "relation": {
+              "assist": {
+                "desc": "Layla works best with Tanks that can protect backline heroes, such as Minsitthar and Belerick, since their protection gives Layla more opportunities to deal damage.",
+                "target_hero": [
+                  {
+                    "data": {
+                      "head": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_c5d24a1dad6cef21de2698a4ed1d80ce.png"
+                    }
+                  },
+                  {
+                    "data": {
+                      "head": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_5f2a9eca0bafd4ed8dc39a93c771b3af.png"
+                    }
+                  }
+                ],
+                "target_hero_id": [
+                  74,
+                  70
+                ]
+              },
+              "strong": {
+                "desc": "Layla's relatively longer attack range lets her counter slow Tanks like Tigreal and Belerick.",
+                "target_hero": [
+                  {
+                    "data": {
+                      "head": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_8b30576754be1a4f8bebd09df8d6bec7.png"
+                    }
+                  },
+                  {
+                    "data": {
+                      "head": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_5f2a9eca0bafd4ed8dc39a93c771b3af.png"
+                    }
+                  }
+                ],
+                "target_hero_id": [
+                  6,
+                  70
+                ]
+              },
+              "weak": {
+                "desc": "Layla is countered by Assassins with high burst damage, such as Karina and Ling, as they can get the jump on Layla and melt her easily.",
+                "target_hero": [
+                  {
+                    "data": {
+                      "head": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_f49394186dc0e55d545da8377be83280.png"
+                    }
+                  },
+                  {
+                    "data": {
+                      "head": "https://akmweb.youngjoygame.com/web/svnres/img/test/homepage_2_2_16_1232_1/100_017bade52b9fc94bbc12615de6d75c08.png"
+                    }
+                  }
+                ],
+                "target_hero_id": [
+                  8,
+                  84
+                ]
+              }
+            },
+            "url": "https://play.mobilelegends.com/lore/hero/Layla"
+          },
+          "dynamic": null,
+          "id": 2678754,
+          "linkId": [
+            2667538
+          ],
+          "sort": 0,
+          "updatedAt": 1726805440128,
+          "updatedUser": "nickjin"
+        }
+      ],
+      "total": 1
+    }
+  }
+}
