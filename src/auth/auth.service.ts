@@ -17,32 +17,8 @@ import { serializeUser } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
-
-// Moonton upstream, called directly (no third-party proxy).
-// AUTH_BASE handles the account flow (sendVc/login/logout/getBaseInfo).
-// STATS_BASE (actgateway) serves the battlereport/* stats endpoints.
-const AUTH_BASE = 'https://sg-api.mobilelegends.com';
-const STATS_BASE = 'https://app.web.moontontech.com/actgateway';
-// x-actid / x-appid are required by getBaseInfo (Moonton "academy" app).
-const MLBB_X_ACTID = '2728785';
-const MLBB_X_APPID = '2713644';
-const MLBB_ORIGIN = 'https://www.mobilelegends.com';
-const MLBB_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
-
-const EMPTY_GAME_PROFILE = {
-  nickname: null,
-  avatar: null,
-  level: null,
-  rankLevel: null,
-  peakRankLevel: null,
-  country: null,
-  stats: {},
-  frequentHeroes: [],
-  roles: [],
-  seasons: [],
-  currentSeason: null,
-};
+import { MoontonClient } from '../game/moonton.client';
+import { BaseInfo, GameSyncService, PrefetchedInfo, identityFields } from '../game/game-sync.service';
 
 @Injectable()
 export class AuthService {
@@ -51,6 +27,8 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
+    private moonton: MoontonClient,
+    private gameSync: GameSyncService,
     @Optional() private gamification?: GamificationService,
   ) {}
 
@@ -140,246 +118,68 @@ export class AuthService {
     return serializeUser(user);
   }
 
-  private mlbbBaseHeaders(): Record<string, string> {
-    return {
-      'User-Agent': MLBB_UA,
-      Accept: '*/*',
-      Origin: MLBB_ORIGIN,
-      Referer: `${MLBB_ORIGIN}/`,
-      DNT: '1',
-    };
-  }
-
-  private encodeForm(data: Record<string, any>): string {
-    const entries = Object.entries(data)
-      .filter(([, v]) => v !== undefined && v !== null)
-      .map(([k, v]) => [k, String(v)] as [string, string]);
-    return new URLSearchParams(entries).toString();
-  }
-
-  /** Form POST to AUTH_BASE (sendVc/login/logout/getBaseInfo). */
-  private async authPost(
-    path: string,
-    data: Record<string, any>,
-    opts: { jwt?: string | null; forInfo?: boolean } = {},
-  ): Promise<any> {
-    const headers: Record<string, string> = {
-      ...this.mlbbBaseHeaders(),
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-    };
-    if (opts.jwt) {
-      headers['authorization'] = opts.jwt;
-      headers['x-token'] = opts.jwt;
-    }
-    if (opts.forInfo) {
-      headers['x-actid'] = MLBB_X_ACTID;
-      headers['x-appid'] = MLBB_X_APPID;
-    }
-    try {
-      const res = await fetch(`${AUTH_BASE}${path}`, {
-        method: 'POST',
-        headers,
-        body: this.encodeForm(data),
-      });
-      return await res.json();
-    } catch (e) {
-      this.logger.warn(`MLBB authPost ${path} failed: ${e}`);
-      return null;
-    }
-  }
-
-  /** JSON GET to STATS_BASE actgateway (battlereport/*). */
-  private async statsGet(
-    path: string,
-    params: Record<string, any>,
-    jwt: string,
-  ): Promise<any> {
-    const qs = this.encodeForm(params);
-    const url = `${STATS_BASE}/${path}${qs ? `?${qs}` : ''}`;
-    try {
-      const res = await fetch(url, {
-        headers: {
-          ...this.mlbbBaseHeaders(),
-          Accept: 'application/json, text/plain, */*',
-          authorization: jwt,
-          'x-token': jwt,
-        },
-      });
-      return await res.json();
-    } catch (e) {
-      this.logger.warn(`MLBB statsGet ${path} failed: ${e}`);
-      return null;
-    }
-  }
-
-  private mapFrequentHeroes(result: any): any[] {
-    return (Array.isArray(result) ? result : []).map((h: any) => ({
-      heroId: h.hid,
-      name: h.hid_e?.n ?? `#${h.hid}`,
-      image: h.hid_e?.ix ?? null,
-      image2x: h.hid_e?.i2x ?? null,
-      matches: h.tc ?? 0,
-      wins: h.wc ?? 0,
-      winRate: h.tc ? Math.round(((h.wc ?? 0) / h.tc) * 1000) / 10 : 0,
-      power: h.p ?? 0,
-    }));
-  }
-
-  private async fetchSeasons(jwt: string): Promise<{ ok: boolean; sids: number[] }> {
-    const json = await this.statsGet('battlereport/season/list', {}, jwt);
-    const ok = !!(json && json.code === 0 && json.data);
-    const sids = json?.data?.sids;
-    return { ok, sids: Array.isArray(sids) ? sids : [] };
-  }
-
-  private async fetchFrequentHeroes(jwt: string, sid: number, limit = 8): Promise<any[]> {
-    const json = await this.statsGet(
-      'battlereport/heros/frequent',
-      { sid, limit },
-      jwt,
-    );
-    return this.mapFrequentHeroes(json?.data?.result);
-  }
-
-  private async fetchGameProfile(jwt: string, roleId: number, zoneId: number) {
-    const [infoR, statsR, seasonRes] = await Promise.all([
-      this.authPost('/base/getBaseInfo', { roleId, zoneId }, { jwt, forInfo: true }),
-      this.statsGet('battlereport/stats', {}, jwt),
-      this.fetchSeasons(jwt),
-    ]);
-
-    const infoOk = !!(infoR && infoR.code === 0 && infoR.data);
-    const statsOk = !!(statsR && statsR.code === 0 && statsR.data);
-    const seasonsOk = seasonRes.ok;
-    const valid = infoOk || statsOk || seasonsOk;
-
-    const info = infoR?.data ?? {};
-    const st = statsR?.data ?? {};
-    const seasons = seasonRes.sids;
-
-    const currentSeason = seasons.length ? seasons[0] : null;
-    const frequentHeroes =
-      currentSeason != null ? await this.fetchFrequentHeroes(jwt, currentSeason) : [];
-
-    const roles = await this.computeMainRoles(frequentHeroes);
-
-    const wins = st.wc ?? 0;
-    const total = st.tc ?? 0;
-    const stats = {
-      wins,
-      total,
-      losses: Math.max(0, total - wins),
-      winRate: total ? Math.round((wins / total) * 1000) / 10 : 0,
-      avgScore: st.as ? Math.round((st.as / 100) * 100) / 100 : 0,
-      gameTime: st.gt ?? 0,
-      mvpCount: st.mvpc ?? 0,
-      winStreak: st.wsc ?? 0,
-    };
-
-    return {
-      nickname: info.name || null,
-      avatar: info.avatar || null,
-      level: info.level ?? null,
-      rankLevel: info.rank_level ?? null,
-      peakRankLevel: info.history_rank_level ?? null,
-      country: info.reg_country || null,
-      stats,
-      frequentHeroes,
-      roles,
-      seasons,
-      currentSeason,
-      infoOk,
-      statsOk,
-      seasonsOk,
-      valid,
-    };
-  }
-
-  private async computeMainRoles(
-    frequentHeroes: any[],
-  ): Promise<Array<{ role: string; matches: number }>> {
-    if (!frequentHeroes.length) return [];
-    const names = frequentHeroes.map((h) => h.name).filter(Boolean);
-    const heroes = await this.prisma.hero.findMany({
-      where: { name: { in: names } },
-      select: { name: true, role: true },
-    });
-    const roleByName = new Map(heroes.map((h) => [h.name, h.role]));
-    const tally = new Map<string, number>();
-    for (const h of frequentHeroes) {
-      const role = roleByName.get(h.name);
-      if (!role) continue;
-      tally.set(role, (tally.get(role) ?? 0) + (h.matches ?? 0));
-    }
-    return [...tally.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([role, matches]) => ({ role, matches }));
-  }
-
   async gameHeroes(userId: string, sid: number) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user?.mlbbToken) {
+    if (!user?.mlbbRoleId) {
       throw new BadRequestException('Aucun compte de jeu lié.');
     }
-    return this.fetchFrequentHeroes(user.mlbbToken, sid);
+    return this.gameSync.seasonHeroes(userId, sid);
   }
 
   private async validateMlbbCode(roleId: number, zoneId: number, vc: number) {
-    const json = await this.authPost('/base/login', {
+    const res = await this.moonton.sgPost('/base/login', {
       roleId,
       zoneId,
       vc,
       referer: 'academy',
       type: 'web',
     });
-    if (!json) {
+    if (res.outcome === 'unreachable') {
       throw new BadRequestException('Service MLBB momentanément indisponible. Réessayez dans un instant.');
     }
-    if (json.code !== 0 || !json.data) {
-      throw new UnauthorizedException(
-        json.msg || json.message || 'Code de vérification invalide ou expiré.',
-      );
+    if (!res.ok || !res.data) {
+      throw new UnauthorizedException(res.message || 'Code de vérification invalide ou expiré.');
     }
-    return (json.data.jwt || json.data.token || null) as string | null;
+    return (res.data.jwt || res.data.token || null) as string | null;
   }
 
-  private gameFields(zoneId: number, token: string | null, profile: any) {
+  /** Columns written when a fresh Moonton session is stored (login / link). */
+  private sessionFields(zoneId: number, token: string | null, info: BaseInfo | null) {
     const data: any = {
       mlbbZoneId: zoneId,
       mlbbToken: token,
-      gameSyncedAt: new Date(),
+      mlbbTokenStatus: token ? 'valid' : null,
+      mlbbTokenExpiredAt: null,
     };
-    if (profile.infoOk !== false) {
-      data.gameNickname = profile.nickname;
-      data.gameAvatar = profile.avatar;
-      data.gameLevel = profile.level;
-      data.gameRankLevel = profile.rankLevel;
-      data.gamePeakRankLevel = profile.peakRankLevel;
-      data.gameCountry = profile.country;
-    }
-    if (profile.statsOk !== false) {
-      data.gameStats = toJson(profile.stats);
-    }
-    if (profile.seasonsOk !== false) {
-      data.gameFrequentHeroes = toJson(profile.frequentHeroes);
-      data.gameRoles = toJson(profile.roles);
-      data.gameSeasons = toJson(profile.seasons);
+    if (info) {
+      Object.assign(data, identityFields(info));
+      data.gameSyncedAt = new Date();
     }
     return data;
   }
 
-  async mlbbSendVc(roleId: number, zoneId: number) {
-    const json = await this.authPost('/base/sendVc', { roleId, zoneId });
+  /** Full game sync right after a login/link; a failure never blocks the login. */
+  private async syncAfterLogin(userId: string, prefetched: PrefetchedInfo) {
+    try {
+      const { user } = await this.gameSync.syncUser(userId, { prefetched });
+      return user;
+    } catch (e: any) {
+      this.logger.warn(`Game sync after login failed for ${userId}: ${e?.message ?? e}`);
+      return null;
+    }
+  }
 
-    if (!json) {
+  async mlbbSendVc(roleId: number, zoneId: number) {
+    const res = await this.moonton.sgPost('/base/sendVc', { roleId, zoneId });
+
+    if (res.outcome === 'unreachable') {
       throw new BadRequestException(
         'Service MLBB momentanément indisponible (trafic élevé). Réessaie dans quelques instants.',
       );
     }
-    if (json.code !== 0) {
+    if (!res.ok) {
       throw new BadRequestException(
-        json.msg || json.message || "Impossible d'envoyer le code. Vérifie l'ID de jeu et le serveur.",
+        res.message || "Impossible d'envoyer le code. Vérifie l'ID de jeu et le serveur.",
       );
     }
     return {
@@ -390,29 +190,29 @@ export class AuthService {
 
   async mlbbLogin(roleId: number, zoneId: number, vc: number) {
     const mlbbToken = await this.validateMlbbCode(roleId, zoneId, vc);
-    const profile = mlbbToken
-      ? await this.fetchGameProfile(mlbbToken, roleId, zoneId)
-      : { nickname: null, avatar: null, level: null, rankLevel: null, peakRankLevel: null, country: null, stats: {}, frequentHeroes: [] };
+    const base = mlbbToken ? await this.gameSync.fetchBaseInfo(mlbbToken, roleId, zoneId) : null;
+    const info = base?.info ?? null;
 
     let user = await this.prisma.user.findFirst({ where: { mlbbRoleId: roleId } });
     if (!user) {
       user = await this.prisma.user.create({
         data: {
-          username: await this.uniqueUsername(profile.nickname || `Player ${roleId}`, roleId),
+          username: await this.uniqueUsername(info?.nickname || `Player ${roleId}`, roleId),
           email: `mlbb-${roleId}@players.mlbbtogo`,
           password: await bcrypt.hash(crypto.randomUUID(), 10),
           provider: 'mlbb',
           mlbbRoleId: roleId,
           profileSource: 'game',
-          ...this.gameFields(zoneId, mlbbToken, profile),
+          ...this.sessionFields(zoneId, mlbbToken, info),
         },
       });
     } else {
       user = await this.prisma.user.update({
         where: { id: user.id },
-        data: { ...this.gameFields(zoneId, mlbbToken, profile), lastActive: new Date() },
+        data: { ...this.sessionFields(zoneId, mlbbToken, info), lastActive: new Date() },
       });
     }
+    if (base) user = (await this.syncAfterLogin(user.id, base)) ?? user;
 
     void this.gamification?.trackDailyLogin(user.id);
     return { token: this.signToken(user), user: serializeUser(user) };
@@ -432,6 +232,15 @@ export class AuthService {
       where: { userId: victimId },
       data: { userId: survivorId },
     });
+    // Cached game data follows the game account.
+    await this.prisma.gameMatch.updateMany({
+      where: { userId: victimId },
+      data: { userId: survivorId },
+    });
+    await this.prisma.gameSeasonStats.updateMany({
+      where: { userId: victimId },
+      data: { userId: survivorId },
+    });
   }
 
   async linkMlbb(userId: string, roleId: number, zoneId: number, vc: number) {
@@ -442,9 +251,7 @@ export class AuthService {
     }
 
     const mlbbToken = await this.validateMlbbCode(roleId, zoneId, vc);
-    const profile = mlbbToken
-      ? await this.fetchGameProfile(mlbbToken, roleId, zoneId)
-      : EMPTY_GAME_PROFILE;
+    const base = mlbbToken ? await this.gameSync.fetchBaseInfo(mlbbToken, roleId, zoneId) : null;
 
     const owner = await this.prisma.user.findFirst({ where: { mlbbRoleId: roleId } });
     let carry: any = {};
@@ -467,38 +274,30 @@ export class AuthService {
       await this.prisma.user.delete({ where: { id: owner.id } });
     }
 
-    const user = await this.prisma.user.update({
+    let user = await this.prisma.user.update({
       where: { id: userId },
       data: {
         mlbbRoleId: roleId,
-        ...this.gameFields(zoneId, mlbbToken, profile),
+        ...this.sessionFields(zoneId, mlbbToken, base?.info ?? null),
         ...carry,
         lastActive: new Date(),
       },
     });
+    if (base) user = (await this.syncAfterLogin(user.id, base)) ?? user;
     return serializeUser(user);
   }
 
+  /**
+   * Manual "Synchroniser": refreshes what Moonton still serves. Always returns
+   * the user; `gameSyncStatus` tells the UI whether the session expired or the
+   * detailed stats routes are offline (stored data is kept either way).
+   */
   async syncGame(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user?.mlbbToken || !user.mlbbZoneId || !user.mlbbRoleId) {
       throw new BadRequestException('Aucun compte de jeu lié.');
     }
-    const profile = await this.fetchGameProfile(
-      user.mlbbToken,
-      user.mlbbRoleId,
-      user.mlbbZoneId,
-    );
-
-    if (!profile.valid) {
-      throw new BadRequestException(
-        "Le service Mobile Legends est momentanément indisponible ou ta session de jeu a expiré. Réessaie plus tard ; si le problème persiste, relie ton compte de jeu (nouveau code de vérification).",
-      );
-    }
-    const updated = await this.prisma.user.update({
-      where: { id: userId },
-      data: this.gameFields(user.mlbbZoneId, user.mlbbToken, profile),
-    });
+    const { user: updated } = await this.gameSync.syncUser(userId);
     return serializeUser(updated);
   }
 
@@ -513,6 +312,9 @@ export class AuthService {
         "Impossible de dissocier : c'est ta seule méthode de connexion. Lie d'abord un compte Google.",
       );
     }
+    // Unlinking removes the cached game data of that account.
+    await this.prisma.gameMatch.deleteMany({ where: { userId } });
+    await this.prisma.gameSeasonStats.deleteMany({ where: { userId } });
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -529,6 +331,13 @@ export class AuthService {
         gameSeasons: '[]',
         gameRoles: '[]',
         gameSyncedAt: null,
+        gamePeakRankLevel: null,
+        mlbbTokenStatus: null,
+        mlbbTokenExpiredAt: null,
+        gameSyncStatus: null,
+        gameSyncMessage: null,
+        gameSyncAttemptAt: null,
+        gameStatsSyncedAt: null,
 
         profileSource: user.profileSource === 'game' ? 'google' : user.profileSource,
         provider: user.provider === 'mlbb' ? 'google' : user.provider,
@@ -646,6 +455,15 @@ export class AuthService {
           gameStats: owner.gameStats,
           gameFrequentHeroes: owner.gameFrequentHeroes,
           gameSyncedAt: owner.gameSyncedAt,
+          gamePeakRankLevel: owner.gamePeakRankLevel,
+          gameRoles: owner.gameRoles,
+          gameSeasons: owner.gameSeasons,
+          mlbbTokenStatus: owner.mlbbTokenStatus,
+          mlbbTokenExpiredAt: owner.mlbbTokenExpiredAt,
+          gameSyncStatus: owner.gameSyncStatus,
+          gameSyncMessage: owner.gameSyncMessage,
+          gameSyncAttemptAt: owner.gameSyncAttemptAt,
+          gameStatsSyncedAt: owner.gameStatsSyncedAt,
         };
       }
       await this.mergeContent(userId, owner.id);

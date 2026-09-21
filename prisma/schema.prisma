@@ -52,6 +52,16 @@ model User {
   gameRoles      String    @default("[]")
   gameSeasons    String    @default("[]")
   gameSyncedAt   DateTime?
+  // Health of the stored Moonton session and of the last game sync. Stored
+  // game data is never wiped when a sync fails: these fields tell the UI why
+  // it may be stale. mlbbTokenStatus: valid | expired.
+  // gameSyncStatus: ok | moonton_offline | token_expired | unavailable.
+  mlbbTokenStatus    String?
+  mlbbTokenExpiredAt DateTime?
+  gameSyncStatus     String?
+  gameSyncMessage    String?
+  gameSyncAttemptAt  DateTime?
+  gameStatsSyncedAt  DateTime?
 
   profileSource  String    @default("game")
 
@@ -883,3 +893,52 @@ model PickBanDraft {
   updatedAt   DateTime  @updatedAt
 }
 
+
+// ---------------------------------------------------------------------------
+// Game account data (Moonton), cached so anyone can read it without calling
+// Moonton. Filled by the game sync with the owner's session; never deleted on
+// a failed sync (only on unlink / account deletion).
+
+/// Per-season aggregates of a linked game account.
+model GameSeasonStats {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String   @db.ObjectId
+  sid            Int
+  // JSON array of frequent heroes: { heroId, name, image, matches, wins, winRate, power }.
+  frequentHeroes String   @default("[]")
+  syncedAt       DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, sid])
+}
+
+/// One match of a linked game account (battle report summary + optional detail).
+model GameMatch {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String    @db.ObjectId
+  // Moonton battle id as a string (the number overflows JS precision).
+  bid            String
+  sid            Int
+  heroId         Int
+  heroName       String?
+  heroImage      String?
+  kills          Int       @default(0)
+  deaths         Int       @default(0)
+  assists        Int       @default(0)
+  laneId         Int?
+  score          Float     @default(0)
+  mvp            Boolean   @default(false)
+  win            Boolean   @default(false)
+  playedAt       DateTime
+  durationSec    Int?
+  // JSON match detail (10-player scoreboard), null until fetched.
+  detail         String?
+  detailSyncedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([userId, bid])
+  @@index([userId, sid, playedAt])
+  @@index([userId, heroId])
+}
