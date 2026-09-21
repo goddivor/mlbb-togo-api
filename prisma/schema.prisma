@@ -1049,3 +1049,14 @@ model RewardElection {
 
   @@unique([kind, period])
 }
+
+// Runtime application setting managed from the admin (third-party integration
+// credentials...). `value` is an AES-encrypted JSON document (see
+// src/integrations): secrets never leave the API in clear text.
+model AppSetting {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  key         String   @unique
+  value       String
+  updatedById String?  @db.ObjectId
+  updatedAt   DateTime @updatedAt
+}
