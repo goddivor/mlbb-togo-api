@@ -246,6 +246,18 @@ describe('MediaService', () => {
       expect([...assets.values()].map((a) => a.publicId)).toEqual([second.asset.publicId]);
     });
 
+    it("never destroys another record's asset copied into the field", async () => {
+      const { service, upload, cloud, users, assets } = make();
+      const theirs = await upload(captain, 'avatar', CAPTAIN);
+      // The player points his avatar at the captain's upload (PATCH /users/:id).
+      users.values[USER] = theirs.url;
+      await service.removeFromTarget(player, 'avatar', USER);
+      await upload(player, 'avatar', USER);
+      expect(cloud.destroyed).toEqual([]);
+      expect(users.values[CAPTAIN]).toBe(theirs.url);
+      expect([...assets.values()].some((a) => a.id === theirs.asset.id)).toBe(true);
+    });
+
     it('never destroys images we did not upload (seed Cloudinary URL, MLBB CDN)', async () => {
       const { upload, cloud, teams, seasons } = make();
       await upload(admin('admin.esport'), 'team', TEAM);

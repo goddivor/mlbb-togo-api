@@ -205,13 +205,21 @@ export class MediaService {
   /**
    * Releases an image URL that is no longer used by a target: when it is one
    * of OUR tracked assets it is destroyed on Cloudinary and forgotten. Any
-   * other URL (seed, MLBB CDN, pasted by an admin) is left untouched.
+   * other URL (seed, MLBB CDN, pasted by an admin) is left untouched, and so
+   * is an asset uploaded for another record: the field may hold a URL copied
+   * from elsewhere (e.g. a player setting his profile avatar to someone
+   * else's uploaded image through PATCH /users/:id).
    */
-  async releaseUrl(url: string | null | undefined, exceptId?: string): Promise<void> {
+  async releaseUrl(
+    url: string | null | undefined,
+    owner: { purpose: MediaPurpose; targetId: string },
+    exceptId?: string,
+  ): Promise<void> {
     const publicId = publicIdFromUrl(url);
     if (!publicId) return;
     const row: AssetRow | null = await this.db.mediaAsset.findUnique({ where: { publicId } });
     if (!row || row.id === exceptId) return;
+    if (row.purpose !== owner.purpose || (row.targetId !== null && row.targetId !== owner.targetId)) return;
     if (await this.destroyRemote(row)) {
       await this.db.mediaAsset.delete({ where: { id: row.id } });
     }
@@ -223,7 +231,7 @@ export class MediaService {
     if (!adapter.write) return;
     const previous = await adapter.read(targetId);
     await adapter.write(targetId, url);
-    if (previous && previous !== url) await this.releaseUrl(previous, assetId);
+    if (previous && previous !== url) await this.releaseUrl(previous, { purpose, targetId }, assetId);
   }
 
   /** True when the asset is still the target's image (or one of its images). */
@@ -375,7 +383,7 @@ export class MediaService {
     const adapter = this.adapterOf(purpose);
     const previous = await adapter.read(targetId);
     await adapter.write!(targetId, null);
-    await this.releaseUrl(previous);
+    await this.releaseUrl(previous, { purpose, targetId });
     return { success: true };
   }
 
