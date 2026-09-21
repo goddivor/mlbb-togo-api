@@ -142,6 +142,7 @@ describe('signatures', () => {
       public_id: 'mlbb/season/new/u_1',
       timestamp: 1_700_000_000,
       allowed_formats: 'jpg,png,webp,gif',
+      overwrite: 'false',
     });
     const { signature, ...signed } = ticket.params;
     expect(signature).toBe(cloudinarySignature(signed, 'secret'));

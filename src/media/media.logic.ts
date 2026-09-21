@@ -261,6 +261,7 @@ export interface UploadTicket {
     public_id: string;
     timestamp: number;
     allowed_formats: string;
+    overwrite: string;
     signature: string;
   };
   maxBytes: number;
@@ -278,6 +279,10 @@ export function buildUploadTicket(opts: {
 }): UploadTicket {
   const signed = {
     allowed_formats: ALLOWED_FORMATS.join(','),
+    // Signed uploads overwrite by default: without this, replaying the ticket
+    // (valid for an hour) would swap the bytes of an asset already validated,
+    // or approved by a moderator, behind the API's back.
+    overwrite: 'false',
     public_id: opts.publicId,
     timestamp: opts.nowSeconds,
   };

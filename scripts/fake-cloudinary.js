@@ -134,6 +134,10 @@ http
           return send(res, 400, { error: { message: `Image format ${info.format} not allowed` } });
         }
         const publicId = params.public_id || crypto.randomBytes(8).toString('hex');
+        // Like Cloudinary: overwrite=false keeps the existing asset untouched.
+        if (params.overwrite === 'false' && store.has(publicId)) {
+          return send(res, 200, { ...resource(publicId), existing: true });
+        }
         store.set(publicId, { buffer: file, ...info, version: Math.floor(Date.now() / 1000) });
         console.log(`upload ${publicId} (${info.format} ${info.width}x${info.height}, ${file.length} B)`);
         return send(res, 200, resource(publicId));
