@@ -213,6 +213,16 @@ export const PERMISSIONS: readonly PermissionDef[] = [
   },
   // System
   {
+    key: 'admin.media',
+    group: 'system',
+    route: '/admin/media',
+    label: { fr: 'Médiathèque', en: 'Media library' },
+    description: {
+      fr: 'Images envoyées sur Cloudinary : valider, refuser ou supprimer.',
+      en: 'Images uploaded to Cloudinary: approve, reject or delete.',
+    },
+  },
+  {
     key: 'admin.logs',
     group: 'system',
     route: '/admin/logs',
