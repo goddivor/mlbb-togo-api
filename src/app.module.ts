@@ -21,6 +21,7 @@ import { ItemsModule } from './items/items.module';
 import { EmblemsModule } from './emblems/emblems.module';
 import { BattleSpellsModule } from './battle-spells/battle-spells.module';
 import { BuildsModule } from './builds/builds.module';
+import { CommunityBuildsModule } from './community-builds/community-builds.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { GqlModule } from './graphql/gql.module';
 import { PushModule } from './push/push.module';
@@ -67,6 +68,7 @@ import { RewardsModule } from './rewards/rewards.module';
     EmblemsModule,
     BattleSpellsModule,
     BuildsModule,
+    CommunityBuildsModule,
     CatalogModule,
     GqlModule,
     PushModule,
