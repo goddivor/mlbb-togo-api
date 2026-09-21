@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GmsClient } from '../mlbb/gms.client';
 import { MetaCacheService } from '../mlbb/meta-cache.service';
@@ -296,9 +296,10 @@ export class CatalogStatsService {
    * rate weighted win rate of those builds. `item` keeps the pairs of one item.
    */
   async synergies(q: StatsQuery & { item?: string | number | null } = {}) {
+    const item = q.item != null && q.item !== '' ? Number(q.item) : null;
+    if (item != null && !Number.isSafeInteger(item)) throw new BadRequestException('item must be a Moonton item id.');
     const [items, ctx] = await Promise.all([this.enabledItems(), this.context(q)]);
     const byGameId = new Map(items.filter((i) => i.gameId != null).map((i) => [i.gameId as number, i]));
-    const item = q.item != null && q.item !== '' ? Number(q.item) : null;
     const limit = clampLimit(q.limit, 30, 100);
     const pairs = countItemPairs(ctx.rows, (id) => byGameId.has(id))
       .filter((p) => item == null || p.a === item || p.b === item)

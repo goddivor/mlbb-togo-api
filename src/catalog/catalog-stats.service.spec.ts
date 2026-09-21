@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { GmsError } from '../mlbb/gms.client';
 import { MetaCacheService } from '../mlbb/meta-cache.service';
 import { CatalogStatsService, LANE_CONCURRENCY } from './catalog-stats.service';
@@ -127,5 +127,11 @@ describe('CatalogStatsService', () => {
     await service.spells({ lane: 'gold' });
     await service.spells({ lane: 'gold' });
     expect(calls).toHaveLength(1);
+  });
+
+  it('rejects a non-numeric item filter without calling Moonton', async () => {
+    const { service, calls } = setup();
+    await expect(service.synergies({ item: 'abc' })).rejects.toThrow(BadRequestException);
+    expect(calls).toHaveLength(0);
   });
 });
