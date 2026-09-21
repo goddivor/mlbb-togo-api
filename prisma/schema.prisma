@@ -942,3 +942,14 @@ model GameMatch {
   @@index([userId, sid, playedAt])
   @@index([userId, heroId])
 }
+
+// Cache of Moonton GMS hero statistics (rankings, matchups, builds...), keyed by
+// request signature. Written by MetaCacheService (stale-while-revalidate), so
+// pages never wait on Moonton when a copy exists. Safe to purge at any time.
+model MlbbCache {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String   @unique
+  value     String // JSON payload
+  fetchedAt DateTime
+  expiresAt DateTime
+}
