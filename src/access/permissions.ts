@@ -232,6 +232,16 @@ export const PERMISSIONS: readonly PermissionDef[] = [
       en: 'Create roles and assign them to users.',
     },
   },
+  {
+    key: 'admin.integrations',
+    group: 'system',
+    route: '/admin/integrations',
+    label: { fr: 'Intégrations', en: 'Integrations' },
+    description: {
+      fr: 'Clés et identifiants des services tiers (IA, Cloudinary).',
+      en: 'Third-party service keys and credentials (AI, Cloudinary).',
+    },
+  },
 ];
 
 export const ALL_PERMISSIONS: readonly string[] = PERMISSIONS.map((p) => p.key);

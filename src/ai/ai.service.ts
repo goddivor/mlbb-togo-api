@@ -7,16 +7,16 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MlbbService } from '../mlbb/mlbb.service';
 import { HeroMetaService } from '../mlbb/hero-meta.service';
 import { parseJson } from '../common/utils/json.util';
 import {
-  ANTHROPIC_CLIENT,
-  AnthropicLike,
-  DEFAULT_AI_MODEL,
+  AI_CLIENT_RESOLVER,
+  AiClient,
+  AiClientResolver,
+  staticAiResolver,
   callStructured,
   metaBlock,
   playerBlock,
@@ -70,34 +70,44 @@ const HERO_SELECT = {
 @Injectable()
 export class AiService {
   private readonly logger = new Logger('AiService');
-  readonly model: string;
+  private readonly resolver: AiClientResolver;
   private readonly limiter: RateLimiter;
   private readonly cache: TtlCache<unknown>;
   // Moonton heroId by lowercase name, resolved lazily when the catalog row has none.
   private moontonIds: { map: Map<string, number>; expiresAt: number } | null = null;
 
   constructor(
-    private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly mlbb: MlbbService,
     private readonly heroMeta: HeroMetaService,
-    @Optional() @Inject(ANTHROPIC_CLIENT) private readonly client: AnthropicLike | null = null,
+    @Optional() @Inject(AI_CLIENT_RESOLVER) resolver?: AiClientResolver | null,
     @Optional() limiter?: RateLimiter,
     @Optional() cache?: TtlCache<unknown>,
   ) {
-    this.model = this.config.get<string>('AI_MODEL') || DEFAULT_AI_MODEL;
+    this.resolver = resolver ?? staticAiResolver(null);
     this.limiter = limiter ?? new RateLimiter(AI_RATE_LIMIT, AI_RATE_WINDOW_MS);
     this.cache = cache ?? new TtlCache(AI_CACHE_TTL_MS);
-    if (this.client) this.logger.log(`Anthropic client ready (model ${this.model}).`);
-    else this.logger.warn('ANTHROPIC_API_KEY not set: AI endpoints run in heuristic mode.');
   }
 
-  get enabled(): boolean {
-    return !!this.client;
+  /** Current client + model (the key is managed from the admin, see IntegrationsService). */
+  private async ai(): Promise<AiClient> {
+    try {
+      return await this.resolver.resolve();
+    } catch (err) {
+      this.logger.error(`AI client resolution failed: ${(err as Error).message}`);
+      return staticAiResolver(null).resolve();
+    }
   }
 
-  getStatus() {
-    return { enabled: this.enabled, model: this.model, mode: this.enabled ? 'llm' : 'heuristic' };
+  /** Cache-key tag of the generation mode (a key or model change yields new results). */
+  private static modeTag(ai: AiClient): string | false {
+    return ai.client ? ai.model : false;
+  }
+
+  async getStatus() {
+    const ai = await this.ai();
+    const enabled = !!ai.client;
+    return { enabled, model: ai.model, mode: enabled ? 'llm' : 'heuristic' };
   }
 
   // ----- quota + cache -----------------------------------------------------
@@ -210,10 +220,16 @@ export class AiService {
     return map;
   }
 
-  private async llm<T>(tool: Parameters<typeof callStructured>[2], system: string, user: string, validate: (raw: any) => T | null): Promise<T | null> {
-    if (!this.client) return null;
+  private async llm<T>(
+    ai: AiClient,
+    tool: Parameters<typeof callStructured>[2],
+    system: string,
+    user: string,
+    validate: (raw: any) => T | null,
+  ): Promise<T | null> {
+    if (!ai.client) return null;
     try {
-      const raw = await callStructured(this.client, this.model, tool, system, user);
+      const raw = await callStructured(ai.client, ai.model, tool, system, user);
       const out = raw ? validate(raw) : null;
       if (!out) this.logger.warn(`LLM ${tool}: invalid or empty structured output, falling back to heuristic.`);
       return out;
@@ -226,10 +242,12 @@ export class AiService {
   // ----- endpoints ----------------------------------------------------------
 
   async coach(userId: string, lang: AiLang): Promise<CoachResponse> {
-    return this.cachedOrLimited(userId, this.key('coach', { userId, lang, m: this.enabled }), async () => {
+    const ai = await this.ai();
+    return this.cachedOrLimited(userId, this.key('coach', { userId, lang, m: AiService.modeTag(ai) }), async () => {
       const [player, catalog, wr] = await Promise.all([this.loadPlayer(userId), this.loadCatalog(), this.metaWinRates(lang)]);
       const fallback = coachHeuristic({ player, catalog, metaWinRateByName: wr, lang });
       const out = await this.llm(
+        ai,
         'coach',
         systemPrompt(lang, catalog),
         `PLAYER PROFILE\n${playerBlock(player)}\n\nGive a short summary, 3 to 5 actionable tips and up to 3 heroes to focus on (from the catalog, matching the main role and favourites when sensible).`,
@@ -241,8 +259,9 @@ export class AiService {
 
   async recommendHeroes(userId: string, role: string | undefined, lane: string | undefined, lang: AiLang): Promise<HeroRecommendationsResponse> {
     const r = role?.toLowerCase() || null;
+    const ai = await this.ai();
     const l = lane?.toLowerCase() || null;
-    return this.cachedOrLimited(userId, this.key('recommend', { userId, r, l, lang, m: this.enabled }), async () => {
+    return this.cachedOrLimited(userId, this.key('recommend', { userId, r, l, lang, m: AiService.modeTag(ai) }), async () => {
       const [player, catalog, wr] = await Promise.all([this.loadPlayer(userId), this.loadCatalog(), this.metaWinRates(lang)]);
       const fallback = recommendHeroesHeuristic({ player, catalog, role: r, lane: l, metaWinRateByName: wr, lang });
       const filtered = catalog.filter(
@@ -253,6 +272,7 @@ export class AiService {
       const pool = filtered.length ? filtered : catalog;
       const metaLines = [...wr.entries()].filter(([n]) => pool.some((h) => h.name.toLowerCase() === n)).slice(0, 60).map(([n, v]) => `${n}: ${v}% WR`).join(', ');
       const out = await this.llm(
+        ai,
         'recommend',
         systemPrompt(lang, pool),
         `PLAYER PROFILE\n${playerBlock(player)}\n\nFILTERS: role=${r ?? 'any'}, lane=${l ?? 'any'}\nMETA WIN RATES: ${metaLines || 'unavailable'}\n\nRecommend exactly 5 distinct heroes from the catalog above that fit the filters and the player.`,
@@ -264,10 +284,12 @@ export class AiService {
 
   async recommendBuild(userId: string, heroId: string, lang: AiLang): Promise<BuildResponse> {
     const hero = await this.loadHero(heroId);
-    return this.cachedOrLimited(userId, this.key('build', { heroId, lang, m: this.enabled }), async () => {
+    const ai = await this.ai();
+    return this.cachedOrLimited(userId, this.key('build', { heroId, lang, m: AiService.modeTag(ai) }), async () => {
       const [catalog, meta] = await Promise.all([this.loadCatalog(), this.loadMeta(hero, lang)]);
       const fallback = buildHeuristic({ hero, meta, catalog, lang });
       const out = await this.llm(
+        ai,
         'build',
         systemPrompt(lang, catalog),
         `HERO: ${hero.name} [${hero.roles.join('/') || hero.role}; lanes: ${hero.laneKeys.join('/') || '?'}; speciality: ${hero.speciality.join(', ') || 'n/a'}]\nMETA\n${metaBlock(hero.name, meta)}\n\nPropose boots, 4 core items, up to 3 situational items, an emblem with 3 talents and a battle spell. Use only real current Mobile Legends equipment names. If meta statistics are unavailable, say so in the note.`,
@@ -280,7 +302,8 @@ export class AiService {
   async counterPicks(userId: string, heroIds: string[], lang: AiLang): Promise<CounterResponse> {
     const ids = [...new Set(heroIds)];
     const enemies = await Promise.all(ids.map((id) => this.loadHero(id)));
-    return this.cachedOrLimited(userId, this.key('counter', { ids: [...ids].sort(), lang, m: this.enabled }), async () => {
+    const ai = await this.ai();
+    return this.cachedOrLimited(userId, this.key('counter', { ids: [...ids].sort(), lang, m: AiService.modeTag(ai) }), async () => {
       const [catalog, wr, metas] = await Promise.all([
         this.loadCatalog(),
         this.metaWinRates(lang),
@@ -289,6 +312,7 @@ export class AiService {
       const metaByEnemyId = new Map(enemies.map((e, i) => [e.id, metas[i]]));
       const fallback = counterPicksHeuristic({ enemies, metaByEnemyId, catalog, metaWinRateByName: wr, lang });
       const out = await this.llm(
+        ai,
         'counter',
         systemPrompt(lang, catalog),
         `ENEMY PICKS: ${enemies.map((e) => `${e.name} [${e.role}]`).join(', ')}\n\nMETA PER ENEMY\n${enemies.map((e) => metaBlock(e.name, metaByEnemyId.get(e.id) ?? null)).join('\n')}\n\nPropose up to 5 counter picks from the catalog (never the enemies themselves), each with the enemies it answers and an effectiveness between 0 and 1.`,
@@ -299,12 +323,14 @@ export class AiService {
   }
 
   async analyze(userId: string, lang: AiLang): Promise<AnalysisResponse> {
-    return this.cachedOrLimited(userId, this.key('analyze', { userId, lang, m: this.enabled }), async () => {
+    const ai = await this.ai();
+    return this.cachedOrLimited(userId, this.key('analyze', { userId, lang, m: AiService.modeTag(ai) }), async () => {
       const player = await this.loadPlayer(userId);
       const fallback = analysisHeuristic(player, lang);
       const { games, winRate } = winRateOf(player);
       const stats = { ...fallback.stats, games, winRate };
       const out = await this.llm(
+        ai,
         'analysis',
         systemPrompt(lang, []),
         `PLAYER PROFILE\n${playerBlock(player)}\n\nList the player's strengths and weaknesses (2 to 4 each, with impact) and 3 concrete recommendations. Base everything on the numbers above.`,

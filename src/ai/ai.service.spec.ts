@@ -1,11 +1,10 @@
 import { HttpException, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AI_RATE_LIMIT, AiService } from './ai.service';
 import { RateLimiter, TtlCache } from './ai-store';
 import { PrismaService } from '../prisma/prisma.service';
 import { MlbbService } from '../mlbb/mlbb.service';
 import { HeroMetaService } from '../mlbb/hero-meta.service';
-import { TOOLS } from './ai-llm';
+import { TOOLS, staticAiResolver } from './ai-llm';
 
 const heroRow = (name: string, role: string, lanes: string[] = []) => ({
   id: `aaaaaaaaaaaaaaaaaaaaa${name.length.toString(16).padStart(3, '0')}`.slice(0, 24),
@@ -71,23 +70,21 @@ function makeService(opts: { client?: any; now?: () => number } = {}) {
     getHeroMeta: jest.fn().mockRejectedValue(new Error('offline')),
     getRanking: jest.fn().mockRejectedValue(new Error('offline')),
   };
-  const config = { get: jest.fn((k: string) => (k === 'AI_MODEL' ? 'claude-opus-5' : undefined)) };
   const service = new AiService(
-    config as unknown as ConfigService,
     prisma as unknown as PrismaService,
     mlbb as unknown as MlbbService,
     heroMeta as unknown as HeroMetaService,
-    opts.client ?? null,
+    staticAiResolver(opts.client ?? null, 'claude-opus-5'),
     new RateLimiter(AI_RATE_LIMIT, 60_000, now),
     new TtlCache(60_000, now),
   );
-  return { service, prisma, mlbb, heroMeta, config };
+  return { service, prisma, mlbb, heroMeta };
 }
 
 describe('AiService (heuristic mode)', () => {
-  it('reports heuristic status without a client', () => {
+  it('reports heuristic status without a client', async () => {
     const { service } = makeService();
-    expect(service.getStatus()).toEqual({ enabled: false, model: 'claude-opus-5', mode: 'heuristic' });
+    expect(await service.getStatus()).toEqual({ enabled: false, model: 'claude-opus-5', mode: 'heuristic' });
   });
 
   it('serves all endpoints from heuristics with catalog heroes', async () => {
@@ -175,7 +172,7 @@ describe('AiService (LLM mode, mocked Anthropic client)', () => {
       }),
     );
     const { service } = makeService({ client: { messages: { create } } });
-    expect(service.getStatus()).toMatchObject({ enabled: true, mode: 'llm' });
+    expect(await service.getStatus()).toMatchObject({ enabled: true, mode: 'llm' });
 
     const res = await service.counterPicks('u1', [HEROES[1].id], 'en');
     expect(res.source).toBe('llm');
