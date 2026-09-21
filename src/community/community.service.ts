@@ -3,8 +3,10 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AccessService } from '../access/access.service';
 import { serializeUserCard } from '../users/users.service';
 import { ChatGateway } from './chat.gateway';
 import { PushService } from '../push/push.service';
@@ -42,6 +44,7 @@ export class CommunityService {
     private prisma: PrismaService,
     private chat: ChatGateway,
     private push: PushService,
+    @Optional() private access?: AccessService,
   ) {}
 
   // ----- Notifications (internal helpers) -----
@@ -125,11 +128,8 @@ export class CommunityService {
     link?: string;
     data?: Record<string, any>;
   }) {
-    const admins = await this.prisma.user.findMany({
-      where: { roleUser: { in: ['admin', 'moderator'] } },
-      select: { id: true },
-    });
-    await Promise.all(admins.map((a) => this.notify(a.id, data)));
+    const adminIds = (await this.access?.userIdsWithPermission('admin.requests')) ?? [];
+    await Promise.all(adminIds.map((id) => this.notify(id, data)));
   }
 
   // ----- Notifications (API) -----

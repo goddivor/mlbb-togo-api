@@ -36,11 +36,13 @@ import { SponsorsModule } from './sponsors/sponsors.module';
 import { AwardsModule } from './awards/awards.module';
 import { GeoModule } from './geo/geo.module';
 import { GameModule } from './game/game.module';
+import { AccessModule } from './access/access.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    AccessModule,
     AuthModule,
     UsersModule,
     TeamsModule,

@@ -59,10 +59,10 @@ describe('PlayerStatsService', () => {
     service = new PlayerStatsService(prisma as unknown as PrismaService);
   });
 
-  it('hides staff accounts and unknown users', async () => {
+  it('hides system accounts and unknown users, not staff players', async () => {
     prisma.user.findUnique.mockResolvedValueOnce(null);
     await expect(service.getUserStats('nope')).rejects.toBeInstanceOf(NotFoundException);
-    prisma.user.findUnique.mockResolvedValueOnce({ id: 'a', roleUser: 'admin', badges: '[]' });
+    prisma.user.findUnique.mockResolvedValueOnce({ id: 'a', isSystemAccount: true, badges: '[]' });
     await expect(service.getUserMatches('a')).rejects.toBeInstanceOf(NotFoundException);
   });
 

@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { hasPermission } from '../access/permissions';
 import {
   decodeRank,
   serializePublicUser,
@@ -43,7 +44,7 @@ export class RecruitmentService {
 
   /** Team owner (captain) or platform staff. */
   private async isManager(teamId: string, user: any) {
-    if (user?.roleUser === 'admin') return true;
+    if (hasPermission(user, 'admin.esport')) return true;
     if (user?.id && (await this.isCaptain(teamId, user.id))) return true;
     return false;
   }

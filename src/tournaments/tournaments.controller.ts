@@ -19,8 +19,8 @@ import {
   SetMvpDto,
 } from './dto/bracket.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
 @Controller('tournaments')
 export class TournamentsController {
@@ -42,22 +42,22 @@ export class TournamentsController {
     return this.tournamentsService.getDetails(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments')
   @Post()
   create(@Body() dto: CreateTournamentDto) {
     return this.tournamentsService.create(dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateTournamentDto) {
     return this.tournamentsService.update(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments')
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.tournamentsService.remove(id);
@@ -77,22 +77,22 @@ export class TournamentsController {
 
   // ----- Admin: bracket management -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments')
   @Post(':id/bracket/generate')
   generateBracket(@Param('id') id: string, @Body() dto: GenerateBracketDto) {
     return this.tournamentsService.generateBracket(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments')
   @Delete(':id/bracket')
   resetBracket(@Param('id') id: string) {
     return this.tournamentsService.resetBracket(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments', 'matches.validate')
   @Patch(':id/matches/:matchId/result')
   setMatchResult(
     @Param('id') id: string,
@@ -102,8 +102,8 @@ export class TournamentsController {
     return this.tournamentsService.setMatchResult(id, matchId, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments')
   @Patch(':id/matches/:matchId/schedule')
   scheduleMatch(
     @Param('id') id: string,
@@ -113,8 +113,8 @@ export class TournamentsController {
     return this.tournamentsService.scheduleMatch(id, matchId, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments')
   @Patch(':id/matches/:matchId/status')
   setMatchStatus(
     @Param('id') id: string,
@@ -124,8 +124,8 @@ export class TournamentsController {
     return this.tournamentsService.setMatchStatus(id, matchId, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.tournaments')
   @Patch(':id/mvp')
   setMvp(@Param('id') id: string, @Body() dto: SetMvpDto) {
     return this.tournamentsService.setMvp(id, dto);

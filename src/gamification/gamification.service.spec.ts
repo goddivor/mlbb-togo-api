@@ -119,7 +119,10 @@ function makePrisma() {
       findUnique: jest.fn(async ({ where }: any) => users.get(where.id) ?? null),
       findMany: jest.fn(async ({ where }: any) =>
         Array.from(users.values()).filter(
-          (u) => where.id.in.includes(u.id) && !where.roleUser?.notIn?.includes(u.roleUser),
+          (u) =>
+            where.id.in.includes(u.id) &&
+            (where.isSystemAccount === undefined || !!u.isSystemAccount === where.isSystemAccount) &&
+            (where.isBanned === undefined || !!u.isBanned === where.isBanned),
         ),
       ),
     },
@@ -299,14 +302,22 @@ describe('GamificationService', () => {
       expect(pub.user).toMatchObject({ id: U, username: 'tank' });
     });
 
-    it('ranks the leaderboard by XP and skips staff accounts', async () => {
+    it('ranks the leaderboard by XP, keeps staff players and skips system accounts', async () => {
       prisma._state.users.set('user-2', { id: 'user-2', username: 'mage', roleUser: 'user', badges: '[]' });
-      prisma._state.users.set('admin', { id: 'admin', username: 'admin', roleUser: 'admin', badges: '[]' });
+      prisma._state.users.set('staff', { id: 'staff', username: 'staffer', roleUser: 'admin', badges: '[]' });
+      prisma._state.users.set('admin', {
+        id: 'admin',
+        username: 'admin',
+        roleUser: 'admin',
+        isSystemAccount: true,
+        badges: '[]',
+      });
       await service.track(U, 'forum_post', 'p1');
       await service.track('user-2', 'match_played', 'm1');
+      await service.track('staff', 'match_played', 'm2');
       await service.track('admin', 'match_played', 'm1');
       const board = await service.leaderboard(10);
-      expect(board.entries.map((e) => e.user.username)).toEqual(['mage', 'tank']);
+      expect(board.entries.map((e) => e.user.username).sort()).toEqual(['mage', 'staffer', 'tank']);
       expect(board.entries[0]).toMatchObject({ rank: 1, level: 1 });
     });
   });

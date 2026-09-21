@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { AccessService } from '../access/access.service';
 
 /**
  * Resolve the JWT secret from the environment. There is deliberately NO fallback:
@@ -23,6 +24,7 @@ export function getJwtSecret(config?: ConfigService): string {
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private prisma: PrismaService,
+    private access: AccessService,
     config: ConfigService,
   ) {
     super({
@@ -43,11 +45,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (user.isBanned) {
       throw new UnauthorizedException('Compte suspendu.');
     }
+    // Permissions are resolved from the roles stored NOW (not from the token):
+    // a role change applies on the very next request. The result lives on
+    // `request.user`, i.e. it is computed once per request.
+    const access = await this.access.resolveUser(user);
     return {
       id: user.id,
       username: user.username,
       email: user.email,
-      roleUser: user.roleUser,
+      roleUser: access.roleUser,
+      roleIds: access.roleIds,
+      permissions: access.permissions,
     };
   }
 }

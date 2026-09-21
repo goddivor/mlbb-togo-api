@@ -2,8 +2,8 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@n
 import { BattleSpellsService } from './battle-spells.service';
 import { CreateBattleSpellDto, UpdateBattleSpellDto } from './dto/battle-spell.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
 @Controller('battle-spells')
 export class BattleSpellsController {
@@ -19,22 +19,22 @@ export class BattleSpellsController {
     return this.battleSpellsService.findOne(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Post()
   async create(@Body() data: CreateBattleSpellDto) {
     return this.battleSpellsService.create(data);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Patch(':id')
   async update(@Param('id') id: string, @Body() data: UpdateBattleSpellDto) {
     return this.battleSpellsService.update(id, data);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Delete(':id')
   async delete(@Param('id') id: string) {
     return this.battleSpellsService.delete(id);

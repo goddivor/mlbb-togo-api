@@ -15,8 +15,8 @@ import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { ListPostsDto } from './dto/list-posts.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { POST_CATEGORIES } from './posts.constants';
 
@@ -62,8 +62,8 @@ export class PostsController {
   }
 
   /** Admin/moderator: pin, mark sponsored, attach a sponsor. */
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('forum.moderate', 'posts.sponsor')
   @Patch(':id')
   update(
     @Param('id') id: string,

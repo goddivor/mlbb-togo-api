@@ -14,8 +14,8 @@ import {
 } from '@nestjs/common';
 import { SponsorsService } from './sponsors.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CreateSponsorOfferDto, UpdateSponsorOfferDto } from './dto/sponsor-offer.dto';
 import {
   CreateSponsorshipRequestDto,
@@ -60,57 +60,57 @@ export class SponsorsController {
 
   // ----- Admin -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.sponsors', 'sponsors.manage')
   @Get('all')
   listAll() {
     return this.sponsors.listAll();
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.sponsors', 'sponsors.manage')
   @Get('offers/all')
   allOffers() {
     return this.sponsors.listOffers(true);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('sponsors.manage')
   @Post('offers')
   createOffer(@Body() dto: CreateSponsorOfferDto) {
     return this.sponsors.createOffer(dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('sponsors.manage')
   @Patch('offers/:id')
   updateOffer(@Param('id') id: string, @Body() dto: UpdateSponsorOfferDto) {
     return this.sponsors.updateOffer(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('sponsors.manage')
   @Delete('offers/:id')
   deleteOffer(@Param('id') id: string) {
     return this.sponsors.deleteOffer(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.sponsors', 'sponsors.manage')
   @Get('requests')
   listRequests(@Query('status') status?: string) {
     return this.sponsors.listRequests(status);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.sponsors', 'sponsors.manage')
   @Patch('requests/:id')
   updateRequest(@Param('id') id: string, @Body() dto: UpdateSponsorshipRequestDto) {
     return this.sponsors.updateRequest(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('sponsors.manage')
   @Delete('requests/:id')
   deleteRequest(@Param('id') id: string) {
     return this.sponsors.deleteRequest(id);

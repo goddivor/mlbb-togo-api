@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EsportSeasonsService } from '../esport/esport-seasons.service';
 import { OTHER_CITY_ID, OTHER_CITY_NAME, TOGO_CITIES, TOGO_REGIONS } from './geo.constants';
 import { MapAggregate, SeasonWindow, aggregateMap } from './geo.logic';
+import { PUBLIC_USER_WHERE } from '../users/public-user.filter';
 
 @Injectable()
 export class GeoService {
@@ -29,8 +30,7 @@ export class GeoService {
     const [users, teams, tournaments, events, drafts] = await Promise.all([
       this.prisma.user.findMany({
         where: {
-          isBanned: false,
-          roleUser: { notIn: ['admin', 'moderator'] },
+          ...PUBLIC_USER_WHERE,
           city: { not: null },
         },
         select: { id: true, username: true, avatar: true, gameNickname: true, city: true, privacy: true },

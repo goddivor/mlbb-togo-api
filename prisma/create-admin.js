@@ -9,6 +9,11 @@
  * Optional:
  *   ADMIN_EMAIL=...    (defaults to <username>@mlbbtogo.local)
  *   ADMIN_ROLE=admin   (admin | moderator, defaults to admin)
+ *
+ * RBAC: a NEW account is flagged `isSystemAccount` (dedicated technical
+ * account, hidden from player-facing features). The matching system role
+ * (Administrateur / Modérateur) is attached when it already exists; otherwise
+ * the backend migration attaches it at the next boot or first request.
  */
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
@@ -35,10 +40,20 @@ async function main() {
   const hashed = await bcrypt.hash(password, 10);
   const existing = await prisma.user.findUnique({ where: { username } });
 
+  const systemRole = await prisma.role.findFirst({ where: { systemKey: roleUser } });
+
   if (existing) {
+    const roleIds = existing.roleIds || [];
     await prisma.user.update({
       where: { username },
-      data: { password: hashed, roleUser, provider: 'local' },
+      data: {
+        password: hashed,
+        roleUser,
+        provider: 'local',
+        ...(systemRole && !roleIds.includes(systemRole.id)
+          ? { roleIds: [...roleIds, systemRole.id] }
+          : {}),
+      },
     });
     console.log(`Updated admin account "${username}" (role=${roleUser}).`);
   } else {
@@ -51,6 +66,8 @@ async function main() {
         provider: 'local',
         profileSource: 'game',
         country: 'Togo',
+        isSystemAccount: true,
+        roleIds: systemRole ? [systemRole.id] : [],
       },
     });
     console.log(`Created admin account "${username}" (role=${roleUser}, email=${email}).`);

@@ -10,8 +10,8 @@ import {
 } from '@nestjs/common';
 import { CommunityService } from './community.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('team-requests')
@@ -30,22 +30,22 @@ export class TeamRequestsController {
     return this.community.myTeamRequests(user.id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.requests')
   @Get()
   list(@Query('status') status?: string) {
     return this.community.listTeamRequests(status);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.requests')
   @Get(':id')
   get(@Param('id') id: string) {
     return this.community.getTeamRequest(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.requests')
   @Patch(':id/status')
   setStatus(@Param('id') id: string, @Body() body: any) {
     return this.community.setTeamRequestStatus(id, body.status);

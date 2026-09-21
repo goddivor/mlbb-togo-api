@@ -4,13 +4,14 @@ import { parseJson } from '../common/utils/json.util';
 import { decodeRank } from '../users/users.service';
 import { GameSyncService } from './game-sync.service';
 import { kdaOf } from './game.mappers';
+import { hasPermission } from '../access/permissions';
+import { isHiddenAccount } from '../users/public-user.filter';
 
 export interface Viewer {
   id: string;
   roleUser?: string;
+  permissions?: string[];
 }
-
-const STAFF = new Set(['admin', 'moderator']);
 export const MAX_MATCH_PAGE = 50;
 
 /**
@@ -68,13 +69,14 @@ export class GameService {
     const user = /^[a-f0-9]{24}$/i.test(userId)
       ? await this.prisma.user.findUnique({ where: { id: userId } })
       : null;
-    if (!user || STAFF.has(user.roleUser)) throw new NotFoundException('Utilisateur introuvable.');
+    if (!user || isHiddenAccount(user)) throw new NotFoundException('Utilisateur introuvable.');
     return user;
   }
 
   private access(user: any, viewer?: Viewer | null) {
     const isOwner = !!viewer && viewer.id === user.id;
-    const isStaff = !!viewer && STAFF.has(viewer.roleUser ?? '');
+    // Staff able to manage accounts may see private game data.
+    const isStaff = !!viewer && hasPermission(viewer, 'admin.users');
     return { isOwner, visible: canViewGame(user.privacy, isOwner, isStaff) };
   }
 

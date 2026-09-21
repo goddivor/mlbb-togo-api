@@ -9,8 +9,8 @@ import {
 } from '@nestjs/common';
 import { HeroesService } from './heroes.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { HeroMetaService } from '../mlbb/hero-meta.service';
 import { orUnavailable } from '../mlbb/gms-http.util';
 
@@ -27,8 +27,8 @@ export class HeroesController {
   }
 
   // Refreshes the heroes cache from the Moonton API (admin only).
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Post('refresh')
   refresh() {
     return this.heroesService.refreshFromMlbb();

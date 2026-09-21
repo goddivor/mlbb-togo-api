@@ -71,13 +71,13 @@ describe('UsersService.leaderboard', () => {
     expect(res.entries.map((e: any) => e.position)).toEqual([1, 2, 3]);
   });
 
-  it('excludes banned accounts and staff at the query level', async () => {
+  it('excludes banned and system accounts (not staff) at the query level', async () => {
     prisma.user.findMany.mockResolvedValue([]);
 
     await service.leaderboard();
 
     expect(prisma.user.findMany).toHaveBeenCalledWith({
-      where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
+      where: { isBanned: false, isSystemAccount: false },
     });
   });
 
@@ -149,7 +149,7 @@ describe('UsersService.leaderboard', () => {
     expect(prisma.user.findMany).toHaveBeenCalledWith({
       where: {
         isBanned: false,
-        roleUser: { notIn: ['admin', 'moderator'] },
+        isSystemAccount: false,
         role: 'tank',
       },
     });
@@ -191,7 +191,7 @@ describe('UsersService.leaderboard', () => {
     expect(prisma.user.findMany).toHaveBeenCalledWith({
       where: {
         isBanned: false,
-        roleUser: { notIn: ['admin', 'moderator'] },
+        isSystemAccount: false,
         id: { in: ['u1', 'u2'] },
       },
     });
@@ -204,5 +204,62 @@ describe('UsersService.leaderboard', () => {
 
     expect(res).toEqual({ metric: 'winRate', total: 0, entries: [] });
     expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('UsersService account deletion', () => {
+  const models = [
+    'friendship',
+    'notification',
+    'esportTeamMember',
+    'esportMatchPlayer',
+    'recruitmentApplication',
+    'gameMatch',
+    'gameSeasonStats',
+    'pickBanDraft',
+    'comment',
+    'post',
+  ];
+  let prisma: any;
+  let service: UsersService;
+
+  beforeEach(() => {
+    prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue(row({ username: 'gone' })),
+        delete: jest.fn((args) => ({ op: 'user.delete', args })),
+      },
+      $transaction: jest.fn().mockResolvedValue([]),
+    };
+    for (const m of models) {
+      prisma[m] = { deleteMany: jest.fn((args) => ({ op: `${m}.deleteMany`, args })) };
+    }
+    service = new UsersService(prisma as unknown as PrismaService);
+  });
+
+  it('deletes the account and its dependent rows in one transaction', async () => {
+    await expect(service.deleteSelf('id-gone')).resolves.toEqual({ success: true });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    const ops = prisma.$transaction.mock.calls[0][0].map((o: any) => o.op);
+    // Rows blocking the User delete (Pick & Ban drafts, posts, comments) go first.
+    expect(ops.indexOf('pickBanDraft.deleteMany')).toBeGreaterThanOrEqual(0);
+    expect(ops.indexOf('comment.deleteMany')).toBeLessThan(ops.indexOf('post.deleteMany'));
+    expect(ops[ops.length - 1]).toBe('user.delete');
+    expect(prisma.pickBanDraft.deleteMany).toHaveBeenCalledWith({ where: { ownerId: 'id-gone' } });
+  });
+
+  it('touches nothing when the transaction fails', async () => {
+    prisma.$transaction.mockRejectedValue(new Error('write conflict'));
+    await expect(service.deleteSelf('id-gone')).rejects.toThrow('write conflict');
+    // Operations are only built, never awaited outside the transaction.
+    for (const m of models) expect(prisma[m].deleteMany).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the same transactional purge for an admin deletion', async () => {
+    await service.remove('id-gone');
+    const ops = prisma.$transaction.mock.calls[0][0].map((o: any) => o.op);
+    expect(ops).toContain('post.deleteMany');
+    expect(ops[ops.length - 1]).toBe('user.delete');
   });
 });

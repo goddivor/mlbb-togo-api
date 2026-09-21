@@ -17,6 +17,7 @@ import {
   periodEnd,
   periodKey,
 } from './gamification.rules';
+import { PUBLIC_USER_WHERE, isHiddenAccount } from '../users/public-user.filter';
 
 const RECENT_EVENTS = 20;
 const MAX_LEADERBOARD = 100;
@@ -272,7 +273,7 @@ export class GamificationService {
 
   private async assertUser(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user || user.roleUser === 'admin' || user.roleUser === 'moderator')
+    if (!user || isHiddenAccount(user))
       throw new NotFoundException('Utilisateur introuvable.');
     return user;
   }
@@ -381,8 +382,7 @@ export class GamificationService {
       ? await this.prisma.user.findMany({
           where: {
             id: { in: rows.map((r) => r.userId) },
-            isBanned: false,
-            roleUser: { notIn: ['admin', 'moderator'] },
+            ...PUBLIC_USER_WHERE,
           },
         })
       : [];
