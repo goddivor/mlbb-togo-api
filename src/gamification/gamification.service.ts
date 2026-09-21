@@ -26,6 +26,7 @@ import {
   peakRankTiers,
   periodEnd,
   periodKey,
+  weekKey,
 } from './gamification.rules';
 import {
   ACHIEVEMENTS,
@@ -41,7 +42,6 @@ import { AchievementFactsLoader } from './achievement-facts';
 import { PUBLIC_USER_WHERE, isHiddenAccount } from '../users/public-user.filter';
 import { RewardsService } from '../rewards/rewards.service';
 import { framesForAchievement } from '../rewards/frames.catalog';
-import { startOfMonth, startOfWeek } from '../rewards/rewards.logic';
 
 const DAY = 86_400_000;
 const RECENT_EVENTS = 20;
@@ -244,7 +244,7 @@ export class GamificationService {
    * Accepted friendship: 10 XP each, once per pair of members for life
    * (`friend:<a>:<b>`), and only when the other account is at least 7 days old.
    */
-  async trackFriendship(a: string, b: string, now = new Date()) {
+  async trackFriendship(a: string, b: string, now = new Date(), friendshipId?: string) {
     try {
       const users = await this.prisma.user.findMany({
         where: { id: { in: [a, b] } },
@@ -259,6 +259,14 @@ export class GamificationService {
       ]) {
         const o = byId.get(other);
         if (!o || o.joinedAt.getTime() > minAge) continue;
+        // Friendships accepted before #125 were keyed by the friendship id.
+        if (friendshipId) {
+          const legacy = await this.prisma.xpEvent.findUnique({
+            where: { userId_type_refId: { userId: me, type: 'friend_added', refId: friendshipId } },
+            select: { id: true },
+          });
+          if (legacy) continue;
+        }
         await this.trackSafe(me, 'friend_added', key, { now, meta: { friendId: other, username: o.username } });
       }
     } catch (err) {
@@ -326,12 +334,10 @@ export class GamificationService {
       where: { userId_type_refId: { userId, type: 'stream_watch', refId: ref } },
       select: { id: true },
     });
-    let live = true;
+    // getLive is cached by the stream module: cheap even when the day is already counted.
+    const live = this.stream ? !!(await this.stream.getLive().catch(() => ({ live: false }))).live : false;
     let counted = false;
-    if (!existing) {
-      live = this.stream ? !!(await this.stream.getLive().catch(() => ({ live: false }))).live : false;
-      if (live) counted = (await this.track(userId, 'stream_watch', ref, { now })).granted;
-    }
+    if (!existing && live) counted = (await this.track(userId, 'stream_watch', ref, { now })).granted;
     const days = await this.prisma.xpEvent.count({ where: { userId, type: 'stream_watch' } });
     return { counted, live, days };
   }
@@ -493,11 +499,8 @@ export class GamificationService {
     });
 
     const base = Math.max(0, Math.trunc(opts.amount ?? XP_RULES[type] ?? 0));
-    const decision = applyXpCaps(type, base, await this.capUsage(userId, type, base, now));
-    if (!decision.allowed) return none('cap');
-    const meta = decision.capped ? { ...(opts.meta ?? {}), capped: true, requested: base } : opts.meta;
-    const granted = await this.grant(userId, type, refId, decision.amount, meta);
-    if (!granted) return none('duplicate');
+    const decision = await this.recordCapped(userId, type, refId, base, opts.meta, now);
+    if (decision === 'duplicate' || decision === 'cap') return none(decision);
 
     const missionsCompleted = await this.advanceMissions(userId, type, now);
     const triggers: AchievementTrigger[] = [type];
@@ -525,44 +528,95 @@ export class GamificationService {
     };
   }
 
-  /** Counts needed by the caps of `type` (only the relevant ones are queried). */
-  private async capUsage(userId: string, type: XpType, amount: number, now: Date) {
-    const usage = { day: 0, week: 0, month: 0, socialToday: 0 };
+  /**
+   * Records the event under the guard-rails, race free: the idempotency key
+   * is reserved first (a duplicate never consumes a cap slot), then per-type
+   * caps and the daily social XP use atomic counters (`XpCounter`, $inc), so
+   * concurrent grants cannot exceed a cap. An event over a cap is removed.
+   */
+  private async recordCapped(
+    userId: string,
+    type: XpType,
+    refId: string,
+    base: number,
+    meta: Record<string, unknown> | undefined,
+    now: Date,
+  ): Promise<{ amount: number } | 'duplicate' | 'cap'> {
     const limit = XP_LIMITS[type];
-    const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const since = async (from: Date) =>
-      this.prisma.xpEvent.count({ where: { userId, type, createdAt: { gte: from } } });
-    if (limit?.perDay !== undefined) usage.day = await since(dayStart);
-    if (limit?.perWeek !== undefined) usage.week = await since(startOfWeek(now));
-    if (limit?.perMonth !== undefined) usage.month = await since(startOfMonth(now));
-    if (amount > 0 && SOCIAL_XP_TYPES.includes(type)) {
-      const sum = await this.prisma.xpEvent.aggregate({
-        where: { userId, type: { in: [...SOCIAL_XP_TYPES] }, createdAt: { gte: dayStart } },
-        _sum: { amount: true },
-      });
-      usage.socialToday = sum._sum.amount ?? 0;
+    const social = base > 0 && SOCIAL_XP_TYPES.includes(type);
+    if (!limit && !social) {
+      return (await this.grant(userId, type, refId, base, meta)) ? { amount: base } : 'duplicate';
     }
-    return usage;
+    if (!(await this.insertEvent(userId, type, refId, 0, meta))) return 'duplicate';
+
+    const day = dayKey(now);
+    const usage = { day: 0, week: 0, month: 0, socialToday: 0 };
+    if (limit?.perDay !== undefined) usage.day = (await this.bump(userId, `cap:${type}:${day}`, 1)) - 1;
+    if (limit?.perWeek !== undefined) usage.week = (await this.bump(userId, `cap:${type}:${weekKey(now)}`, 1)) - 1;
+    if (limit?.perMonth !== undefined) usage.month = (await this.bump(userId, `cap:${type}:${day.slice(0, 7)}`, 1)) - 1;
+    if (social) usage.socialToday = (await this.bump(userId, `social:${day}`, base)) - base;
+    const decision = applyXpCaps(type, base, usage);
+    if (!decision.allowed) {
+      await this.prisma.xpEvent
+        .delete({ where: { userId_type_refId: { userId, type, refId } } })
+        .catch(() => null);
+      return 'cap';
+    }
+    if (decision.amount > 0 || decision.capped) {
+      await this.prisma.xpEvent.update({
+        where: { userId_type_refId: { userId, type, refId } },
+        data: {
+          amount: decision.amount,
+          ...(decision.capped ? { meta: { ...(meta ?? {}), capped: true, requested: base } as any } : {}),
+        },
+      });
+    }
+    if (decision.amount > 0) await this.addXp(userId, decision.amount);
+    return { amount: decision.amount };
+  }
+
+  /** Atomic counter increment; returns the value after the increment. */
+  private async bump(userId: string, key: string, by: number): Promise<number> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const row = await this.prisma.xpCounter.upsert({
+          where: { userId_key: { userId, key } },
+          create: { userId, key, value: by },
+          update: { value: { increment: by } },
+        });
+        return row.value;
+      } catch (err: any) {
+        // Two first increments raced on the create: the second one retries as an update.
+        if (err?.code !== 'P2002' || attempt >= 2) throw err;
+      }
+    }
   }
 
   /** Inserts the XP event and bumps the counter. False when duplicated. */
   private async grant(userId: string, type: string, refId: string, amount: number, meta?: Record<string, unknown>) {
+    if (!(await this.insertEvent(userId, type, refId, amount, meta))) return false;
+    if (amount > 0) await this.addXp(userId, amount);
+    return true;
+  }
+
+  private async insertEvent(userId: string, type: string, refId: string, amount: number, meta?: Record<string, unknown>) {
     try {
       await this.prisma.xpEvent.create({
         data: { userId, type, refId, amount, ...(meta ? { meta: meta as any } : {}) },
       });
+      return true;
     } catch (err: any) {
       if (err?.code === 'P2002') return false;
       throw err;
     }
-    if (amount > 0) {
-      await this.prisma.userProgress.upsert({
-        where: { userId },
-        create: { userId, xp: amount, level: levelFromXp(amount) },
-        update: { xp: { increment: amount } },
-      });
-    }
-    return true;
+  }
+
+  private async addXp(userId: string, amount: number) {
+    await this.prisma.userProgress.upsert({
+      where: { userId },
+      create: { userId, xp: amount, level: levelFromXp(amount) },
+      update: { xp: { increment: amount } },
+    });
   }
 
   private async progressOf(userId: string) {

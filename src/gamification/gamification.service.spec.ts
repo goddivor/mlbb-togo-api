@@ -15,6 +15,7 @@ function makePrisma() {
   const progress = new Map<string, any>();
   const missions: any[] = [];
   const achievements: any[] = [];
+  const counters = new Map<string, number>();
   const users = new Map<string, any>([[U, { id: U, username: 'tank', roleUser: 'user', badges: '[]' }]]);
   let match: any = null;
   let players: any[] = [];
@@ -52,6 +53,17 @@ function makePrisma() {
         xpEvents.push(row);
         return row;
       }),
+      update: jest.fn(async ({ where, data }: any) => {
+        const k = where.userId_type_refId;
+        const row = xpEvents.find((e) => e.userId === k.userId && e.type === k.type && e.refId === k.refId);
+        Object.assign(row, data);
+        return row;
+      }),
+      delete: jest.fn(async ({ where }: any) => {
+        const k = where.userId_type_refId;
+        const i = xpEvents.findIndex((e) => e.userId === k.userId && e.type === k.type && e.refId === k.refId);
+        return xpEvents.splice(i, 1)[0];
+      }),
       count: jest.fn(async ({ where }: any) => xpEvents.filter((e) => matchEvent(e, where)).length),
       aggregate: jest.fn(async ({ where }: any) => ({
         _sum: { amount: xpEvents.filter((e) => matchEvent(e, where)).reduce((n, e) => n + e.amount, 0) },
@@ -73,6 +85,15 @@ function makePrisma() {
           .reverse()
           .slice(0, take),
       ),
+    },
+    // Atomic counters: the read-modify-write happens in one synchronous step, like $inc.
+    xpCounter: {
+      upsert: jest.fn(async ({ where, create, update }: any) => {
+        const k = `${where.userId_key.userId}|${where.userId_key.key}`;
+        const value = (counters.get(k) ?? 0) + (counters.has(k) ? update.value.increment : create.value);
+        counters.set(k, value);
+        return { value };
+      }),
     },
     userProgress: {
       count: jest.fn(async () => progress.size),
@@ -392,6 +413,36 @@ describe('GamificationService', () => {
       const sixth = await service.track(U, 'forum_post', 'p6', { now: NOW });
       expect(sixth).toMatchObject({ granted: false, reason: 'cap' });
       expect(prisma._state.xpEvents.filter((e) => e.type === 'forum_post')).toHaveLength(5);
+    });
+
+    it('never exceeds a cap under concurrent grants (atomic counters)', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 10 }, (_, i) => service.track(U, 'forum_post', `race${i}`, { now: NOW })),
+      );
+      expect(results.filter((r) => r.granted)).toHaveLength(5);
+      expect(prisma._state.xpEvents.filter((e) => e.type === 'forum_post')).toHaveLength(5);
+      // A duplicate key never consumes a slot.
+      expect((await service.track(U, 'forum_post', 'race0', { now: NOW })).reason).toBe('duplicate');
+    });
+
+    it('does not pay again a friendship already rewarded with its legacy key', async () => {
+      addUser('a');
+      addUser('b');
+      prisma._state.xpEvents.push({ userId: 'a', type: 'friend_added', refId: 'fr-old', amount: 10, createdAt: OLD });
+      await service.trackFriendship('a', 'b', NOW, 'fr-old');
+      const rows = prisma._state.xpEvents.filter((e) => e.type === 'friend_added');
+      expect(rows.map((e) => [e.userId, e.refId]).sort()).toEqual([
+        ['a', 'fr-old'],
+        ['b', 'friend:a:b'],
+      ]);
+    });
+
+    it('reports live: false for an already counted day when nothing is live', async () => {
+      const stream = { getLive: jest.fn(async () => ({ live: true })) };
+      const svc = new GamificationService(prisma as unknown as PrismaService, community as unknown as CommunityService, undefined, stream as any);
+      expect(await svc.trackSpectator(U, NOW)).toMatchObject({ counted: true, live: true, days: 1 });
+      stream.getLive.mockResolvedValue({ live: false });
+      expect(await svc.trackSpectator(U, NOW)).toEqual({ counted: false, live: false, days: 1 });
     });
 
     it('caps the social XP of a day at 60 but still records the action', async () => {

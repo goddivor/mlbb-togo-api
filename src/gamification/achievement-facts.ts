@@ -194,30 +194,23 @@ export class AchievementFactsLoader {
   }
 
   private async messages(userId: string): Promise<AchievementFacts['messages']> {
-    // Legacy threads may miss `kind`: anything that is not a group room is a
-    // direct conversation.
-    const [mine, groups] = await Promise.all([
-      this.prisma.messageThread.findMany({
-        where: { participantIds: { has: userId } },
-        select: { id: true, kind: true },
-      }),
-      this.prisma.messageThread.findMany({
-        where: { kind: { in: [...GROUP_KINDS] } },
-        select: { id: true },
-      }),
-    ]);
-    const directIds = mine.filter((t) => !GROUP_KINDS.includes(t.kind as any)).map((t) => t.id);
-    const [direct, group] = await Promise.all([
-      directIds.length ? this.prisma.message.count({ where: { senderId: userId, threadId: { in: directIds } } }) : 0,
-      groups.length
-        ? this.prisma.message.findMany({
-            where: { senderId: userId, threadId: { in: groups.map((g) => g.id) } },
-            select: { createdAt: true },
-            take: MAX_ROWS,
-          })
-        : [],
-    ]);
-    return { direct, groupCounted: cappedDailyCount(group.map((g) => g.createdAt), LOUNGE_MESSAGES_PER_DAY) };
+    // Only the threads the player wrote in (bounded), never every group room.
+    const sent = await this.prisma.message.findMany({
+      where: { senderId: userId },
+      select: { threadId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: MAX_ROWS,
+    });
+    if (!sent.length) return { direct: 0, groupCounted: 0 };
+    const threads = await this.prisma.messageThread.findMany({
+      where: { id: { in: [...new Set(sent.map((m) => m.threadId))] } },
+      select: { id: true, kind: true },
+    });
+    // Legacy threads may miss `kind`: anything that is not a group room is direct.
+    const group = new Set(threads.filter((t) => GROUP_KINDS.includes(t.kind as any)).map((t) => t.id));
+    const direct = sent.filter((m) => !group.has(m.threadId)).length;
+    const groupDates = sent.filter((m) => group.has(m.threadId)).map((m) => m.createdAt);
+    return { direct, groupCounted: cappedDailyCount(groupDates, LOUNGE_MESSAGES_PER_DAY) };
   }
 
   private async mentions(userId: string, now: Date): Promise<AchievementFacts['mentions']> {
@@ -356,7 +349,9 @@ export class AchievementFactsLoader {
   }
 
   private async weeklySweep(userId: string): Promise<boolean> {
-    const weekly = MISSIONS.filter((m) => m.period === 'weekly').map((m) => m.id);
+    // weekly_bracket depends on bracket results the player does not control:
+    // the sweep asks for every other weekly mission.
+    const weekly = MISSIONS.filter((m) => m.period === 'weekly' && m.id !== 'weekly_bracket').map((m) => m.id);
     const rows = await this.prisma.userMission.findMany({
       where: { userId, missionId: { in: weekly } },
       select: { missionId: true, periodKey: true, completedAt: true },
