@@ -1,17 +1,37 @@
 // Anthropic Messages API calls with structured output (forced tool use with a
-// strict JSON schema). The client is injected so tests can mock
-// `messages.create`.
+// strict JSON schema). The client comes from an injected resolver so tests
+// can mock `messages.create`.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { AiLang, CatalogHero, HeroMeta, PlayerContext } from './ai.types';
 import { winRateOf } from './ai-heuristics';
 
-export const ANTHROPIC_CLIENT = 'ANTHROPIC_CLIENT';
-
 /** Minimal surface of the SDK we depend on (keeps mocks trivial). */
 export type AnthropicLike = Pick<Anthropic, 'messages'>;
 
 export const DEFAULT_AI_MODEL = 'claude-opus-5';
+
+/**
+ * Resolves the Anthropic client and model to use for the current call. The
+ * key and model are managed from the admin (with an env fallback), so they
+ * are looked up at call time instead of being fixed at boot.
+ */
+export const AI_CLIENT_RESOLVER = 'AI_CLIENT_RESOLVER';
+
+export interface AiClient {
+  /** Null when no key is configured: the service runs in heuristic mode. */
+  client: AnthropicLike | null;
+  model: string;
+}
+
+export interface AiClientResolver {
+  resolve(): Promise<AiClient>;
+}
+
+/** Resolver returning a fixed client (tests, scripts). */
+export function staticAiResolver(client: AnthropicLike | null, model = DEFAULT_AI_MODEL): AiClientResolver {
+  return { resolve: async () => ({ client, model }) };
+}
 
 const LANG_NAME: Record<AiLang, string> = { fr: 'French', en: 'English' };
 
