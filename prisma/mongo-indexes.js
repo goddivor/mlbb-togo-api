@@ -31,3 +31,10 @@ db.RewardElection.createIndex(
   { unique: true, name: 'RewardElection_kind_period_key' },
 );
 print('Index uniques UserFrame (userId, frameId, variant) et RewardElection (kind, period) en place.');
+for (const coll of ['Item', 'Emblem', 'BattleSpell']) {
+  db.getCollection(coll).createIndex(
+    { gameId: 1 },
+    { unique: true, name: `${coll}_gameId_partial`, partialFilterExpression: { gameId: { $type: 'number' } } },
+  );
+}
+print('Partial indexes Item/Emblem/BattleSpell (gameId) in place.');

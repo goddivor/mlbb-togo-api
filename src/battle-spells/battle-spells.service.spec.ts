@@ -75,6 +75,7 @@ describe('BattleSpellsService', () => {
           name: 'Flicker',
           cooldown: '30s',
           sort: 0,
+          enabled: true,
           description: undefined,
           icon: undefined,
         },

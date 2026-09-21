@@ -75,6 +75,7 @@ describe('EmblemsService', () => {
           name: 'Support',
           type: 'support',
           sort: 0,
+          enabled: true,
           description: undefined,
           icon: undefined,
         },
