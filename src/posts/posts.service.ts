@@ -20,18 +20,23 @@ import {
   PostCategory,
   PostSort,
   STAFF_ONLY_CATEGORIES,
-  STAFF_ROLES,
 } from './posts.constants';
+import { PermissionSubject, hasAnyPermission, hasPermission } from '../access/permissions';
 
-type ActingUser = { id?: string; username?: string; roleUser?: string };
+type ActingUser = { id?: string; username?: string } & PermissionSubject;
 
 const NON_COMMUNITY: string[] = POST_CATEGORIES.filter(
   (c) => c !== 'community',
 );
 
 /** Pure helpers: exported so the sorting / permission rules are unit-testable. */
+/** Any post-moderation right (pin / sponsor / delete others' posts). */
 export function isStaff(user?: ActingUser | null): boolean {
-  return STAFF_ROLES.includes(user?.roleUser ?? '');
+  return hasAnyPermission(user, ['forum.moderate', 'posts.sponsor']);
+}
+
+export function canModerate(user?: ActingUser | null): boolean {
+  return hasPermission(user, 'forum.moderate');
 }
 
 export function canPostInCategory(
@@ -40,7 +45,7 @@ export function canPostInCategory(
 ): boolean {
   if (!(POST_CATEGORIES as readonly string[]).includes(category)) return false;
   if (STAFF_ONLY_CATEGORIES.includes(category as PostCategory)) {
-    return isStaff(user);
+    return hasPermission(user, 'forum.announce');
   }
   return true;
 }
@@ -216,7 +221,7 @@ export class PostsService {
     user?: ActingUser,
   ): Promise<{ isSponsored?: boolean; sponsorId?: string | null }> {
     if (dto.isSponsored === undefined && dto.sponsorId === undefined) return {};
-    if (!isStaff(user)) {
+    if (!hasPermission(user, 'posts.sponsor')) {
       throw new ForbiddenException(
         'Seuls les administrateurs peuvent sponsoriser un post.',
       );
@@ -275,7 +280,7 @@ export class PostsService {
   /** Admin/moderator moderation: pin, sponsor. */
   async update(id: string, dto: UpdatePostDto, user?: ActingUser) {
     await this.findRaw(id);
-    if (!isStaff(user)) {
+    if (!isStaff(user) || (dto.isPinned !== undefined && !canModerate(user))) {
       throw new ForbiddenException('Action réservée aux administrateurs.');
     }
     const sponsoring = await this.resolveSponsor(dto, user);
@@ -291,9 +296,25 @@ export class PostsService {
     return serialized;
   }
 
+  /**
+   * Internal pin toggle, without permission check: for callers that already
+   * authorized the action (e.g. the league control room pinning its own
+   * announcement, guarded by `admin.league`).
+   */
+  async setPinned(id: string, isPinned: boolean) {
+    await this.findRaw(id);
+    const post = await this.prisma.post.update({
+      where: { id },
+      data: { isPinned },
+      include: { comments: true },
+    });
+    const [serialized] = await this.withSponsors([post]);
+    return serialized;
+  }
+
   async remove(id: string, user?: ActingUser) {
     const post = await this.findRaw(id);
-    if (post.authorId !== user?.id && !isStaff(user)) {
+    if (post.authorId !== user?.id && !canModerate(user)) {
       throw new ForbiddenException('Suppression non autorisée.');
     }
     await this.prisma.comment.deleteMany({ where: { postId: id } });

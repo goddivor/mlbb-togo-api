@@ -16,8 +16,8 @@ import { EsportStaffService } from './esport-staff.service';
 import { EsportSeasonsService } from './esport-seasons.service';
 import { CloseSeasonDto, CreateSeasonDto, UpdateSeasonDto } from './dto/season.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('esport')
@@ -156,15 +156,15 @@ export class EsportController {
 
   // ----- Admin: organization -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Patch(':id')
   updateOrg(@Param('id') id: string, @Body() body: any) {
     return this.esport.updateOrg(id, body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Put('org/figures')
   updateFigures(@Body() body: any) {
     return this.esport.updateFigures(body);
@@ -172,29 +172,29 @@ export class EsportController {
 
   // ----- Admin: teams -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport', 'admin.requests')
   @Post('teams')
   createTeam(@Body() body: any) {
     return this.esport.createTeam(body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Patch('teams/:id')
   updateTeam(@Param('id') id: string, @Body() body: any) {
     return this.esport.updateTeam(id, body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Delete('teams/:id')
   deleteTeam(@Param('id') id: string) {
     return this.esport.deleteTeam(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Patch('teams/:id/transform')
   transformTeam(@Param('id') id: string) {
     return this.esport.transformToEsport(id);
@@ -202,8 +202,8 @@ export class EsportController {
 
   // ----- Admin: members -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Post('teams/:id/members')
   addMember(@Param('id') id: string, @Body() body: any) {
     return this.esport.addMember(id, body);
@@ -230,8 +230,8 @@ export class EsportController {
     return this.esport.removeMember(id, userId, user);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Patch('teams/:id/captain')
   setCaptain(@Param('id') id: string, @Body() body: any) {
     return this.esport.setCaptain(id, body.userId);
@@ -239,15 +239,15 @@ export class EsportController {
 
   // ----- Admin: staff & honours -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Post('teams/:id/staff')
   addStaff(@Param('id') id: string, @Body() body: any) {
     return this.staff.addStaff(id, body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Patch('teams/:id/staff/:staffId')
   updateStaff(
     @Param('id') id: string,
@@ -257,15 +257,15 @@ export class EsportController {
     return this.staff.updateStaff(id, staffId, body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Delete('teams/:id/staff/:staffId')
   removeStaff(@Param('id') id: string, @Param('staffId') staffId: string) {
     return this.staff.removeStaff(id, staffId);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.esport')
   @Put('teams/:id/honours')
   setHonours(@Param('id') id: string, @Body() body: any) {
     return this.staff.setHonours(id, body?.honours ?? body);
@@ -273,22 +273,22 @@ export class EsportController {
 
   // ----- Admin: sponsors -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('sponsors.manage')
   @Post('sponsors')
   createSponsor(@Body() body: any) {
     return this.esport.createSponsor(body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('sponsors.manage')
   @Patch('sponsors/:id')
   updateSponsor(@Param('id') id: string, @Body() body: any) {
     return this.esport.updateSponsor(id, body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('sponsors.manage')
   @Delete('sponsors/:id')
   deleteSponsor(@Param('id') id: string) {
     return this.esport.deleteSponsor(id);
@@ -296,58 +296,58 @@ export class EsportController {
 
   // ----- Admin: seasons -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Post('seasons')
   createSeason(@Body() body: CreateSeasonDto) {
     return this.seasons.create(body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Patch('seasons/:id')
   updateSeason(@Param('id') id: string, @Body() body: UpdateSeasonDto) {
     return this.seasons.update(id, body);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Delete('seasons/:id')
   deleteSeason(@Param('id') id: string) {
     return this.seasons.remove(id);
   }
 
   // Lifecycle: upcoming -> active -> playoffs -> closed (-> reopen).
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Post('seasons/:id/activate')
   activateSeason(@Param('id') id: string) {
     return this.seasons.activate(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Post('seasons/:id/playoffs')
   startSeasonPlayoffs(@Param('id') id: string) {
     return this.seasons.startPlayoffs(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Get('seasons/:id/summary-preview')
   previewSeasonSummary(@Param('id') id: string) {
     return this.seasons.previewSummary(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Post('seasons/:id/close')
   closeSeason(@Param('id') id: string, @Body() body: CloseSeasonDto) {
     return this.seasons.close(id, body ?? {});
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Post('seasons/:id/reopen')
   reopenSeason(@Param('id') id: string) {
     return this.seasons.reopen(id);

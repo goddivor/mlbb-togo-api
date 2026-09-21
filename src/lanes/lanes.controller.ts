@@ -2,8 +2,8 @@ import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
 import { LanesService } from './lanes.service';
 import { UpdateLaneDto } from './dto/update-lane.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
 @Controller('lanes')
 export class LanesController {
@@ -23,8 +23,8 @@ export class LanesController {
 
   // ----- Admin -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Patch(':key')
   update(@Param('key') key: string, @Body() body: UpdateLaneDto) {
     return this.lanes.update(key, body);

@@ -2,8 +2,8 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } fro
 import { AwardsService } from './awards.service';
 import { CreateAwardDto, SetPodiumDto, SuggestAwardsDto, UpdateAwardDto } from './dto/award.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
 /**
  * Season awards (#46), podiums and Hall of Fame (#47).
@@ -29,36 +29,36 @@ export class AwardsController {
 
   // ----- Admin -----
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.awards')
   @Post('seasons/:id/suggest')
   suggest(@Param('id') id: string, @Body() dto: SuggestAwardsDto) {
     return this.awards.suggest(id, dto ?? {});
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.awards')
   @Put('seasons/:id/podium')
   setPodium(@Param('id') id: string, @Body() dto: SetPodiumDto) {
     return this.awards.setPodium(id, dto ?? {});
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.awards')
   @Post('seasons/:id')
   create(@Param('id') id: string, @Body() dto: CreateAwardDto) {
     return this.awards.create(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.awards')
   @Patch(':awardId')
   update(@Param('awardId') awardId: string, @Body() dto: UpdateAwardDto) {
     return this.awards.update(awardId, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.awards')
   @Delete(':awardId')
   remove(@Param('awardId') awardId: string) {
     return this.awards.remove(awardId);

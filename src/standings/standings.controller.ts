@@ -3,8 +3,8 @@ import { Response } from 'express';
 import { StandingsService } from './standings.service';
 import { UpdateStandingsSettingsDto } from './dto/standings-settings.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
 @Controller('standings')
 export class StandingsController {
@@ -48,8 +48,8 @@ export class StandingsController {
     return this.standings.getSettings(seasonId);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.seasons')
   @Patch('settings/:seasonId')
   updateSettings(@Param('seasonId') seasonId: string, @Body() dto: UpdateStandingsSettingsDto) {
     return this.standings.updateSettings(seasonId, dto);

@@ -26,7 +26,7 @@ import {
   countRecent,
 } from './league.logic';
 
-type ActingUser = { id?: string; username?: string; roleUser?: string };
+type ActingUser = { id?: string; username?: string; roleUser?: string; permissions?: string[] };
 
 const TOP_STANDINGS = 5;
 
@@ -193,7 +193,7 @@ export class LeagueService {
       },
       user,
     );
-    const final = dto.pin ? await this.posts.update(post.id, { isPinned: true }, user) : post;
+    const final = dto.pin ? await this.posts.setPinned(post.id, true) : post;
     await this.log('league.announce', user, post.id, dto.title.trim().slice(0, 120));
     return final;
   }

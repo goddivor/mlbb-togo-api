@@ -17,11 +17,10 @@ import {
   SecondPhaseDto,
 } from './dto/draft.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
-const ADMIN = ['admin', 'moderator'];
 
 @Controller('draft')
 export class DraftController {
@@ -29,85 +28,85 @@ export class DraftController {
 
   /* ---------------- Admin ---------------- */
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Get('admin')
   adminList() {
     return this.draft.adminList();
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Post('admin')
   create(@Body() dto: CreateDraftTournamentDto, @CurrentUser() user: any) {
     return this.draft.create(dto, user?.id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Patch('admin/:id')
   update(@Param('id') id: string, @Body() dto: UpdateDraftTournamentDto) {
     return this.draft.update(id, dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Delete('admin/:id')
   remove(@Param('id') id: string) {
     return this.draft.remove(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Post('admin/:id/open')
   open(@Param('id') id: string) {
     return this.draft.openRegistration(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Post('admin/:id/close')
   close(@Param('id') id: string) {
     return this.draft.closeRegistration(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Get('admin/:id/registrations')
   registrations(@Param('id') id: string) {
     return this.draft.getRegistrations(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Post('admin/:id/draft')
   runDraft(@Param('id') id: string) {
     return this.draft.runDraft(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Post('admin/:id/second-phase')
   secondPhase(@Param('id') id: string, @Body() dto: SecondPhaseDto) {
     return this.draft.openSecondPhase(id, dto.closesAt);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Post('admin/:id/publish')
   publish(@Param('id') id: string) {
     return this.draft.publish(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Post('admin/:id/teams/:teamId/eliminate')
   eliminate(@Param('id') id: string, @Param('teamId') teamId: string) {
     return this.draft.eliminateTeam(id, teamId);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.draft')
   @Post('admin/:id/matches/:matchId/winner')
   setWinner(
     @Param('id') id: string,
