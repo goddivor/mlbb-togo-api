@@ -19,6 +19,21 @@ function makePrisma() {
   let match: any = null;
   let players: any[] = [];
 
+  /** Subset of the Prisma filters used by the engine on XP events. */
+  const matchEvent = (e: any, where: any = {}) => {
+    if (where.userId !== undefined) {
+      if (typeof where.userId === 'string' ? e.userId !== where.userId : !where.userId.in.includes(e.userId)) return false;
+    }
+    if (where.type !== undefined) {
+      if (typeof where.type === 'string' ? e.type !== where.type : !where.type.in.includes(e.type)) return false;
+    }
+    if (where.createdAt?.gte && e.createdAt < where.createdAt.gte) return false;
+    if (typeof where.refId === 'string' && e.refId !== where.refId) return false;
+    if (typeof where.refId === 'object' && where.refId.startsWith && !e.refId.startsWith(where.refId.startsWith)) return false;
+    if (typeof where.refId === 'object' && where.refId.endsWith && !e.refId.endsWith(where.refId.endsWith)) return false;
+    return true;
+  };
+
   const prisma = {
     _state: { xpEvents, progress, missions, achievements, users },
     setMatch(m: any, p: any[]) {
@@ -37,6 +52,15 @@ function makePrisma() {
         xpEvents.push(row);
         return row;
       }),
+      count: jest.fn(async ({ where }: any) => xpEvents.filter((e) => matchEvent(e, where)).length),
+      aggregate: jest.fn(async ({ where }: any) => ({
+        _sum: { amount: xpEvents.filter((e) => matchEvent(e, where)).reduce((n, e) => n + e.amount, 0) },
+      })),
+      findFirst: jest.fn(async ({ where }: any) => xpEvents.find((e) => matchEvent(e, where)) ?? null),
+      findUnique: jest.fn(async ({ where }: any) => {
+        const k = where.userId_type_refId;
+        return xpEvents.find((e) => e.userId === k.userId && e.type === k.type && e.refId === k.refId) ?? null;
+      }),
       groupBy: jest.fn(async ({ where }: any) => {
         const map = new Map<string, number>();
         for (const e of xpEvents)
@@ -51,6 +75,7 @@ function makePrisma() {
       ),
     },
     userProgress: {
+      count: jest.fn(async () => progress.size),
       findUnique: jest.fn(async ({ where }: any) => progress.get(where.userId) ?? null),
       upsert: jest.fn(async ({ where, create, update }: any) => {
         const row = progress.get(where.userId);
@@ -64,8 +89,11 @@ function makePrisma() {
       }),
       updateMany: jest.fn(async ({ where, data }: any) => {
         const row = progress.get(where.userId);
-        if (!row || !(row.level < where.level.lt)) return { count: 0 };
-        Object.assign(row, data);
+        if (!row) return { count: 0 };
+        if (where.level && !(row.level < where.level.lt)) return { count: 0 };
+        if (where.xp && !(row.xp >= where.xp.gte)) return { count: 0 };
+        if (data.xp?.increment !== undefined) row.xp += data.xp.increment;
+        else Object.assign(row, data);
         return { count: 1 };
       }),
       findMany: jest.fn(async ({ take }: any) =>
@@ -96,10 +124,25 @@ function makePrisma() {
         missions.filter((m) => m.userId === where.userId && m.completedAt).length,
       ),
       findMany: jest.fn(async ({ where }: any) =>
-        missions.filter((m) => m.userId === where.userId && where.periodKey.in.includes(m.periodKey)),
+        missions.filter(
+          (m) =>
+            m.userId === where.userId &&
+            (!where.periodKey || where.periodKey.in.includes(m.periodKey)) &&
+            (!where.missionId || where.missionId.in.includes(m.missionId)),
+        ),
       ),
     },
     userAchievement: {
+      groupBy: jest.fn(async () => {
+        const map = new Map<string, number>();
+        for (const a of achievements) map.set(a.achievementId, (map.get(a.achievementId) ?? 0) + 1);
+        return Array.from(map, ([achievementId, n]) => ({
+          achievementId,
+          _count: { _all: n },
+          _min: { unlockedAt: null },
+          _max: { unlockedAt: null },
+        }));
+      }),
       findMany: jest.fn(async ({ where }: any) =>
         achievements.filter((a) => a.userId === where.userId),
       ),
@@ -126,10 +169,23 @@ function makePrisma() {
         ),
       ),
     },
-    esportMatch: { findUnique: jest.fn(async () => match) },
+    esportMatch: {
+      findUnique: jest.fn(async () => match),
+      findMany: jest.fn(async () => (match ? [match] : [])),
+    },
     esportMatchPlayer: { findMany: jest.fn(async () => players) },
   };
-  return prisma;
+  // Models the engine only reads for achievement facts: empty by default.
+  const stub = () => ({
+    findMany: jest.fn(async () => []),
+    findFirst: jest.fn(async () => null),
+    findUnique: jest.fn(async () => null),
+    count: jest.fn(async () => 0),
+    groupBy: jest.fn(async () => []),
+  });
+  return new Proxy(prisma, {
+    get: (target: any, key) => (key in target ? target[key] : (target[key] = stub())),
+  }) as typeof prisma;
 }
 
 describe('GamificationService', () => {
@@ -151,10 +207,10 @@ describe('GamificationService', () => {
       const res = await service.track(U, 'forum_post', 'post-1');
       expect(res.granted).toBe(true);
       expect(res.amount).toBe(XP_RULES.forum_post);
-      expect(res.unlocked).toEqual(['first_steps']);
-      // 5 XP for the post + 10 XP daily mission + 20 XP achievement bonus.
+      expect([...res.unlocked].sort()).toEqual(['first_steps', 'first_words']);
+      // 5 XP for the post + 10 XP daily mission + 2 x 20 XP achievement bonus.
       expect(res.missionsCompleted).toEqual(['daily_post']);
-      expect(res.xp).toBe(35);
+      expect(res.xp).toBe(55);
       expect(res.level).toBe(1);
       expect(community.notifyUser).toHaveBeenCalledWith(
         U,
@@ -293,12 +349,16 @@ describe('GamificationService', () => {
       expect(first?.unlocked).toBe(true);
       expect(first?.unlockedAt).toBeInstanceOf(Date);
       expect(me.achievements.find((a) => a.id === 'wins_10')?.unlocked).toBe(false);
-      expect(me.achievements.some((a) => a.id === 'on_fire')).toBe(true);
+      // Secret and locked: listed for the owner, but hidden (no icon, no frame).
+      expect(me.achievements.find((a) => a.id === 'night_owl')).toMatchObject({ hidden: true, icon: 'lock', family: 'secrets' });
+      expect(first).toMatchObject({ family: 'progression', rarity: 'common', percent: 100 });
+      expect(me.members).toBe(1);
       expect(me.recentEvents[0]).toMatchObject({ type: 'achievement', amount: 20 });
 
       const pub = await service.getPublic(U);
-      expect(pub.achievements.some((a) => a.id === 'on_fire')).toBe(false);
-      expect(pub.achievementsUnlocked).toBe(1);
+      expect(pub.achievements.some((a) => a.id === 'night_owl')).toBe(false);
+      expect(pub.achievements.some((a) => a.id === 'on_fire')).toBe(true);
+      expect(pub.achievementsUnlocked).toBe(2);
       expect(pub.user).toMatchObject({ id: U, username: 'tank' });
     });
 
@@ -319,6 +379,152 @@ describe('GamificationService', () => {
       const board = await service.leaderboard(10);
       expect(board.entries.map((e) => e.user.username).sort()).toEqual(['mage', 'staffer', 'tank']);
       expect(board.entries[0]).toMatchObject({ rank: 1, level: 1 });
+    });
+  });
+  describe('guard-rails (catalogue §2.2)', () => {
+    const OLD = new Date('2026-01-01T00:00:00Z');
+    const NOW = new Date('2026-09-21T10:00:00Z');
+    const addUser = (id: string, joinedAt = OLD) =>
+      prisma._state.users.set(id, { id, username: id, roleUser: 'user', badges: '[]', joinedAt });
+
+    it('stops recording forum posts after 5 per day (not counted, no XP)', async () => {
+      for (let i = 1; i <= 5; i++) expect((await service.track(U, 'forum_post', `p${i}`, { now: NOW })).granted).toBe(true);
+      const sixth = await service.track(U, 'forum_post', 'p6', { now: NOW });
+      expect(sixth).toMatchObject({ granted: false, reason: 'cap' });
+      expect(prisma._state.xpEvents.filter((e) => e.type === 'forum_post')).toHaveLength(5);
+    });
+
+    it('caps the social XP of a day at 60 but still records the action', async () => {
+      // 5 posts (25) + 5 comments (10) + 2 pick & ban (10) + 1 coach (5) = 50, then friends at 10.
+      for (let i = 1; i <= 5; i++) await service.track(U, 'forum_post', `p${i}`, { now: NOW });
+      for (let i = 1; i <= 5; i++) await service.track(U, 'comment_posted', `c${i}`, { now: NOW });
+      for (let i = 1; i <= 2; i++) await service.track(U, 'pickban_completed', `d${i}`, { now: NOW });
+      await service.track(U, 'ai_coach_used', '2026-09-21', { now: NOW });
+      const f1 = await service.track(U, 'friend_added', 'friend:a:b', { now: NOW });
+      const f2 = await service.track(U, 'friend_added', 'friend:a:c', { now: NOW });
+      expect(f1).toMatchObject({ granted: true, amount: 10 });
+      expect(f2).toMatchObject({ granted: true, amount: 0 });
+      const social = prisma._state.xpEvents.filter((e) =>
+        ['forum_post', 'comment_posted', 'friend_added', 'pickban_completed', 'ai_coach_used'].includes(e.type),
+      );
+      expect(social.reduce((n, e) => n + e.amount, 0)).toBe(60);
+      expect(prisma._state.xpEvents.find((e) => e.refId === 'friend:a:c').meta).toMatchObject({ capped: true, requested: 10 });
+    });
+
+    it('keeps competitive XP out of the social cap', async () => {
+      for (let i = 1; i <= 5; i++) await service.track(U, 'forum_post', `p${i}`, { now: NOW });
+      for (let i = 1; i <= 5; i++) await service.track(U, 'comment_posted', `c${i}`, { now: NOW });
+      await service.track(U, 'ai_coach_used', 'day', { now: NOW });
+      await service.track(U, 'pickban_completed', 'd1', { now: NOW });
+      await service.track(U, 'pickban_completed', 'd2', { now: NOW });
+      await service.track(U, 'friend_added', 'f1', { now: NOW });
+      expect((await service.track(U, 'match_played', 'm1', { now: NOW })).amount).toBe(50);
+    });
+
+    it('counts the AI coach once a day and five times a week', async () => {
+      const day = (n: number) => new Date(Date.UTC(2026, 8, 21 + n, 12));
+      for (let i = 0; i < 5; i++) {
+        expect((await service.track(U, 'ai_coach_used', `k${i}`, { now: day(i) })).granted).toBe(true);
+      }
+      expect((await service.track(U, 'ai_coach_used', 'k4b', { now: day(4) })).reason).toBe('cap');
+      expect((await service.track(U, 'ai_coach_used', 'k5', { now: day(5) })).reason).toBe('cap');
+      // Next ISO week (Monday 28/09).
+      expect((await service.track(U, 'ai_coach_used', 'k7', { now: day(7) })).granted).toBe(true);
+    });
+
+    it('ignores self-likes, young accounts and low-level likers; counts a like once per member', async () => {
+      addUser('author');
+      addUser('fan');
+      addUser('young', new Date('2026-09-18T00:00:00Z'));
+      addUser('newbie');
+      prisma._state.progress.set('fan', { userId: 'fan', xp: 1000, level: 3 });
+      prisma._state.progress.set('young', { userId: 'young', xp: 1000, level: 3 });
+      prisma._state.progress.set('newbie', { userId: 'newbie', xp: 10, level: 1 });
+
+      expect(await service.trackLike('post1', 'author', 'author', NOW)).toBeNull();
+      expect(await service.trackLike('post1', 'author', 'young', NOW)).toBeNull();
+      expect(await service.trackLike('post1', 'author', 'newbie', NOW)).toBeNull();
+      expect((await service.trackLike('post1', 'author', 'fan', NOW))?.granted).toBe(true);
+      expect((await service.trackLike('post1', 'author', 'fan', NOW))?.granted).toBe(false);
+      const likes = prisma._state.xpEvents.filter((e) => e.type === 'like_received');
+      expect(likes).toEqual([expect.objectContaining({ userId: 'author', amount: 0, refId: 'like:post1:fan' })]);
+      expect(prisma._state.progress.get('author')).toBeUndefined();
+    });
+
+    it('pauses likes between two members after more than 30 exchanged in 7 days', async () => {
+      addUser('a');
+      addUser('b');
+      prisma._state.progress.set('a', { userId: 'a', xp: 1000, level: 3 });
+      prisma._state.progress.set('b', { userId: 'b', xp: 1000, level: 3 });
+      for (let i = 0; i < 16; i++) await service.trackLike(`pa${i}`, 'a', 'b', NOW);
+      for (let i = 0; i < 15; i++) await service.trackLike(`pb${i}`, 'b', 'a', NOW);
+      // 31 likes exchanged: the pair is paused.
+      expect(prisma._state.xpEvents.filter((e) => e.type === 'like_pause')).toHaveLength(1);
+      expect(await service.trackLike('pa99', 'a', 'b', NOW)).toBeNull();
+      expect(await service.trackLike('pb99', 'b', 'a', new Date('2026-10-10T00:00:00Z'))).toBeNull();
+      // 30 days later, likes count again; already counted ones stay.
+      expect((await service.trackLike('pa100', 'a', 'b', new Date('2026-10-22T00:00:00Z')))?.granted).toBe(true);
+      expect(prisma._state.xpEvents.filter((e) => e.type === 'like_received')).toHaveLength(32);
+    });
+
+    it('rewards a friendship once per pair for life, and never with a young account', async () => {
+      addUser('a');
+      addUser('b');
+      addUser('kid', new Date('2026-09-20T00:00:00Z'));
+      await service.trackFriendship('a', 'b', NOW);
+      await service.trackFriendship('b', 'a', NOW); // unfriend then befriend again
+      await service.trackFriendship('a', 'kid', NOW);
+      const rows = prisma._state.xpEvents.filter((e) => e.type === 'friend_added');
+      // 'a' earns nothing from the 2-day-old account; the newcomer still earns from 'a'.
+      expect(rows.map((e) => [e.userId, e.refId]).sort()).toEqual([
+        ['a', 'friend:a:b'],
+        ['b', 'friend:a:b'],
+        ['kid', 'friend:a:kid'],
+      ]);
+      expect(rows[0].meta).toMatchObject({ username: expect.any(String) });
+    });
+
+    it('pays a game account link once per mlbbRoleId on the whole platform', async () => {
+      addUser('first');
+      addUser('second');
+      expect((await service.trackGameLinked('first', 123, NOW))?.granted).toBe(true);
+      expect(await service.trackGameLinked('second', 123, NOW)).toBeNull();
+      expect(prisma._state.xpEvents.filter((e) => e.type === 'game_account_linked')).toHaveLength(1);
+    });
+  });
+
+  describe('admin XP correction (atomic clamp)', () => {
+    it('never goes below 0, even with concurrent negative corrections', async () => {
+      await service.track(U, 'match_played', 'm1');
+      const xp = prisma._state.progress.get(U).xp;
+      const [a, b] = await Promise.all([
+        service.adjustXp(U, -xp, { reason: 'cheat', adminId: 'adm' }),
+        service.adjustXp(U, -xp, { reason: 'cheat', adminId: 'adm' }),
+      ]);
+      expect(prisma._state.progress.get(U).xp).toBe(0);
+      expect(a.applied + b.applied).toBe(-xp);
+      const corrections = prisma._state.xpEvents.filter((e) => e.type === 'admin_correction');
+      expect(corrections.every((e) => e.amount !== 0)).toBe(true);
+    });
+
+    it('writes nothing for a user without progress', async () => {
+      const res = await service.adjustXp('ghost', -50, { reason: 'test', adminId: 'adm' });
+      expect(res.applied).toBe(0);
+      expect(prisma._state.xpEvents.filter((e) => e.type === 'admin_correction')).toHaveLength(0);
+    });
+  });
+
+  describe('manual unlocks and listeners', () => {
+    it('unlocks a manual achievement once and notifies listeners of tracked events', async () => {
+      const seen: string[] = [];
+      service.onTracked(async (_u, type) => {
+        seen.push(type);
+      });
+      expect(await service.unlockAchievement(U, 'weekly_mvp')).toBe(true);
+      expect(await service.unlockAchievement(U, 'weekly_mvp')).toBe(false);
+      expect(prisma._state.achievements.map((a) => a.achievementId)).toContain('weekly_mvp');
+      await service.track(U, 'daily_login', '2026-09-21');
+      expect(seen).toEqual(['daily_login']);
     });
   });
 });
