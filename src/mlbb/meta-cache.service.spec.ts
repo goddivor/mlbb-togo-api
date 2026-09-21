@@ -126,4 +126,22 @@ describe('MetaCacheService', () => {
     expect(await cache.wrap('k', 1000, async () => 7)).toBe(7);
     await flush();
   });
+
+  it('shares one database read between concurrent cold callers', async () => {
+    const prisma = fakePrisma({
+      k: { value: '"db"', fetchedAt: new Date(), expiresAt: new Date(Date.now() + 60_000) },
+    });
+    const cache = new MetaCacheService(prisma as any);
+    const loader = jest.fn();
+    expect(await Promise.all([cache.wrap('k', 1000, loader), cache.wrap('k', 1000, loader)])).toEqual(['db', 'db']);
+    expect(prisma.mlbbCache.findUnique).toHaveBeenCalledTimes(1);
+    expect(loader).not.toHaveBeenCalled();
+  });
+
+  it('persists a cold load before resolving', async () => {
+    const prisma = fakePrisma();
+    const cache = new MetaCacheService(prisma as any);
+    await cache.wrap('k', 1000, async () => 'v');
+    expect(prisma.store.has('k')).toBe(true);
+  });
 });

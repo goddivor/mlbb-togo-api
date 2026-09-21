@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { normalizeLang } from './gms.constants';
 import {
   computeDeltas,
   heroTaxonomy,
@@ -136,5 +137,14 @@ describe('gms.mappers', () => {
     expect(builds[0].emblem!.attributes).toContain('+10 Adaptive Attack');
     expect(builds[0].spell).toMatchObject({ id: 20100, name: 'Flicker' });
     expect(builds.map((b) => b.pickRate)).toEqual([16.45, 5.39, 4.72]);
+  });
+});
+
+describe('normalizeLang', () => {
+  it('keeps supported languages and falls back to English', () => {
+    expect(normalizeLang('FR')).toBe('fr');
+    expect(normalizeLang('en')).toBe('en');
+    expect(normalizeLang('xx-evil')).toBe('en');
+    expect(normalizeLang(undefined)).toBe('en');
   });
 });

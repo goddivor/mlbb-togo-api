@@ -60,4 +60,15 @@ describe('GmsClient', () => {
     expect(GmsClient.sign('post', '/p', '', '', 'k')).toBe(GmsClient.sign('POST', '/p', '', '{}', 'k'));
     expect(GmsClient.sign('POST', '/p', '', '{}', 'k')).toMatch(/^[A-Za-z0-9+/]+=*$/);
   });
+
+  it('does not retry the signing key on every call after a failure', async () => {
+    const { c, calls } = client([
+      new Error('enigma down'),
+      json({ code: 0, data: { records: [] } }),
+      json({ code: 0, data: { records: [] } }),
+    ]);
+    await c.callSource('2669606', '1', {});
+    await c.callSource('2669606', '1', {});
+    expect(calls.filter((x) => x.url.includes('basev4'))).toHaveLength(1);
+  });
 });

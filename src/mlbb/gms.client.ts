@@ -20,6 +20,9 @@ export class GmsError extends Error {
 
 type FetchFn = typeof fetch;
 
+const ENIGMA_TIMEOUT_MS = 3000;
+const ENIGMA_RETRY_MS = 60 * 1000;
+
 /**
  * Thin client for the Moonton GMS API (`POST /api/gms/source/<app>/<source>`).
  *
@@ -31,6 +34,7 @@ type FetchFn = typeof fetch;
 export class GmsClient {
   private readonly logger = new Logger('GmsClient');
   private enigmaCache: { value: string; expiresAt: number } | null = null;
+  private enigmaRetryAt = 0;
   private readonly timeoutMs = Number(process.env.MLBB_GMS_TIMEOUT_MS) || 10_000;
   private readonly signEnabled = process.env.MLBB_GMS_SIGN !== '0';
   // Overridable in tests.
@@ -57,10 +61,13 @@ export class GmsClient {
   private async getEnigma(): Promise<string | null> {
     const now = Date.now();
     if (this.enigmaCache && this.enigmaCache.expiresAt > now) return this.enigmaCache.value;
+    // The signature is optional: after a failure, skip it for a while instead
+    // of adding a signing round trip (and its timeout) to every call.
+    if (this.enigmaRetryAt > now) return this.enigmaCache?.value ?? null;
     try {
       const res = await this.fetchFn(`${GMS_BASE}/api/act/basev4?_t=${now}`, {
         headers: this.headers(),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(Math.min(this.timeoutMs, ENIGMA_TIMEOUT_MS)),
       });
       const json: any = await res.json();
       const enigma = json?.data?.server?.enigma;
@@ -71,6 +78,7 @@ export class GmsClient {
     } catch (e) {
       this.logger.debug(`enigma unavailable: ${(e as Error).message}`);
     }
+    this.enigmaRetryAt = now + ENIGMA_RETRY_MS;
     return this.enigmaCache?.value ?? null;
   }
 

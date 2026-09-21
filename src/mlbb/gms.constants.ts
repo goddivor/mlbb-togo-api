@@ -113,3 +113,12 @@ export function normalizeLane(lane?: string | number | null): string | null {
   if (l in LANE_IDS) return l;
   return LANE_BY_ID[Number(l)] ?? null;
 }
+
+/** Languages served by the site; anything else falls back to English so the
+ * cache keys (hero list ~1 MB per language) stay bounded. */
+export const GMS_LANGS = ['en', 'fr'] as const;
+
+export function normalizeLang(lang?: string | null): string {
+  const l = String(lang ?? '').trim().toLowerCase();
+  return (GMS_LANGS as readonly string[]).includes(l) ? l : 'en';
+}

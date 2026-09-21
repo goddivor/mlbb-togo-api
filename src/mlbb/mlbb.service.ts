@@ -7,7 +7,7 @@ import {
 import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service';
 import { GmsClient } from './gms.client';
-import { APP_HEROES, GMS_USER_AGENT, SRC, TTL } from './gms.constants';
+import { APP_HEROES, GMS_USER_AGENT, SRC, TTL, normalizeLang } from './gms.constants';
 import { heroTaxonomy } from './gms.mappers';
 import { MetaCacheService } from './meta-cache.service';
 
@@ -96,7 +96,8 @@ export class MlbbService {
 
   // Full Moonton hero list (skills, skins, lore...), cached 24 h in memory + DB.
   // Returns [] when Moonton is unreachable and nothing is cached.
-  private async fetchHeroRecords(lang = 'en'): Promise<any[]> {
+  private async fetchHeroRecords(rawLang = 'en'): Promise<any[]> {
+    const lang = normalizeLang(rawLang);
     try {
       return await this.cache.wrap(
         `gms:heroes:${lang}`,

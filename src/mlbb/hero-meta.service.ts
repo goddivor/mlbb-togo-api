@@ -16,6 +16,7 @@ import {
   WindowDays,
   normalizeDays,
   normalizeLane,
+  normalizeLang,
   normalizeRank,
   normalizeTrendDays,
 } from './gms.constants';
@@ -123,7 +124,8 @@ export class HeroMetaService {
   /* Raw cached datasets                                                */
   /* ------------------------------------------------------------------ */
 
-  private rankingRows(rank: RankTier, days: WindowDays, lang: string): Promise<RankingRow[]> {
+  private rankingRows(rank: RankTier, days: WindowDays, rawLang: string): Promise<RankingRow[]> {
+    const lang = normalizeLang(rawLang);
     return this.cache.wrap(
       `gms:ranking:${rank}:${days}:${lang}`,
       TTL.ranking,
@@ -243,7 +245,8 @@ export class HeroMetaService {
     );
   }
 
-  private buildRecords(heroId: number, rank: RankTier, lane: string, lang: string): Promise<any[]> {
+  private buildRecords(heroId: number, rank: RankTier, lane: string, rawLang: string): Promise<any[]> {
+    const lang = normalizeLang(rawLang);
     return this.cache.wrap(
       `gms:builds:${heroId}:${rank}:${lane}:${lang}`,
       TTL.builds,
@@ -265,7 +268,8 @@ export class HeroMetaService {
     );
   }
 
-  private catalog(kind: 'equipment' | 'talents', lang: string): Promise<CatalogEntry[]> {
+  private catalog(kind: 'equipment' | 'talents', rawLang: string): Promise<CatalogEntry[]> {
+    const lang = normalizeLang(rawLang);
     return this.cache.wrap(
       `gms:catalog:${kind}:${lang}`,
       TTL.catalog,
@@ -304,7 +308,8 @@ export class HeroMetaService {
     );
   }
 
-  private combosData(heroId: number, lang: string): Promise<SkillCombo[]> {
+  private combosData(heroId: number, rawLang: string): Promise<SkillCombo[]> {
+    const lang = normalizeLang(rawLang);
     return this.cache.wrap(
       `gms:combos:${heroId}:${lang}`,
       TTL.combos,
@@ -557,15 +562,19 @@ export class HeroMetaService {
         this.logger.warn(`meta ${heroId}: ${(e as Error).message}`);
         return fallback;
       });
-    const [counters, compat, combos, matrix] = await Promise.all([
+    // The rate records share their cache keys (and in-flight calls) with
+    // getCounters/getCompatibility, so they add no upstream request and no
+    // extra wait when Moonton is slow.
+    const [counters, compat, combos, matrix, vsRel, withRel] = await Promise.all([
       safe(this.getCounters(heroId, { lang }), null),
       safe(this.getCompatibility(heroId, { lang }), null),
       safe(this.combosData(heroId, lang), [] as SkillCombo[]),
       opts.matrix ? safe(this.getMatchups(heroId, { lang }), null) : Promise.resolve(null),
+      safe(this.relation(heroId, 0, 'all', 1), null),
+      safe(this.relation(heroId, 1, 'all', 1), null),
     ]);
-    // Rates come from the counters record (same window); stats cache as a fallback.
-    const rel =
-      (await safe(this.relation(heroId, 0, 'all', 1), null)) ?? (await safe(this.relation(heroId, 1, 'all', 1), null));
+    // Rates come from the counters record (same window); compatibility as a fallback.
+    const rel = vsRel ?? withRel;
 
     const overview: HeroMetaOverview = {
       available: rel?.winRate != null,

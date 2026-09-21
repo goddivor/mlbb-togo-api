@@ -30,6 +30,8 @@ export class MetaCacheService {
   private readonly logger = new Logger('MetaCache');
   private readonly memory = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<unknown>>();
+  // Concurrent cold callers share one DB read (the hero list is ~1 MB).
+  private readonly dbReads = new Map<string, Promise<CacheEntry | null>>();
 
   constructor(@Optional() private readonly prisma?: PrismaService) {}
 
@@ -48,7 +50,7 @@ export class MetaCacheService {
     if (entry && entry.expiresAt > now) return entry.value;
 
     if (!entry) {
-      const stored = await this.readDb<T>(key);
+      const stored = await this.readDbOnce<T>(key);
       if (stored) {
         this.remember(key, stored);
         entry = stored;
@@ -87,7 +89,9 @@ export class MetaCacheService {
           expiresAt: now + (valid ? ttlMs : INVALID_TTL_MS),
         };
         this.remember(key, entry);
-        if (valid) void this.writeDb(key, entry);
+        // Awaited so a serverless instance cannot be frozen before the copy is
+        // persisted (writeDb never throws).
+        if (valid) await this.writeDb(key, entry);
         return value;
       } catch (e) {
         const stale = this.memory.get(key) as CacheEntry<T> | undefined;
@@ -96,6 +100,7 @@ export class MetaCacheService {
           this.logger.warn(`refresh failed for ${key}, serving stale copy: ${(e as Error).message}`);
           return stale.value;
         }
+        this.logger.warn(`load failed for ${key} (no cached copy): ${(e as Error).message}`);
         throw e;
       } finally {
         this.inFlight.delete(key);
@@ -111,6 +116,14 @@ export class MetaCacheService {
       if (oldest !== undefined) this.memory.delete(oldest);
     }
     this.memory.set(key, entry);
+  }
+
+  private readDbOnce<T>(key: string): Promise<CacheEntry<T> | null> {
+    const pending = this.dbReads.get(key);
+    if (pending) return pending as Promise<CacheEntry<T> | null>;
+    const read = this.readDb<T>(key).finally(() => this.dbReads.delete(key));
+    this.dbReads.set(key, read);
+    return read;
   }
 
   private async readDb<T>(key: string): Promise<CacheEntry<T> | null> {
