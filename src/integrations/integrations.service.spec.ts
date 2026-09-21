@@ -150,6 +150,44 @@ describe('IntegrationsService', () => {
     expect(JSON.parse(decrypt(rows.get('integration.anthropic')!.value))).toEqual({ model: 'claude-y' });
   });
 
+  it('warns once per undecryptable value, not on every cache refresh', async () => {
+    const { service, rows, tick } = make();
+    const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+    rows.set('integration.anthropic', { key: 'integration.anthropic', value: 'deadbeef:00', updatedById: null, updatedAt: new Date() });
+    await service.getAnthropicConfig();
+    tick(INTEGRATIONS_CACHE_TTL_MS + 1);
+    await service.getAnthropicConfig();
+    await service.getStatus();
+    expect(warn).toHaveBeenCalledTimes(1);
+    rows.get('integration.anthropic')!.value = 'cafebabe:01';
+    tick(INTEGRATIONS_CACHE_TTL_MS + 1);
+    await service.getAnthropicConfig();
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports stored Cloudinary values apart from the effective (env) ones', async () => {
+    const { service } = make({
+      CLOUDINARY_CLOUD_NAME: 'env-cloud',
+      CLOUDINARY_API_KEY: '111',
+      CLOUDINARY_API_SECRET: 'env-secret',
+      CLOUDINARY_FOLDER: 'env-folder',
+    });
+    let status = await service.getStatus();
+    expect(status.cloudinary).toMatchObject({
+      cloudName: 'env-cloud',
+      folder: 'env-folder',
+      storedCloudName: null,
+      storedFolder: null,
+    });
+    status = await service.update('cloudinary', { folder: 'db-folder' }, ADMIN);
+    expect(status.cloudinary).toMatchObject({
+      cloudName: 'env-cloud',
+      folder: 'db-folder',
+      storedCloudName: null,
+      storedFolder: 'db-folder',
+    });
+  });
+
   it('tests only configured integrations', async () => {
     const { service } = make();
     expect(await service.test('anthropic')).toMatchObject({ ok: false, code: 'not_configured' });

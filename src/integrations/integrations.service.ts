@@ -52,6 +52,8 @@ export interface IntegrationsDeps {
 export class IntegrationsService {
   private readonly logger = new Logger('IntegrationsService');
   private readonly cache = new Map<IntegrationName, { entry: StoredEntry; expiresAt: number }>();
+  /** Last undecryptable stored value warned about, per integration (warn once). */
+  private readonly warnedUnreadable = new Map<IntegrationName, string>();
   private readonly deps: Required<Omit<IntegrationsDeps, 'env'>> & { env?: IntegrationsDeps['env'] };
 
   constructor(private readonly prisma: PrismaService) {
@@ -82,7 +84,11 @@ export class IntegrationsService {
         const parsed = JSON.parse(decrypt(row.value));
         entry.doc = parsed && typeof parsed === 'object' ? parsed : {};
       } catch {
-        this.logger.warn(`Stored ${name} settings cannot be decrypted (ENCRYPTION_KEY changed?): ignored.`);
+        // Logged once per stored value, not on every cache refresh.
+        if (this.warnedUnreadable.get(name) !== row.value) {
+          this.warnedUnreadable.set(name, row.value);
+          this.logger.warn(`Stored ${name} settings cannot be decrypted (ENCRYPTION_KEY changed?): ignored.`);
+        }
         entry.unreadable = true;
       }
     }
@@ -160,6 +166,10 @@ export class IntegrationsService {
         apiKeyHint: maskSecret(rc.partial.apiKey),
         apiSecretHint: maskSecret(rc.partial.apiSecret),
         folder: rc.partial.folder ?? null,
+        // Values actually stored in the database (the form pre-fills these,
+        // so saving never copies env fallbacks into the database).
+        storedCloudName: (c.doc as CloudinaryStored).cloudName ?? null,
+        storedFolder: (c.doc as CloudinaryStored).folder ?? null,
         ...meta(c),
       },
     };
