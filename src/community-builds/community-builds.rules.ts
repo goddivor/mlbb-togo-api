@@ -29,6 +29,8 @@ export const LIMITS = {
   /** Reports a player may file per rolling 24 hours. */
   reportsPerDay: 20,
   pageSizeMax: 50,
+  /** Deepest page served (keeps `skip` a finite, bounded integer). */
+  pageMax: 1000,
   pageSizeDefault: 20,
 } as const;
 
@@ -211,7 +213,8 @@ export function normalizeSort(value: unknown): BuildSort {
 }
 
 export function normalizePage(page: unknown, limit: unknown): { page: number; limit: number; skip: number } {
-  const p = Math.max(1, Math.floor(Number(page)) || 1);
+  const raw = Math.floor(Number(page));
+  const p = Number.isFinite(raw) && raw > 0 ? Math.min(raw, LIMITS.pageMax) : 1;
   const l = Math.min(
     LIMITS.pageSizeMax,
     Math.max(1, Math.floor(Number(limit)) || LIMITS.pageSizeDefault),

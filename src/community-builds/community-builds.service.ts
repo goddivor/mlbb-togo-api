@@ -227,15 +227,14 @@ export class CommunityBuildsService {
   async like(id: string, user: RequestUser) {
     const build = await this.getVisible(id, this.viewerOf(user));
     this.rule(() => assertLikeable(build, this.viewerOf(user)));
-    let added = false;
     try {
       await this.prisma.communityBuildLike.create({ data: { buildId: build.id, userId: user.id } });
-      added = true;
     } catch (err) {
       if ((err as { code?: string })?.code !== 'P2002') throw err;
+      return { liked: true, likesCount: build.likesCount };
     }
-    const likesCount = await this.syncLikes(build.id);
-    if (added) await this.emit('liked', { ...build, likesCount }, user.id);
+    const likesCount = await this.bumpLikes(build.id, 1);
+    await this.emit('liked', { ...build, likesCount }, user.id);
     return { liked: true, likesCount };
   }
 
@@ -243,8 +242,13 @@ export class CommunityBuildsService {
   async unlike(id: string, user: RequestUser) {
     const build = await this.getBuild(id);
     const { count } = await this.prisma.communityBuildLike.deleteMany({ where: { buildId: build.id, userId: user.id } });
-    const likesCount = count ? await this.syncLikes(build.id) : build.likesCount;
-    if (count) await this.emit('unliked', { ...build, likesCount }, user.id);
+    if (!count) {
+      // Nothing to remove: a build the viewer cannot see still looks missing.
+      if (!canView(build, this.viewerOf(user))) throw this.notFound();
+      return { liked: false, likesCount: build.likesCount };
+    }
+    const likesCount = await this.bumpLikes(build.id, -count);
+    await this.emit('unliked', { ...build, likesCount }, user.id);
     return { liked: false, likesCount };
   }
 
@@ -506,10 +510,17 @@ export class CommunityBuildsService {
     return { title, notes, lane, itemIds, emblemId, talentIds, battleSpellId };
   }
 
-  private async syncLikes(buildId: string): Promise<number> {
-    const likesCount = await this.prisma.communityBuildLike.count({ where: { buildId } });
-    await this.prisma.communityBuild.update({ where: { id: buildId }, data: { likesCount } });
-    return likesCount;
+  /**
+   * Atomic counter update ($inc): a recount followed by a write lets
+   * concurrent likes overwrite each other with stale totals.
+   */
+  private async bumpLikes(buildId: string, delta: number): Promise<number> {
+    const updated = await this.prisma.communityBuild.update({
+      where: { id: buildId },
+      data: { likesCount: delta >= 0 ? { increment: delta } : { decrement: -delta } },
+      select: { likesCount: true },
+    });
+    return updated.likesCount;
   }
 
   private async syncReports(buildId: string): Promise<number> {

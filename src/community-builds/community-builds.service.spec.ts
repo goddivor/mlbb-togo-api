@@ -63,7 +63,13 @@ function table(name: string, unique: string[][] = [], defaults: Record<string, u
     update: jest.fn(async ({ where, data }: any) => {
       const row = rows.find((r) => matches(r, where));
       if (!row) throw new Error(`${name} not found`);
-      Object.assign(row, data, { updatedAt: new Date() });
+      for (const [k, v] of Object.entries(data)) {
+        const op = v as any;
+        if (op && typeof op === 'object' && 'increment' in op) row[k] = (row[k] ?? 0) + op.increment;
+        else if (op && typeof op === 'object' && 'decrement' in op) row[k] = (row[k] ?? 0) - op.decrement;
+        else row[k] = v;
+      }
+      row.updatedAt = new Date();
       return row;
     }),
     updateMany: jest.fn(async ({ where, data }: any) => {
@@ -268,6 +274,7 @@ describe('CommunityBuildsService', () => {
       expect((await service.findOne(build.id, player)).likedByMe).toBe(true);
       expect(await service.unlike(build.id, player)).toEqual({ liked: false, likesCount: 1 });
       expect(await service.unlike(build.id, player)).toEqual({ liked: false, likesCount: 1 });
+      expect(db.communityBuild.rows.find((r: any) => r.id === build.id).likesCount).toBe(1);
       expect(emitted.filter((e) => e.type === 'liked')).toHaveLength(2);
       expect(emitted.filter((e) => e.type === 'unliked')).toHaveLength(1);
       expect(emitted.find((e) => e.type === 'liked')).toMatchObject({ authorId: author.id, actorId: player.id });
@@ -278,6 +285,7 @@ describe('CommunityBuildsService', () => {
       await expect(service.like(build.id, author)).rejects.toMatchObject({ response: { code: 'like_own' } });
       const draft = await service.create(author, draftInput());
       await expect(service.like(draft.id, player)).rejects.toThrow(NotFoundException);
+      await expect(service.unlike(draft.id, player)).rejects.toThrow(NotFoundException);
     });
 
     it('sorts by likes then by date', async () => {

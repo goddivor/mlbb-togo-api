@@ -136,6 +136,8 @@ describe('community builds rules: queries and quotas', () => {
     expect(normalizePage(undefined, undefined)).toEqual({ page: 1, limit: LIMITS.pageSizeDefault, skip: 0 });
     expect(normalizePage('3', '10')).toEqual({ page: 3, limit: 10, skip: 20 });
     expect(normalizePage('-2', '999').limit).toBe(LIMITS.pageSizeMax);
+    expect(normalizePage('Infinity', '10').page).toBe(1);
+    expect(normalizePage('1e20', '10').page).toBe(LIMITS.pageMax);
   });
 
   it('validates report reasons', () => {
