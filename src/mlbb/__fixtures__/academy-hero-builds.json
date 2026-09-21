@@ -1,0 +1,174 @@
+{
+  "_request": {
+    "url": "https://api.gms.moontontech.com/api/gms/source/2713644/2776688",
+    "body": {
+      "pageSize": 3,
+      "pageIndex": 1,
+      "filters": [
+        {
+          "field": "heroid",
+          "operator": "eq",
+          "value": 18
+        },
+        {
+          "field": "real_road",
+          "operator": "eq",
+          "value": 5
+        },
+        {
+          "field": "big_rank",
+          "operator": "eq",
+          "value": "101"
+        }
+      ],
+      "sorts": []
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "OK",
+    "data": {
+      "records": [
+        {
+          "_createdAt": 1789929300148,
+          "_id": "6ab0275590403cc6330727ee",
+          "_updatedAt": 1789929300148,
+          "data": {
+            "big_rank": "101",
+            "build": [
+              {
+                "battleskill": {
+                  "data": {
+                    "__data": {
+                      "skilldesc": "Blink a fixed distance in the target direction and gain 5 (+1*Hero Level) extra Physical & Magic Defense afterward for 1s.",
+                      "skilldescemblem": "Blink a fixed distance in the target direction and gain 5 (+1*Hero Level) extra Physical & Magic Defense afterward for 1s.",
+                      "skillicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_ab75dcf8db18518977621399c260ea44.png",
+                      "skillid": 20100,
+                      "skillname": "Flicker"
+                    },
+                    "battleskillid": 20100,
+                    "skillshortdesc": "Mobility"
+                  }
+                },
+                "build_pick_rate": 0.1644789694930638,
+                "build_win_rate": 0.5343013999010124,
+                "emblem": {
+                  "data": {
+                    "attriicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_ae89ce5b37dcd804686133c8d7044430.png",
+                    "emblemattr": {
+                      "emblemattr": "+14 Adaptive Penetration\n+10 Adaptive Attack\n+3% Movement Speed\n",
+                      "emblemattrid": "2000560",
+                      "emblemname": "Assassin"
+                    },
+                    "emblemid": 20005,
+                    "emblemname": "Assassin"
+                  }
+                },
+                "equipid": [
+                  3005,
+                  3003,
+                  3002
+                ],
+                "new_rune_skill": [
+                  1211,
+                  621,
+                  132
+                ],
+                "runeid": 20005,
+                "skillid": 20100
+              },
+              {
+                "battleskill": {
+                  "data": {
+                    "__data": {
+                      "skilldesc": "Blink a fixed distance in the target direction and gain 5 (+1*Hero Level) extra Physical & Magic Defense afterward for 1s.",
+                      "skilldescemblem": "Blink a fixed distance in the target direction and gain 5 (+1*Hero Level) extra Physical & Magic Defense afterward for 1s.",
+                      "skillicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_ab75dcf8db18518977621399c260ea44.png",
+                      "skillid": 20100,
+                      "skillname": "Flicker"
+                    },
+                    "battleskillid": 20100,
+                    "skillshortdesc": "Mobility"
+                  }
+                },
+                "build_pick_rate": 0.0472401882800219,
+                "build_win_rate": 0.5416215373023628,
+                "emblem": {
+                  "data": {
+                    "attriicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_ae89ce5b37dcd804686133c8d7044430.png",
+                    "emblemattr": {
+                      "emblemattr": "+14 Adaptive Penetration\n+10 Adaptive Attack\n+3% Movement Speed\n",
+                      "emblemattrid": "2000560",
+                      "emblemname": "Assassin"
+                    },
+                    "emblemid": 20005,
+                    "emblemname": "Assassin"
+                  }
+                },
+                "equipid": [
+                  3005,
+                  3002,
+                  3003
+                ],
+                "new_rune_skill": [
+                  1211,
+                  621,
+                  132
+                ],
+                "runeid": 20005,
+                "skillid": 20100
+              },
+              {
+                "battleskill": {
+                  "data": {
+                    "__data": {
+                      "skilldesc": "Blink a fixed distance in the target direction and gain 5 (+1*Hero Level) extra Physical & Magic Defense afterward for 1s.",
+                      "skilldescemblem": "Blink a fixed distance in the target direction and gain 5 (+1*Hero Level) extra Physical & Magic Defense afterward for 1s.",
+                      "skillicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_ab75dcf8db18518977621399c260ea44.png",
+                      "skillid": 20100,
+                      "skillname": "Flicker"
+                    },
+                    "battleskillid": 20100,
+                    "skillshortdesc": "Mobility"
+                  }
+                },
+                "build_pick_rate": 0.0539336976691352,
+                "build_win_rate": 0.5499445096808372,
+                "emblem": {
+                  "data": {
+                    "attriicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_99f3b68d12e90a6cf8f465ff3a71c850.png",
+                    "emblemattr": {
+                      "emblemattr": "+15% Extra Attack Speed\n+16 Adaptive Attack\n+5% Lifesteal\n",
+                      "emblemattrid": "2001260",
+                      "emblemname": "Marksman"
+                    },
+                    "emblemid": 20012,
+                    "emblemname": "Marksman"
+                  }
+                },
+                "equipid": [
+                  3005,
+                  3002,
+                  3003
+                ],
+                "new_rune_skill": [
+                  1211,
+                  621,
+                  132
+                ],
+                "runeid": 20012,
+                "skillid": 20100
+              }
+            ],
+            "hero_name": "蕾拉",
+            "heroid": 18,
+            "real_road": 5
+          },
+          "id": 5616450,
+          "sourceId": 2776688
+        }
+      ],
+      "total": 1
+    }
+  }
+}

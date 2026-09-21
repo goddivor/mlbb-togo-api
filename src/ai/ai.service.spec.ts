@@ -4,6 +4,7 @@ import { AI_RATE_LIMIT, AiService } from './ai.service';
 import { RateLimiter, TtlCache } from './ai-store';
 import { PrismaService } from '../prisma/prisma.service';
 import { MlbbService } from '../mlbb/mlbb.service';
+import { HeroMetaService } from '../mlbb/hero-meta.service';
 import { TOOLS } from './ai-llm';
 
 const heroRow = (name: string, role: string, lanes: string[] = []) => ({
@@ -65,19 +66,22 @@ function makeService(opts: { client?: any; now?: () => number } = {}) {
   };
   const mlbb = {
     getHeroes: jest.fn().mockRejectedValue(new Error('offline')),
+  };
+  const heroMeta = {
     getHeroMeta: jest.fn().mockRejectedValue(new Error('offline')),
-    getHeroRanking: jest.fn().mockRejectedValue(new Error('offline')),
+    getRanking: jest.fn().mockRejectedValue(new Error('offline')),
   };
   const config = { get: jest.fn((k: string) => (k === 'AI_MODEL' ? 'claude-opus-5' : undefined)) };
   const service = new AiService(
     config as unknown as ConfigService,
     prisma as unknown as PrismaService,
     mlbb as unknown as MlbbService,
+    heroMeta as unknown as HeroMetaService,
     opts.client ?? null,
     new RateLimiter(AI_RATE_LIMIT, 60_000, now),
     new TtlCache(60_000, now),
   );
-  return { service, prisma, mlbb, config };
+  return { service, prisma, mlbb, heroMeta, config };
 }
 
 describe('AiService (heuristic mode)', () => {

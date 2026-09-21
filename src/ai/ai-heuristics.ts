@@ -220,6 +220,18 @@ export function indexByName(catalog: CatalogHero[]): Map<string, CatalogHero> {
   return new Map(catalog.map((h) => [norm(h.name), h]));
 }
 
+/**
+ * Resolves a meta reference to a catalog hero: by Moonton hero id first (names
+ * may be missing or localised), then by name.
+ */
+export function refResolver(catalog: CatalogHero[]): (ref: { heroId?: number | null; name?: string | null }) => CatalogHero | undefined {
+  const byName = indexByName(catalog);
+  const byId = new Map<number, CatalogHero>();
+  for (const h of catalog) if (h.heroId != null) byId.set(Number(h.heroId), h);
+  return (ref) =>
+    (ref?.heroId != null ? byId.get(Number(ref.heroId)) : undefined) ?? (ref?.name ? byName.get(norm(ref.name)) : undefined);
+}
+
 // ---------------------------------------------------------------------------
 // Hero recommendations
 // ---------------------------------------------------------------------------
@@ -316,30 +328,54 @@ export interface CounterInput {
   limit?: number;
 }
 
+// Matrix scoring: a matchup counts as a counter from this edge (points), each
+// pair is capped, and unfavourable matchups weigh this much per point.
+export const MATRIX_COUNTER_MIN = 1;
+export const MATRIX_CAP = 8;
+export const MATRIX_PENALTY = 0.5;
+
 export function counterPicksHeuristic(input: CounterInput): CounterResponse {
   const { enemies, catalog, lang } = input;
   const limit = input.limit ?? 5;
   const enemyIds = new Set(enemies.map((e) => e.id));
-  const nameIndex = indexByName(catalog);
+  const resolve = refResolver(catalog);
+  const covered = new Set<string>(); // enemies fully scored by the matrix
   const acc = new Map<string, { hero: CatalogHero; score: number; against: Set<string>; wr: number }>();
 
-  const bump = (hero: CatalogHero, enemy: CatalogHero, delta: number, wr: number) => {
+  const bump = (hero: CatalogHero, enemy: CatalogHero, delta: number, wr: number, named = true) => {
     if (enemyIds.has(hero.id)) return;
     const cur = acc.get(hero.id) ?? { hero, score: 0, against: new Set<string>(), wr: 0 };
     cur.score += delta;
     cur.wr = Math.max(cur.wr, wr);
-    cur.against.add(enemy.name);
+    if (named) cur.against.add(enemy.name);
     acc.set(hero.id, cur);
   };
 
   let metaAvailable = false;
   for (const enemy of enemies) {
     const meta = input.metaByEnemyId.get(enemy.id);
-    // `counters.weak` = heroes this enemy is weak against, i.e. heroes that beat it.
+    const matrix = meta?.matrix?.counters ?? [];
+    if (matrix.length) {
+      // Full matrix: every hero is scored against this enemy. `increaseWinRate`
+      // is the enemy's win rate change when facing that hero, so a negative
+      // value means that hero counters the enemy (and a positive one is a
+      // penalty: the enemy beats it).
+      metaAvailable = true;
+      for (const ref of matrix) {
+        const hero = resolve(ref);
+        if (!hero) continue;
+        covered.add(enemy.id);
+        const gain = clamp(-(ref.increaseWinRate || 0), -MATRIX_CAP, MATRIX_CAP);
+        if (gain >= MATRIX_COUNTER_MIN) bump(hero, enemy, 2 + gain, Math.round(gain * 10) / 10);
+        else bump(hero, enemy, gain * MATRIX_PENALTY, 0, false);
+      }
+      continue;
+    }
+    // Top-5 fallback: `counters.weak` = heroes this enemy is weak against, i.e. heroes that beat it.
     const refs = meta?.counters?.weak ?? [];
     if (refs.length) metaAvailable = true;
     for (const ref of refs) {
-      const hero = ref.name ? nameIndex.get(norm(ref.name)) : undefined;
+      const hero = resolve(ref);
       if (!hero) continue;
       const gain = Math.abs(ref.increaseWinRate || 0) || Math.max(0, (ref.winRate || 50) - 50);
       bump(hero, enemy, 2 + gain, gain);
@@ -349,6 +385,7 @@ export function counterPicksHeuristic(input: CounterInput): CounterResponse {
   // Class fallback (also fills in when meta covers only some enemies), ranked
   // by the hero's current meta win rate when the ranking is available.
   for (const enemy of enemies) {
+    if (covered.has(enemy.id)) continue; // already fully scored by the matrix
     const strongClasses = CLASS_COUNTERS[heroClass(enemy)];
     for (const hero of catalog) {
       if (!strongClasses.includes(heroClass(hero))) continue;
@@ -405,14 +442,22 @@ export function buildHeuristic(input: BuildInput): BuildResponse {
   }));
 
   const situational: BuildItem[] = [];
-  const countersKnown = !!meta?.counters?.weak?.length;
+  // Heroes that beat this one: the most negative matrix entries when the full
+  // matrix is known, otherwise the top-5 `counters.weak` list.
+  const threats = meta?.matrix?.counters?.length
+    ? meta.matrix.counters
+        .filter((r) => (r.increaseWinRate ?? 0) <= -MATRIX_COUNTER_MIN)
+        .sort((a, b) => a.increaseWinRate - b.increaseWinRate)
+        .slice(0, 8)
+    : meta?.counters?.weak ?? [];
+  const countersKnown = threats.length > 0;
   const metaAvailable = countersKnown || !!meta?.available;
   if (countersKnown) {
-    const nameIndex = indexByName(catalog);
+    const resolve = refResolver(catalog);
     let magic = 0;
     let physical = 0;
-    for (const ref of meta!.counters.weak) {
-      const h = ref.name ? nameIndex.get(norm(ref.name)) : undefined;
+    for (const ref of threats) {
+      const h = resolve(ref);
       if (!h) continue;
       const c = heroClass(h);
       if (c === 'mage' || c === 'support') magic++;
