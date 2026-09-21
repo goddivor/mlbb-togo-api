@@ -160,7 +160,7 @@ export class TournamentsService {
         select: { userId: true },
       });
       for (const m of members)
-        await this.gamification.trackSafe(m.userId, 'tournament_registration', tournamentId);
+        await this.gamification.trackSafe(m.userId, 'tournament_registration', tournamentId, { meta: { teamId } });
     } catch {
       /* ignore */
     }
@@ -335,7 +335,32 @@ export class TournamentsService {
     if (res.error) throw new BadRequestException(RESULT_ERRORS[res.error] ?? res.error);
     const updated = findMatch(res.matches, matchId)!;
     const extra = isFinal(res.matches, updated) ? { status: 'completed' } : {};
-    return this.saveMatches(id, res.matches, extra);
+    const saved = await this.saveMatches(id, res.matches, extra);
+    void this.rewardBracketResult(id, updated);
+    return saved;
+  }
+
+  /**
+   * bracket_played / bracket_win XP for the members of both esport teams
+   * (keyed by match, so correcting a result never double counts).
+   */
+  private async rewardBracketResult(tournamentId: string, match: BracketMatch) {
+    if (!this.gamification || !match.winnerTeamId || !match.teamAId || !match.teamBId) return;
+    try {
+      const loser = match.winnerTeamId === match.teamAId ? match.teamBId : match.teamAId;
+      const members = await this.prisma.esportTeamMember.findMany({
+        where: { teamId: { in: [match.winnerTeamId, loser] } },
+        select: { teamId: true, userId: true },
+      });
+      await this.gamification.trackBracketResult({
+        tournamentId,
+        matchId: match.id,
+        winners: members.filter((m) => m.teamId === match.winnerTeamId).map((m) => m.userId),
+        losers: members.filter((m) => m.teamId === loser).map((m) => m.userId),
+      });
+    } catch {
+      /* XP never blocks the result */
+    }
   }
 
   /** Admin: schedule a match (date and/or stream URL). */

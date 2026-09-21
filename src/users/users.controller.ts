@@ -8,8 +8,10 @@ import {
   Patch,
   Query,
   UseGuards,
+  Optional,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
+import { GamificationService } from '../gamification/gamification.service';
 import { PlayerStatsService } from '../stats/player-stats.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { LeaderboardQueryDto } from './dto/leaderboard-query.dto';
@@ -27,6 +29,7 @@ export class UsersController {
     private readonly usersService: UsersService,
     private readonly playerStats: PlayerStatsService,
     private readonly access: AccessService,
+    @Optional() private readonly gamification?: GamificationService,
   ) {}
 
   @Get()
@@ -79,7 +82,10 @@ export class UsersController {
       throw new ForbiddenException('Modification non autorisée.');
     }
     await this.access.assertCanManageUser(user, id);
-    return this.usersService.update(id, dto);
+    const updated = await this.usersService.update(id, dto);
+    // Profile completion bonus and profile achievements (city, identity).
+    void this.gamification?.syncProfile(id);
+    return updated;
   }
 
   @UseGuards(JwtAuthGuard)

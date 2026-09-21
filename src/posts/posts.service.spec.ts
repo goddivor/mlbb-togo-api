@@ -117,7 +117,10 @@ describe('posts pure rules', () => {
 describe('PostsService', () => {
   let prisma: ReturnType<typeof makePrisma>;
   let service: PostsService;
-  const gamification = { trackSafe: jest.fn().mockResolvedValue(null) };
+  const gamification = {
+    trackSafe: jest.fn().mockResolvedValue(null),
+    trackLike: jest.fn().mockResolvedValue(null),
+  };
 
   beforeEach(() => {
     prisma = makePrisma();
@@ -139,7 +142,7 @@ describe('PostsService', () => {
       expect(prisma.post.create).not.toHaveBeenCalled();
     });
 
-    it('lets an admin post an announcement and tracks XP', async () => {
+    it('lets an admin post an announcement (too short for XP)', async () => {
       prisma.post.create.mockResolvedValue(
         postRow({ category: 'announcement', authorId: 'a1' }),
       );
@@ -164,8 +167,21 @@ describe('PostsService', () => {
           }),
         }),
       );
-      expect(gamification.trackSafe).toHaveBeenCalledWith('a1', 'forum_post', 'p1');
+      // Under 30 characters of text: published, but no XP (catalogue §2.2).
+      expect(gamification.trackSafe).not.toHaveBeenCalled();
       expect(out.images).toEqual([]);
+    });
+
+    it('tracks XP with a source snapshot for a post long enough', async () => {
+      const content = 'A long enough announcement for the whole community.';
+      prisma.post.create.mockResolvedValue(postRow({ category: 'announcement', authorId: 'a1', content }));
+      await service.create({ category: 'announcement', title: 'News', content } as any, admin);
+      expect(gamification.trackSafe).toHaveBeenCalledWith(
+        'a1',
+        'forum_post',
+        'p1',
+        expect.objectContaining({ meta: expect.objectContaining({ title: 'News' }) }),
+      );
     });
 
     it('refuses sponsoring from a regular user', async () => {

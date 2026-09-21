@@ -1,10 +1,6 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { GamificationService } from '../gamification/gamification.service';
+import { PICKBAN_MIN_SECONDS } from '../gamification/gamification.rules';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { HeroMetaService } from '../mlbb/hero-meta.service';
@@ -62,6 +58,7 @@ export class PickBanService {
     private prisma: PrismaService,
     private heroMeta: HeroMetaService,
     private suggestion: PickBanSuggestionService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   /* ---------- Hero catalogue ---------- */
@@ -189,7 +186,15 @@ export class PickBanService {
       if (err instanceof DraftOrderError) throw new BadRequestException(err.message);
       throw err;
     }
-    return this.persistState(id, next);
+    const saved = await this.persistState(id, next);
+    // pickban_completed: a full draft of at least 60 seconds, 2 per day (engine caps).
+    if (isComplete(next) && draft.status !== 'completed' && this.gamification) {
+      const seconds = (Date.now() - new Date(draft.createdAt).getTime()) / 1000;
+      if (seconds >= PICKBAN_MIN_SECONDS) {
+        void this.gamification.trackSafe(userId, 'pickban_completed', draft.id, { meta: { name: draft.name } });
+      }
+    }
+    return saved;
   }
 
   async undo(id: string, userId: string) {

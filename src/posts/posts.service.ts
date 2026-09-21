@@ -12,6 +12,7 @@ import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { ListPostsDto } from './dto/list-posts.dto';
 import { GamificationService } from '../gamification/gamification.service';
+import { MIN_COMMENT_LENGTH, MIN_POST_LENGTH, textLength } from '../gamification/gamification.rules';
 import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
@@ -272,7 +273,12 @@ export class PostsService {
       },
       include: { comments: true },
     });
-    void this.gamification?.trackSafe(authorId, 'forum_post', post.id);
+    // Guard-rails (catalogue §2.2): 30 characters minimum, 5 per day.
+    if (textLength(dto.content) >= MIN_POST_LENGTH) {
+      void this.gamification?.trackSafe(authorId, 'forum_post', post.id, {
+        meta: { title: String(dto.title ?? '').slice(0, 80), excerpt: String(dto.content ?? '').slice(0, 80) },
+      });
+    }
     const [serialized] = await this.withSponsors([post]);
     return serialized;
   }
@@ -356,6 +362,9 @@ export class PostsService {
         }
       }
       liked = true;
+      // 0-XP counter for the like achievements (self-likes, young accounts
+      // and reciprocity farming are filtered by the engine).
+      if (delta === 1) void this.gamification?.trackLike(id, post.authorId, user.id);
     }
     let likes = post.likes;
     if (delta !== 0) {
@@ -385,9 +394,16 @@ export class PostsService {
     if (!authorId || !authorName) {
       throw new BadRequestException('Auteur requis.');
     }
-    await this.prisma.comment.create({
+    const comment = await this.prisma.comment.create({
       data: { postId: id, authorId, authorName, content: dto.content },
     });
+    // 10 characters minimum, not on one's own post, 5 per day.
+    const target = await this.prisma.post.findUnique({ where: { id }, select: { authorId: true } });
+    if (target?.authorId !== authorId && textLength(dto.content) >= MIN_COMMENT_LENGTH) {
+      void this.gamification?.trackSafe(authorId, 'comment_posted', comment.id, {
+        meta: { postId: id, excerpt: String(dto.content ?? '').slice(0, 80) },
+      });
+    }
     const post = await this.prisma.post.findUnique({
       where: { id },
       include: { comments: true },
