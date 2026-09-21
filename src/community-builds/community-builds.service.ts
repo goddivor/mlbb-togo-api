@@ -385,7 +385,7 @@ export class CommunityBuildsService {
       return fn();
     } catch (err) {
       if (err instanceof BuildRuleError) {
-        if (err.code === 'not_owner') throw new ForbiddenException({ message: err.message, code: err.code });
+        if (err.code === 'not_owner') throw new ForbiddenException({ statusCode: 403, message: err.message, code: err.code });
         throw this.badRequest(err.message, err.code);
       }
       throw err;
