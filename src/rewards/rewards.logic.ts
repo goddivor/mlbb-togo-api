@@ -8,6 +8,8 @@ const DAY = 86_400_000;
 export interface FramePeriod {
   from: string;
   to: string | null;
+  /** Ended before its term (admin action, champion transfer, MVP override). */
+  endedEarly?: boolean;
 }
 
 /** Stored state of a `UserFrame` row, as the logic needs it. */
@@ -79,9 +81,12 @@ export function planGrant(
   const history = [...(existing.history ?? [])];
   const active = isFrameRowActive(existing, now);
   const grace = opts.continuityGraceMs ?? 0;
+  // The grace window only bridges a period that ran to its term: a frame an
+  // admin just ended must not be silently extended by a re-election.
+  const endedEarly = !active && !!history[history.length - 1]?.endedEarly;
   const continuous =
     active ||
-    (!!existing.expiresAt && existing.expiresAt.getTime() >= start.getTime() - grace);
+    (!endedEarly && !!existing.expiresAt && existing.expiresAt.getTime() >= start.getTime() - grace);
   const times = (existing.timesGranted ?? 1) + 1;
 
   if (active && !existing.expiresAt) {
@@ -117,12 +122,17 @@ export function planGrant(
   return { action: 'update', kind: 'reactivate', expiresAt, history, timesGranted: times };
 }
 
-/** Closes the current period of a row ended now (expiry or admin action). */
-export function closeHistory(history: FramePeriod[], at: Date): FramePeriod[] {
+/**
+ * Closes the current period of a row ended at `at` (natural expiry, or
+ * `early` for an admin action / transfer before the term).
+ */
+export function closeHistory(history: FramePeriod[], at: Date, early = false): FramePeriod[] {
   const out = [...(history ?? [])];
   if (!out.length) return out;
   const last = out[out.length - 1];
-  if (!last.to || new Date(last.to).getTime() > at.getTime()) out[out.length - 1] = { ...last, to: at.toISOString() };
+  if (!last.to || new Date(last.to).getTime() > at.getTime()) {
+    out[out.length - 1] = { ...last, to: at.toISOString(), ...(early ? { endedEarly: true } : {}) };
+  }
   return out;
 }
 
@@ -130,7 +140,11 @@ export function parseHistory(raw: unknown): FramePeriod[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((p) => p && typeof p === 'object' && typeof (p as any).from === 'string')
-    .map((p: any) => ({ from: p.from, to: typeof p.to === 'string' ? p.to : null }));
+    .map((p: any) => ({
+      from: p.from,
+      to: typeof p.to === 'string' ? p.to : null,
+      ...(p.endedEarly === true ? { endedEarly: true } : {}),
+    }));
 }
 
 // ----- Equipped frame -----

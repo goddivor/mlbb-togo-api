@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunityService } from '../community/community.service';
 import {
@@ -30,6 +31,14 @@ import {
 } from './rewards.logic';
 
 const DAY = 86_400_000;
+
+/**
+ * Rows not marked expired. On MongoDB `expiredAt: null` does not match a
+ * document where the field is unset (legacy rows), hence the `isSet` branch.
+ */
+export const NOT_EXPIRED: Prisma.UserFrameWhereInput = {
+  OR: [{ expiredAt: null }, { expiredAt: { isSet: false } }],
+};
 
 /** 28/09/2026 (UTC = Lomé). */
 function frDate(d: Date) {
@@ -140,7 +149,7 @@ export class RewardsService {
       }
 
       const action = plan.action === 'create' ? 'create' : plan.kind;
-      await this.syncEquippedExpiry(userId, frameKey(frameId, variant), plan.expiresAt);
+      await this.syncEquippedExpiry(userId, frameKey(frameId, variant), plan.expiresAt, !isTemporaryFrame(frame));
       if (input.notify !== false && action !== 'extend') {
         await this.notify(userId, {
           type: 'frame_unlock',
@@ -241,7 +250,7 @@ export class RewardsService {
       data: {
         expiresAt: now,
         expiredAt: now,
-        history: closeHistory(parseHistory(row.history), now) as any,
+        history: closeHistory(parseHistory(row.history), now, true) as any,
       },
     });
     await this.unequipExpired(userId, frameKey(frameId, variant));
@@ -256,7 +265,7 @@ export class RewardsService {
     const rows = await this.prisma.userFrame.findMany({
       // `not: null` is required: Prisma compares with `$expr` on MongoDB, where
       // null sorts before any date (permanent rows would match `lte`).
-      where: { expiredAt: null, expiresAt: { not: null, lte: now } },
+      where: { ...NOT_EXPIRED, expiresAt: { not: null, lte: now } },
     });
     for (const row of rows) {
       await this.prisma.userFrame.update({
@@ -279,7 +288,7 @@ export class RewardsService {
   /** "Expires tomorrow" reminder for rows ending within the next 24 h. */
   async notifyExpiringSoon(now = new Date()) {
     const rows = await this.prisma.userFrame.findMany({
-      where: { expiredAt: null, expiresAt: { gt: now, lte: new Date(now.getTime() + DAY) } },
+      where: { ...NOT_EXPIRED, expiresAt: { gt: now, lte: new Date(now.getTime() + DAY) } },
     });
     for (const row of rows) {
       const frame = getFrame(row.frameId);
@@ -317,11 +326,14 @@ export class RewardsService {
     });
   }
 
-  /** Keeps `User.equippedFrameExpiresAt` in sync after an extension. */
-  private async syncEquippedExpiry(userId: string, key: string, expiresAt: Date | null) {
+  /**
+   * Keeps `User.equippedFrameExpiresAt` in sync after an extension. A worn
+   * frame that becomes permanent is also recorded as the fallback frame.
+   */
+  private async syncEquippedExpiry(userId: string, key: string, expiresAt: Date | null, permanentKind: boolean) {
     await this.prisma.user.updateMany({
       where: { id: userId, equippedFrame: key },
-      data: { equippedFrameExpiresAt: expiresAt },
+      data: { equippedFrameExpiresAt: expiresAt, ...(expiresAt === null && permanentKind ? { fallbackFrame: key } : {}) },
     });
   }
 

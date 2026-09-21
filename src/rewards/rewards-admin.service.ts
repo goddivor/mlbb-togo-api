@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { MAX_LEVEL, XpType, xpForLevel } from '../gamification/gamification.rules';
+import { parseJson } from '../common/utils/json.util';
 import { serializeUserCard } from '../users/users.service';
 import { PUBLIC_USER_WHERE } from '../users/public-user.filter';
 import { FRAMES, TITLES, badgeTierFor, framesForAchievement, getFrame, isTemporaryFrame } from './frames.catalog';
@@ -14,7 +15,9 @@ import {
   previousWeek,
   weekWindow,
 } from './rewards.logic';
-import { RewardsService } from './rewards.service';
+import { NOT_EXPIRED, RewardsService } from './rewards.service';
+import { RewardEventsService } from '../gamification/reward-events.service';
+import { ACHIEVEMENTS } from '../gamification/achievements.catalog';
 import {
   EndFrameDto,
   GrantFrameDto,
@@ -28,6 +31,10 @@ const DAY = 86_400_000;
 const OBJECT_ID = /^[a-f\d]{24}$/i;
 /** A weekly/monthly holder re-elected right after his period keeps one continuous period. */
 const ELECTION_GRACE_MS = 3 * DAY;
+/** Users re-evaluated per page of "recalculate all" (serverless timeout). */
+export const RECALCULATE_PAGE = 25;
+/** Events whose participants are rewarded by the daily job (days back). */
+const EVENT_LOOKBACK_DAYS = 30;
 
 export interface Actor {
   id: string;
@@ -55,6 +62,7 @@ export class RewardsAdminService {
     private prisma: PrismaService,
     private rewards: RewardsService,
     private gamification: GamificationService,
+    private events: RewardEventsService,
   ) {}
 
   // ----- Overview -----
@@ -107,8 +115,7 @@ export class RewardsAdminService {
     const tempIds = FRAMES.filter((f) => f.expiry).map((f) => f.id);
     const rows = await this.prisma.userFrame.findMany({
       where: {
-        expiredAt: null,
-        OR: [{ expiresAt: { gt: now } }, { frameId: { in: tempIds }, expiresAt: null }],
+        AND: [NOT_EXPIRED, { OR: [{ expiresAt: { gt: now } }, { frameId: { in: tempIds }, expiresAt: null }] }],
       },
       orderBy: { expiresAt: 'asc' },
     });
@@ -169,6 +176,7 @@ export class RewardsAdminService {
     const reason = dto.reason.trim();
     if (reason.length < 3) throw new BadRequestException('Motif obligatoire.');
     const res = await this.gamification.adjustXp(dto.userId, dto.amount, { reason, adminId: actor.id });
+    if (res.applied === 0) throw new BadRequestException('Aucun XP à retirer pour ce membre.');
     await this.rewards.revalidateTitle(dto.userId);
     await this.log('rewards.xp.correction', actor, dto.userId, {
       amount: res.applied,
@@ -188,8 +196,12 @@ export class RewardsAdminService {
     const target = tournament ?? draft;
     if (!target) throw new NotFoundException('Tournoi introuvable.');
     const userIds = [...new Set(dto.userIds)];
-    const users = await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true } });
-    if (users.length !== userIds.length) throw new BadRequestException('Membre introuvable.');
+    // Staff stay eligible, system and banned accounts do not (like the elections).
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: userIds }, ...PUBLIC_USER_WHERE },
+      select: { id: true },
+    });
+    if (users.length !== userIds.length) throw new BadRequestException('Membre introuvable ou non éligible.');
 
     const type = RESULT_TYPES[dto.kind];
     const achievement = RESULT_ACHIEVEMENTS[dto.kind];
@@ -287,6 +299,7 @@ export class RewardsAdminService {
       continuityGraceMs: ELECTION_GRACE_MS,
       sourceRef: `mvp_week:${week.key}`,
     });
+    await this.gamification.unlockAchievement(winner, 'weekly_mvp');
     return { period: week.key, userId: winner, alreadyDone: false };
   }
 
@@ -300,7 +313,8 @@ export class RewardsAdminService {
 
     const sums = await this.prisma.xpEvent.groupBy({
       by: ['userId'],
-      where: { createdAt: { gte: month.start, lt: month.end } },
+      // Admin corrections are not XP gained by playing.
+      where: { createdAt: { gte: month.start, lt: month.end }, type: { not: 'admin_correction' } },
       _sum: { amount: true },
       _max: { createdAt: true },
     });
@@ -320,6 +334,7 @@ export class RewardsAdminService {
       continuityGraceMs: ELECTION_GRACE_MS,
       sourceRef: `number_one_month:${month.key}`,
     });
+    await this.gamification.unlockAchievement(winner, 'monthly_number_one');
     return { period: month.key, userId: winner, alreadyDone: false };
   }
 
@@ -352,6 +367,7 @@ export class RewardsAdminService {
       sourceRef: `mvp_week:${week.key}`,
       grantedById: actor.id,
     });
+    await this.gamification.unlockAchievement(dto.userId, 'weekly_mvp');
     await this.log('rewards.mvp_week.set', actor, dto.userId, { week: week.key, previous: existing?.userId ?? null });
     return { period: week.key, userId: dto.userId, previousUserId: existing?.userId ?? null, changed: true, frame: grant };
   }
@@ -369,10 +385,29 @@ export class RewardsAdminService {
 
   // ----- Recalculation (add-only) -----
 
-  async recalculate(actor: Actor, userId?: string) {
-    const ids = userId
-      ? [(await this.assertUser(userId)).id]
-      : (await this.prisma.userProgress.findMany({ select: { userId: true } })).map((p) => p.userId);
+  /**
+   * Add-only recalculation. One user, or every user with progress page by
+   * page (`cursor` = last processed progress id, `nextCursor` null at the
+   * end) so a request never runs into the serverless timeout.
+   */
+  async recalculate(actor: Actor, opts: { userId?: string; cursor?: string; limit?: number } = {}) {
+    let ids: string[];
+    let nextCursor: string | null = null;
+    let total: number | undefined;
+    if (opts.userId) {
+      ids = [(await this.assertUser(opts.userId)).id];
+    } else {
+      const take = Math.min(100, Math.max(1, Math.floor(opts.limit ?? RECALCULATE_PAGE)));
+      const rows = await this.prisma.userProgress.findMany({
+        where: opts.cursor ? { id: { gt: opts.cursor } } : {},
+        orderBy: { id: 'asc' },
+        select: { id: true, userId: true },
+        take,
+      });
+      ids = rows.map((r) => r.userId);
+      nextCursor = rows.length === take ? rows[rows.length - 1].id : null;
+      total = await this.prisma.userProgress.count();
+    }
     let unlocked = 0;
     let frames = 0;
     for (const id of ids) {
@@ -388,8 +423,83 @@ export class RewardsAdminService {
         this.logger.warn(`recalculate ${id} failed: ${(err as Error)?.message}`);
       }
     }
-    await this.log('rewards.recalculate', actor, userId ?? 'all', { users: ids.length, unlocked, frames });
-    return { users: ids.length, achievementsUnlocked: unlocked, framesGranted: frames };
+    if (opts.userId || !opts.cursor) {
+      await this.log('rewards.recalculate', actor, opts.userId ?? 'all', { users: ids.length, unlocked, frames });
+    }
+    return {
+      users: ids.length,
+      achievementsUnlocked: unlocked,
+      framesGranted: frames,
+      nextCursor,
+      ...(total !== undefined ? { total } : {}),
+    };
+  }
+
+  // ----- Achievements -----
+
+  /** Catalogue with unlock counts (admin "Succès" tab). */
+  async achievements() {
+    const stats = await this.gamification.achievementStats(true);
+    return {
+      members: stats.members,
+      achievements: ACHIEVEMENTS.map((a) => {
+        const u = stats.unlocks.get(a.id);
+        return {
+          id: a.id,
+          family: a.family,
+          rarity: a.rarity,
+          icon: a.icon,
+          reward: a.reward,
+          secret: !!a.secret,
+          manual: !!a.manual,
+          frameId: framesForAchievement(a.id)[0]?.id ?? null,
+          triggers: a.triggers,
+          unlocks: u?.count ?? 0,
+          percent: GamificationService.percent(u?.count ?? 0, stats.members),
+          firstUnlockedAt: u?.first ?? null,
+          lastUnlockedAt: u?.last ?? null,
+        };
+      }),
+    };
+  }
+
+  // ----- Event participation -----
+
+  /**
+   * `event_joined` for the participants of site events whose date has come
+   * (catalogue §2.1: validated at the event date). Participants may be user
+   * ids, usernames or esport team ids (members). Idempotent per event.
+   */
+  async rewardEventParticipants(now = new Date()) {
+    const since = now.getTime() - EVENT_LOOKBACK_DAYS * DAY;
+    const events = await this.prisma.event.findMany({ where: { createdAt: { lte: now } } });
+    let granted = 0;
+    for (const e of events) {
+      const at = e.date ? Date.parse(e.date) : NaN;
+      if (Number.isNaN(at) || at > now.getTime() || at < since) continue;
+      const raw = parseJson<any[]>(e.participants, []);
+      const refs = (Array.isArray(raw) ? raw : [])
+        .map((p) => (typeof p === 'string' ? p : (p?.userId ?? p?.id ?? p?.username ?? null)))
+        .filter((p): p is string => typeof p === 'string' && !!p.trim());
+      if (!refs.length) continue;
+      const ids = refs.filter((r) => OBJECT_ID.test(r));
+      const names = refs.filter((r) => !OBJECT_ID.test(r));
+      const [users, members] = await Promise.all([
+        this.prisma.user.findMany({
+          where: { OR: [{ id: { in: ids } }, { username: { in: names } }], ...PUBLIC_USER_WHERE },
+          select: { id: true },
+        }),
+        ids.length
+          ? this.prisma.esportTeamMember.findMany({ where: { teamId: { in: ids } }, select: { userId: true } })
+          : [],
+      ]);
+      const userIds = new Set([...users.map((u) => u.id), ...members.map((m) => m.userId)]);
+      for (const userId of userIds) {
+        const res = await this.gamification.trackSafe(userId, 'event_joined', e.id, { now, meta: { title: e.title } });
+        if (res?.granted) granted++;
+      }
+    }
+    return granted;
   }
 
   // ----- Daily job -----
@@ -397,7 +507,8 @@ export class RewardsAdminService {
   /**
    * Daily cron (idempotent): elect last week's MVP and last month's number
    * one if not done yet, expire due frames, remind frames expiring tomorrow,
-   * close ended reward events.
+   * activate / final pass / close reward events, reward the participants of
+   * site events whose date has come.
    */
   async runDaily(now = new Date()) {
     const step = async <T>(name: string, fn: () => Promise<T>) => {
@@ -412,17 +523,9 @@ export class RewardsAdminService {
     const numberOne = await step('number_one', () => this.electMonthlyNumberOne(now));
     const expired = await step('expire', () => this.rewards.expireDue(now));
     const expiringSoon = await step('expiring', () => this.rewards.notifyExpiringSoon(now));
-    const eventsClosed = await step('events', () => this.closeEndedEvents(now));
-    return { ranAt: now, mvpWeek, numberOne, expired, expiringSoon, eventsClosed };
-  }
-
-  /** Closes scheduled/active events whose window ended (rewards pass: lot A2). */
-  async closeEndedEvents(now = new Date()) {
-    const { count } = await this.prisma.rewardEvent.updateMany({
-      where: { status: { in: ['scheduled', 'active'] }, endsAt: { lte: now } },
-      data: { status: 'closed' },
-    });
-    return count;
+    const events = await step('events', () => this.events.runDaily(now));
+    const eventParticipants = await step('event_participants', () => this.rewardEventParticipants(now));
+    return { ranAt: now, mvpWeek, numberOne, expired, expiringSoon, events, eventParticipants };
   }
 
   // ----- Helpers -----
@@ -430,7 +533,7 @@ export class RewardsAdminService {
   private async activeHolders(now: Date) {
     const rows = await this.prisma.userFrame.groupBy({
       by: ['frameId'],
-      where: { expiredAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+      where: { AND: [NOT_EXPIRED, { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }] },
       _count: { _all: true },
     });
     return new Map(rows.map((r) => [r.frameId, r._count._all]));
