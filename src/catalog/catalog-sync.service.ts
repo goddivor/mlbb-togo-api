@@ -9,6 +9,7 @@ import {
   ExistingCatalogRow,
   mapGmsBattleSpells,
   mapGmsEmblems,
+  mapGmsTalents,
   mapGmsItems,
   planCatalogSync,
 } from './catalog-sync.mappers';
@@ -19,12 +20,15 @@ export const CATALOG_SOURCES = {
   itemDetails: '2713995',
   battleSpells: '2718122',
   emblems: '2740642',
+  talents: SRC.talents,
 } as const;
 
 export interface CatalogSyncResult {
   items: CatalogCounts;
   emblems: CatalogCounts;
   battleSpells: CatalogCounts;
+  /** Emblem talents; null when Moonton could not serve them (not fatal). */
+  talents: CatalogCounts | null;
   syncedAt: string;
 }
 
@@ -42,9 +46,9 @@ type Delegate = {
  * descriptions from the official Moonton GMS API. Never deletes a row; see
  * planCatalogSync for the matching and overwrite rules.
  *
- * Emblem talents (source 2718121) are not imported: a hero build references a
- * single emblem set (`HeroBuild.emblemId`) and has no talent slot, so talent
- * rows would only pollute the emblem picker.
+ * Emblem talents (source 2718121) are imported in their own collection
+ * (`EmblemTalent`, with their tier) for the community builds (#129); they are
+ * kept out of the Emblem collection so the emblem set picker stays clean.
  */
 @Injectable()
 export class CatalogSyncService {
@@ -72,12 +76,14 @@ export class CatalogSyncService {
   }
 
   private async run(lang: string): Promise<CatalogSyncResult> {
-    const [details, list, spells, emblems] = await Promise.all([
+    const [details, list, spells, emblems, talents] = await Promise.all([
       this.fetch(CATALOG_SOURCES.itemDetails, lang),
       // The light list only backfills icons: its failure is not fatal.
       this.fetch(CATALOG_SOURCES.items, lang).catch(() => [] as any[]),
       this.fetch(CATALOG_SOURCES.battleSpells, lang),
       this.fetch(CATALOG_SOURCES.emblems, lang),
+      // Talents only feed the community builds: their failure is not fatal.
+      this.fetch(CATALOG_SOURCES.talents, lang).catch(() => null),
     ]);
     const now = new Date();
     const db: PrismaClient = this.prisma;
@@ -85,12 +91,16 @@ export class CatalogSyncService {
       items: await this.apply(db.item as unknown as Delegate, mapGmsItems(details, list), now, true),
       emblems: await this.apply(db.emblem as unknown as Delegate, mapGmsEmblems(emblems), now, true),
       battleSpells: await this.apply(db.battleSpell as unknown as Delegate, mapGmsBattleSpells(spells), now, false),
+      talents: talents
+        ? await this.apply(db.emblemTalent as unknown as Delegate, mapGmsTalents(talents), now, false)
+        : null,
       syncedAt: now.toISOString(),
     };
     this.logger.log(
       `catalog sync: items +${result.items.created}/~${result.items.updated}, ` +
         `emblems +${result.emblems.created}/~${result.emblems.updated}, ` +
-        `spells +${result.battleSpells.created}/~${result.battleSpells.updated}`,
+        `spells +${result.battleSpells.created}/~${result.battleSpells.updated}, ` +
+        `talents ${result.talents ? `+${result.talents.created}/~${result.talents.updated}` : 'unavailable'}`,
     );
     return result;
   }

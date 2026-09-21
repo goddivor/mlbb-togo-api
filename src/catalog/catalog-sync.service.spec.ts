@@ -18,10 +18,18 @@ const records: Record<string, any[]> = {
     { data: { battleskillid: 20100, __data: { skillname: 'Flicker', skillicon: 'https://i/flicker.png', skilldesc: 'Blink.' } } },
   ],
   [CATALOG_SOURCES.emblems]: [{ data: { emblem_id: 20003, emblem_title: 'Tank', emblem_icon: 'https://i/tank.svg' } }],
+  [CATALOG_SOURCES.talents]: [
+    { data: { giftid: 1221, gifttiers: 2, emblemskill: { skillname: 'Weapons Master', skillicon: 'https://i/wm.png', skilldesc: 'More attack.' } } },
+  ],
 };
 
 describe('CatalogSyncService', () => {
-  let prisma: { item: ReturnType<typeof delegate>; emblem: ReturnType<typeof delegate>; battleSpell: ReturnType<typeof delegate> };
+  let prisma: {
+    item: ReturnType<typeof delegate>;
+    emblem: ReturnType<typeof delegate>;
+    battleSpell: ReturnType<typeof delegate>;
+    emblemTalent: ReturnType<typeof delegate>;
+  };
   let gms: { callSource: jest.Mock };
   let service: CatalogSyncService;
 
@@ -30,6 +38,7 @@ describe('CatalogSyncService', () => {
       item: delegate([{ id: 'i1', name: 'Blade of Despair', icon: null, description: null, type: 'attack' }]),
       emblem: delegate([{ id: 'e1', name: 'Tank Emblem', icon: null, description: null, type: 'tank' }]),
       battleSpell: delegate([]),
+      emblemTalent: delegate([]),
     };
     gms = { callSource: jest.fn(async (_app: string, source: string) => ({ records: records[source] ?? [], total: 0 })) };
     service = new CatalogSyncService(prisma as unknown as PrismaService, gms as unknown as GmsClient);
@@ -46,6 +55,25 @@ describe('CatalogSyncService', () => {
     });
     expect(prisma.item.create).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Dagger', gameId: 1001 }) });
     expect(gms.callSource).toHaveBeenCalledWith('2713644', CATALOG_SOURCES.itemDetails, expect.any(Object), 'en', expect.any(Object));
+  });
+
+  it('imports the emblem talents with their tier', async () => {
+    const res = await service.sync();
+    expect(res.talents).toMatchObject({ total: 1, created: 1 });
+    expect(prisma.emblemTalent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Weapons Master', gameId: 1221, tier: 2 }),
+    });
+  });
+
+  it('keeps syncing the catalog when the talents source fails', async () => {
+    const base = gms.callSource.getMockImplementation()!;
+    gms.callSource.mockImplementation(async (app: string, source: string, ...rest: any[]) => {
+      if (source === CATALOG_SOURCES.talents) throw new GmsError('down');
+      return base(app, source, ...rest);
+    });
+    const res = await service.sync();
+    expect(res.talents).toBeNull();
+    expect(res.items.total).toBe(2);
   });
 
   it('counts a failed write without aborting the sync', async () => {

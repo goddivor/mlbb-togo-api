@@ -6,6 +6,7 @@ import {
   mapGmsBattleSpells,
   mapGmsEmblems,
   mapGmsItems,
+  mapGmsTalents,
   planCatalogSync,
   SYNC_SORT_BASE,
   untouchedSinceSync,
@@ -277,7 +278,7 @@ describe('buildItemRecipes / item extra fields', () => {
     const bod = mapGmsItems(recipe).find((i) => i.gameId === 3008)!;
     expect(bod.extra!.stats).toBe('+160 Extra Physical Attack\n+5% Movement Speed');
     expect(bod.extra!.passive).toMatch(/^Despair: /);
-    expect(JSON.parse(bod.extra!.gameMeta!)).toMatchObject({ tier: 3, buildsFrom: [1001, 2001] });
+    expect(JSON.parse(String(bod.extra!.gameMeta))).toMatchObject({ tier: 3, buildsFrom: [1001, 2001] });
   });
 
   it('refreshes extra fields even on an edited row, and never touches enabled', () => {
@@ -315,5 +316,34 @@ describe('buildItemRecipes / item extra fields', () => {
     const data = (w as { data: Record<string, unknown> }).data;
     expect(data).not.toHaveProperty('enabled');
     expect(data.stats).toBe('+160 Extra Physical Attack\n+5% Movement Speed');
+  });
+});
+
+describe('mapGmsTalents', () => {
+  const talent = (giftid: number, gifttiers: number, skillname: string) => ({
+    data: {
+      giftid,
+      gifttiers,
+      emblemskill: {
+        skillname,
+        skillicon: `https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_${giftid}.png`,
+        skilldesc: 'Physical Attack and Magic Power are increased by <font color="ffd700">5%</font>.',
+      },
+    },
+  });
+
+  it('maps talents with their tier and clean description', () => {
+    const out = mapGmsTalents([talent(1221, 2, 'Weapons Master'), talent(111, 1, 'Thrill')]);
+    expect(out.map((t) => [t.gameId, t.name, t.extra?.tier])).toEqual([
+      [111, 'Thrill', 1],
+      [1221, 'Weapons Master', 2],
+    ]);
+    expect(out[0].description).toBe('Physical Attack and Magic Power are increased by 5%.');
+  });
+
+  it('drops unusable names and keeps an unknown tier as null', () => {
+    const out = mapGmsTalents([talent(5, 0, 'Odd'), talent(6, 1, '(Removed) Old'), { data: {} }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].extra?.tier).toBeNull();
   });
 });
