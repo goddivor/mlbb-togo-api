@@ -480,6 +480,23 @@ async function main() {
     `   - Catalogue jeu  : ${GAME_ITEMS.length} objets, ${GAME_EMBLEMS.length} emblèmes, ${GAME_BATTLE_SPELLS.length} sorts`,
   );
 
+  // Optional: enrich the catalog (icons, descriptions, missing entries) from
+  // the Moonton GMS API. Off by default so the seed keeps working offline.
+  if (process.env.SYNC_CATALOG === '1' || process.env.SYNC_CATALOG === 'true') {
+    try {
+      const { CatalogSyncService } = await import('../src/catalog/catalog-sync.service');
+      const { GmsClient } = await import('../src/mlbb/gms.client');
+      const res = await new CatalogSyncService(prisma as any, new GmsClient()).sync();
+      const fmt = (c: { created: number; updated: number; unchanged: number; failed: number }) =>
+        `+${c.created} ~${c.updated} =${c.unchanged}${c.failed ? ` !${c.failed}` : ''}`;
+      console.log(
+        `   - Moonton sync   : items ${fmt(res.items)}, emblems ${fmt(res.emblems)}, spells ${fmt(res.battleSpells)}`,
+      );
+    } catch (e) {
+      console.warn(`   - Moonton sync   : skipped (${(e as Error).message})`);
+    }
+  }
+
   const eternum = await prisma.esport.create({
     data: {
       name: 'ETERNUM ESPORTS',

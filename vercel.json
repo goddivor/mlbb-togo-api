@@ -13,5 +13,11 @@
       "memory": 1769,
       "includeFiles": "{node_modules/.prisma/client/*,node_modules/pdfkit/js/**}"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/rewards/cron/daily",
+      "schedule": "5 0 * * *"
+    }
+  ]
 }

@@ -548,6 +548,11 @@ export class HeroMetaService {
     return { heroId, rank, lane, lanes, builds };
   }
 
+  /** Emblem talents catalog (cached, shared with the builds panel). */
+  getTalentCatalog(lang = 'en'): Promise<CatalogEntry[]> {
+    return this.catalog('talents', lang);
+  }
+
   async getCombos(heroId: number, lang = 'en') {
     return { heroId, combos: await this.combosData(heroId, lang) };
   }

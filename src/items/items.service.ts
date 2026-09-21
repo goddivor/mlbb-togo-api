@@ -13,10 +13,16 @@ const uniqueName = (error: any): never => {
 export class ItemsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll() {
-    return this.prisma.item.findMany({
+  /**
+   * Catalog list. Disabled entries (`enabled: false`) are hidden from players
+   * and pickers; admins list them with `includeDisabled`. A missing flag
+   * (rows created before it existed) means enabled.
+   */
+  async findAll(includeDisabled = false) {
+    const rows = await this.prisma.item.findMany({
       orderBy: [{ sort: 'asc' }, { name: 'asc' }],
     });
+    return includeDisabled ? rows : rows.filter((r) => r.enabled !== false);
   }
 
   async findOne(id: string) {
@@ -38,6 +44,7 @@ export class ItemsService {
         type: data.type || undefined,
         gold: data.gold ?? undefined,
         sort: data.sort ?? 0,
+        enabled: data.enabled ?? true,
       },
     }).catch(uniqueName);
   }
@@ -53,6 +60,7 @@ export class ItemsService {
         type: data.type !== undefined ? data.type : undefined,
         gold: data.gold !== undefined ? data.gold : undefined,
         sort: data.sort !== undefined ? data.sort : undefined,
+        enabled: data.enabled !== undefined ? data.enabled : undefined,
       },
     }).catch(uniqueName);
   }

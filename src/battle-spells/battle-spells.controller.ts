@@ -14,6 +14,14 @@ export class BattleSpellsController {
     return this.battleSpellsService.findAll();
   }
 
+  // Admin list: includes disabled entries (with their `enabled` flag).
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
+  @Get('all')
+  async findAllForAdmin() {
+    return this.battleSpellsService.findAll(true);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.battleSpellsService.findOne(id);

@@ -7,6 +7,7 @@ import {
   LeaderboardQueryDto,
 } from './dto/leaderboard-query.dto';
 import { PUBLIC_USER_WHERE, isHiddenAccount } from './public-user.filter';
+import { resolveEquippedFrame } from '../rewards/rewards.logic';
 
 export function decodeRank(level?: number | null): string | null {
   if (level == null) return null;
@@ -56,6 +57,16 @@ export function compareByMetric(metric: LeaderboardMetric) {
     String(a.username || '').localeCompare(String(b.username || ''));
 }
 
+/**
+ * Avatar the user uploaded himself through the media flow (#131). Uploaded
+ * avatars live under `<folder>/avatar/<userId>/`, which tells them apart from
+ * legacy values of the field; they win over the Google / game avatars.
+ */
+export function uploadedAvatar(user: any): string | null {
+  const avatar = user?.avatar;
+  return typeof avatar === 'string' && user?.id && avatar.includes(`/avatar/${user.id}/`) ? avatar : null;
+}
+
 export function serializeUser(user: any) {
   if (!user) return user;
   const { password, mlbbToken, ...rest } = user;
@@ -64,10 +75,12 @@ export function serializeUser(user: any) {
   const hasGame = !!user.mlbbRoleId;
   const source = user.profileSource === 'google' ? 'google' : 'game';
 
+  const customAvatar = uploadedAvatar(user);
   const displayAvatar =
-    source === 'google'
+    customAvatar ||
+    (source === 'google'
       ? user.googleAvatar || user.gameAvatar || user.avatar || null
-      : user.gameAvatar || user.googleAvatar || user.avatar || null;
+      : user.gameAvatar || user.googleAvatar || user.avatar || null);
   const displayName =
     source === 'google'
       ? user.googleName || user.gameNickname || user.username
@@ -86,6 +99,7 @@ export function serializeUser(user: any) {
     profileSource: source,
 
     avatar: displayAvatar,
+    customAvatar,
     displayName,
 
     gameStats: parseJson<any>(user.gameStats, {}),
@@ -95,6 +109,10 @@ export function serializeUser(user: any) {
 
     gameRank: decodeRank(user.gameRankLevel),
     gamePeakRank: decodeRank(user.gamePeakRankLevel),
+
+    // Rewards (#122): frame to display (null when expired or none) and title.
+    equippedFrame: resolveEquippedFrame(user),
+    equippedTitle: user.equippedTitle ?? null,
   };
 }
 
@@ -133,6 +151,8 @@ const PUBLIC_FIELDS = [
   'gameFrequentHeroes',
   'gameRoles',
   'gameSeasons',
+  'equippedFrame',
+  'equippedTitle',
 ];
 
 function pick(obj: any, fields: string[]) {
@@ -163,6 +183,8 @@ export function serializeUserCard(user: any) {
     'gameRank',
     'gameRankLevel',
     'gameLevel',
+    'equippedFrame',
+    'equippedTitle',
   ]);
 }
 

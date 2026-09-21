@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean } from 'class-validator';
 
 export class CreateEmblemDto {
   @IsString()
@@ -19,6 +19,10 @@ export class CreateEmblemDto {
   @IsOptional()
   @IsInt()
   sort?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
 }
 
 export class UpdateEmblemDto {
@@ -41,4 +45,8 @@ export class UpdateEmblemDto {
   @IsOptional()
   @IsInt()
   sort?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
 }

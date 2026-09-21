@@ -21,6 +21,7 @@ import { ItemsModule } from './items/items.module';
 import { EmblemsModule } from './emblems/emblems.module';
 import { BattleSpellsModule } from './battle-spells/battle-spells.module';
 import { BuildsModule } from './builds/builds.module';
+import { CatalogModule } from './catalog/catalog.module';
 import { GqlModule } from './graphql/gql.module';
 import { PushModule } from './push/push.module';
 import { StreamModule } from './stream/stream.module';
@@ -30,6 +31,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { PickBanModule } from './pickban/pickban.module';
 import { AiModule } from './ai/ai.module';
+import { IntegrationsModule } from './integrations/integrations.module';
+import { MediaModule } from './media/media.module';
 import { LeagueStatsModule } from './league-stats/league-stats.module';
 import { StandingsModule } from './standings/standings.module';
 import { SponsorsModule } from './sponsors/sponsors.module';
@@ -37,6 +40,7 @@ import { AwardsModule } from './awards/awards.module';
 import { GeoModule } from './geo/geo.module';
 import { GameModule } from './game/game.module';
 import { AccessModule } from './access/access.module';
+import { RewardsModule } from './rewards/rewards.module';
 
 @Module({
   imports: [
@@ -63,6 +67,7 @@ import { AccessModule } from './access/access.module';
     EmblemsModule,
     BattleSpellsModule,
     BuildsModule,
+    CatalogModule,
     GqlModule,
     PushModule,
     StreamModule,
@@ -72,12 +77,15 @@ import { AccessModule } from './access/access.module';
     GamificationModule,
     PickBanModule,
     AiModule,
+    IntegrationsModule,
+    MediaModule,
     LeagueStatsModule,
     StandingsModule,
     SponsorsModule,
     AwardsModule,
     GeoModule,
     GameModule,
+    RewardsModule,
   ],
 })
 export class AppModule {}

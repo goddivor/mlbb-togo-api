@@ -18,6 +18,7 @@ import {
   periodKey,
 } from './gamification.rules';
 import { PUBLIC_USER_WHERE, isHiddenAccount } from '../users/public-user.filter';
+import { RewardsService } from '../rewards/rewards.service';
 
 const RECENT_EVENTS = 20;
 const MAX_LEADERBOARD = 100;
@@ -40,6 +41,7 @@ export class GamificationService {
   constructor(
     private prisma: PrismaService,
     @Optional() private community?: CommunityService,
+    @Optional() private rewards?: RewardsService,
   ) {}
 
   // ----- Hooks (never throw: callers fire and forget) -----
@@ -82,6 +84,47 @@ export class GamificationService {
     } catch (err) {
       this.logger.warn(`syncMatch ${matchId} failed: ${(err as Error)?.message}`);
     }
+  }
+
+  // ----- Admin tools (rewards #122) -----
+
+  /**
+   * Admin XP correction (positive or negative), written as an
+   * `admin_correction` XP event with its reason and author. The stored XP
+   * never goes below 0. Returns the new progress.
+   */
+  async adjustXp(userId: string, amount: number, meta: { reason: string; adminId: string }, now = new Date()) {
+    const before = await this.progressOf(userId);
+    const applied = Math.max(-before.xp, Math.trunc(amount));
+    const refId = `correction:${now.getTime()}:${Math.random().toString(36).slice(2, 8)}`;
+    await this.prisma.xpEvent.create({
+      data: {
+        userId,
+        type: 'admin_correction',
+        refId,
+        amount: applied,
+        meta: { reason: meta.reason, adminId: meta.adminId, requested: Math.trunc(amount) },
+      },
+    });
+    await this.prisma.userProgress.upsert({
+      where: { userId },
+      create: { userId, xp: Math.max(0, applied), level: levelFromXp(Math.max(0, applied)) },
+      update: { xp: { increment: applied } },
+    });
+    if (applied > 0) await this.evaluateAchievements(userId);
+    const after = await this.finalizeLevel(userId, before.level);
+    return { applied, xp: after.xp, level: after.level, previousXp: before.xp, previousLevel: before.level };
+  }
+
+  /**
+   * Add-only re-evaluation after a rules change: unlocks missing
+   * achievements, recomputes the level and grants the missing frames.
+   */
+  async reevaluate(userId: string) {
+    const before = await this.progressOf(userId);
+    const unlocked = await this.evaluateAchievements(userId);
+    const after = await this.finalizeLevel(userId, before.level);
+    return { unlocked, xp: after.xp, level: after.level };
   }
 
   // ----- Core -----
@@ -171,6 +214,8 @@ export class GamificationService {
         data: { level },
       });
     }
+    // Level frames up to the reached level (catch-up included). Never throws.
+    if (row && this.rewards) await this.rewards.syncLevelFramesSafe(userId, level);
     return { xp, level };
   }
 
@@ -252,6 +297,8 @@ export class GamificationService {
           link: '/progress',
           data: { achievementId: a.id, reward: a.reward },
         });
+        // Frame attached to the achievement (frames catalogue), if any.
+        if (this.rewards) await this.rewards.grantAchievementFrames(userId, a.id);
       }
     }
     return unlocked;

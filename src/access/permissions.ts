@@ -98,6 +98,16 @@ export const PERMISSIONS: readonly PermissionDef[] = [
     label: { fr: 'Récompenses', en: 'Awards' },
   },
   {
+    key: 'admin.rewards',
+    group: 'esport',
+    route: '/admin/rewards',
+    label: { fr: 'Récompenses et cadres', en: 'Rewards and frames' },
+    description: {
+      fr: 'Cadres d’avatar, titres, corrections d’XP, résultats de tournoi et élections.',
+      en: 'Avatar frames, titles, XP corrections, tournament results and elections.',
+    },
+  },
+  {
     key: 'admin.tournaments',
     group: 'esport',
     route: '/admin/tournaments',
@@ -203,6 +213,16 @@ export const PERMISSIONS: readonly PermissionDef[] = [
   },
   // System
   {
+    key: 'admin.media',
+    group: 'system',
+    route: '/admin/media',
+    label: { fr: 'Médiathèque', en: 'Media library' },
+    description: {
+      fr: 'Images envoyées sur Cloudinary : valider, refuser ou supprimer.',
+      en: 'Images uploaded to Cloudinary: approve, reject or delete.',
+    },
+  },
+  {
     key: 'admin.logs',
     group: 'system',
     route: '/admin/logs',
@@ -220,6 +240,16 @@ export const PERMISSIONS: readonly PermissionDef[] = [
     description: {
       fr: 'Créer des rôles et les attribuer aux utilisateurs.',
       en: 'Create roles and assign them to users.',
+    },
+  },
+  {
+    key: 'admin.integrations',
+    group: 'system',
+    route: '/admin/integrations',
+    label: { fr: 'Intégrations', en: 'Integrations' },
+    description: {
+      fr: 'Clés et identifiants des services tiers (IA, Cloudinary).',
+      en: 'Third-party service keys and credentials (AI, Cloudinary).',
     },
   },
 ];

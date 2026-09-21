@@ -71,6 +71,15 @@ model User {
 
   profileSource  String    @default("game")
 
+  // Rewards (#122): equipped avatar frame (`frameId` or `frameId:variant`),
+  // last permanent frame equipped (restored when a temporary one expires),
+  // expiry of the equipped frame (denormalized so every avatar payload can
+  // resolve the frame without a join) and equipped level title.
+  equippedFrame          String?
+  fallbackFrame          String?
+  equippedFrameExpiresAt DateTime?
+  equippedTitle          String?
+
   // User preferences (settings page).
   notifPrefs     Json?
   privacy        Json?
@@ -253,6 +262,12 @@ model Item {
   icon        String?  // URL to item icon
   type        String?  // e.g. "defense", "attack", "attack_speed", "mana", "cooldown"
   gold        Int?     // cost in gold
+  gameId      Int?      // Moonton GMS id, set by the catalog sync (partial unique index)
+  syncedAt    DateTime? // last write by the catalog sync (later edits are kept)
+  enabled     Boolean?  @default(true) // false = hidden from players and pickers (null/missing = enabled)
+  stats       String?   // item attributes text from Moonton ("+160 Extra Physical Attack\n...")
+  passive     String?   // item passive / unique skills text from Moonton
+  gameMeta    String?   // JSON: { categoryId, category, isComponent, tier, buildsFrom, buildsInto } (Moonton ids)
   sort        Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -265,6 +280,9 @@ model Emblem {
   description String?
   icon        String?  // URL to emblem icon
   type        String?  // e.g. "support", "order", "chaos"
+  gameId      Int?      // Moonton GMS id, set by the catalog sync (partial unique index)
+  syncedAt    DateTime? // last write by the catalog sync (later edits are kept)
+  enabled     Boolean?  @default(true) // false = hidden from players and pickers (null/missing = enabled)
   sort        Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -277,6 +295,9 @@ model BattleSpell {
   description String?
   icon        String?  // URL to battle spell icon
   cooldown    String?  // e.g. "60s"
+  gameId      Int?      // Moonton GMS id, set by the catalog sync (partial unique index)
+  syncedAt    DateTime? // last write by the catalog sync (later edits are kept)
+  enabled     Boolean?  @default(true) // false = hidden from players and pickers (null/missing = enabled)
   sort        Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -849,6 +870,8 @@ model XpEvent {
   type      String
   amount    Int
   refId     String
+  // Short snapshot of the source (e.g. admin correction reason and author).
+  meta      Json?
   createdAt DateTime @default(now())
 
   @@unique([userId, type, refId])
@@ -973,4 +996,112 @@ model Role {
   color       String   @default("#6366f1")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// ----- Rewards (#122): avatar frames, elections, event windows -----
+
+// One row per (user, frame, variant). A new grant reactivates or extends the
+// same row (new period in `history`, `timesGranted + 1`).
+model UserFrame {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String    @db.ObjectId
+  frameId      String
+  variant      String    @default("")
+  // level | achievement | award | admin | event | ranking
+  source       String
+  sourceRef    String?
+  grantedById  String?   @db.ObjectId
+  unlockedAt   DateTime  @default(now())
+  expiresAt    DateTime?
+  expiredAt    DateTime?
+  timesGranted Int       @default(1)
+  // Ownership periods: [{ from, to }] (`to` null while open-ended).
+  history      Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, frameId, variant])
+  @@index([frameId])
+  @@index([expiresAt])
+}
+
+// Admin-managed event windows (CRUD and evaluation come with lot A2).
+model RewardEvent {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  slug        String   @unique
+  name        String
+  description String?
+  startsAt    DateTime
+  endsAt      DateTime
+  // none | yearly
+  recurrence  String   @default("none")
+  conditions  Json?
+  rewards     Json?
+  // draft | scheduled | active | closed
+  status      String   @default("draft")
+  createdById String?  @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, endsAt])
+}
+
+// Idempotency of the weekly MVP / monthly number one elections.
+model RewardElection {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  // mvp_week | number_one_month
+  kind      String
+  // 2026-W38 | 2026-09
+  period    String
+  userId    String?  @db.ObjectId
+  // auto | admin
+  source    String   @default("auto")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([kind, period])
+}
+
+// Runtime application setting managed from the admin (third-party integration
+// credentials...). `value` is an AES-encrypted JSON document (see
+// src/integrations): secrets never leave the API in clear text.
+model AppSetting {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  key         String   @unique
+  value       String
+  updatedById String?  @db.ObjectId
+  updatedAt   DateTime @updatedAt
+}
+
+// Image uploaded to Cloudinary through a signed direct upload (#131). Only the
+// assets tracked here are ever destroyed on Cloudinary (never seed / MLBB CDN
+// URLs). `purpose` + `targetType`/`targetId` tell where the image is used;
+// `targetId` is null while the target does not exist yet (create forms).
+// Community team images uploaded by a captain stay `pending` (the public keeps
+// seeing the previous image) until an admin approves or rejects them.
+model MediaAsset {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  publicId     String    @unique
+  url          String    // delivered URL (with size / format transformations)
+  secureUrl    String    // original Cloudinary URL
+  purpose      String
+  targetType   String
+  targetId     String?
+  uploadedById String    @db.ObjectId
+  status       String    @default("approved") // pending | approved | rejected
+  bytes        Int
+  width        Int
+  height       Int
+  format       String
+  reviewedById String?   @db.ObjectId
+  reviewedAt   DateTime?
+  rejectReason String?
+  // Set once the Cloudinary asset was destroyed (rejected rows are kept).
+  destroyedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([purpose, status])
+  @@index([targetType, targetId])
+  @@index([uploadedById])
 }

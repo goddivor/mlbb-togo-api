@@ -13,10 +13,16 @@ const uniqueName = (error: any): never => {
 export class EmblemsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll() {
-    return this.prisma.emblem.findMany({
+  /**
+   * Catalog list. Disabled entries (`enabled: false`) are hidden from players
+   * and pickers; admins list them with `includeDisabled`. A missing flag
+   * (rows created before it existed) means enabled.
+   */
+  async findAll(includeDisabled = false) {
+    const rows = await this.prisma.emblem.findMany({
       orderBy: [{ sort: 'asc' }, { name: 'asc' }],
     });
+    return includeDisabled ? rows : rows.filter((r) => r.enabled !== false);
   }
 
   async findOne(id: string) {
@@ -37,6 +43,7 @@ export class EmblemsService {
         icon: data.icon || undefined,
         type: data.type || undefined,
         sort: data.sort ?? 0,
+        enabled: data.enabled ?? true,
       },
     }).catch(uniqueName);
   }
@@ -51,6 +58,7 @@ export class EmblemsService {
         icon: data.icon !== undefined ? data.icon : undefined,
         type: data.type !== undefined ? data.type : undefined,
         sort: data.sort !== undefined ? data.sort : undefined,
+        enabled: data.enabled !== undefined ? data.enabled : undefined,
       },
     }).catch(uniqueName);
   }
