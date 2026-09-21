@@ -12,6 +12,8 @@ import { GamificationService } from '../gamification/gamification.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { AccessService } from '../access/access.service';
+import { hasAdminAccess } from '../access/permissions';
 import { toJson } from '../common/utils/json.util';
 import { serializeUser } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
@@ -30,7 +32,21 @@ export class AuthService {
     private moonton: MoontonClient,
     private gameSync: GameSyncService,
     @Optional() private gamification?: GamificationService,
+    @Optional() private access?: AccessService,
   ) {}
+
+  /**
+   * Serialized user + effective RBAC permissions: every auth response carries
+   * them so the client (admin menu, profile dropdown) never loses them.
+   */
+  private async withAccess(user: any) {
+    const access = this.access ? await this.access.resolveUser(user) : null;
+    return {
+      ...serializeUser(user),
+      roleIds: access?.roleIds ?? user.roleIds ?? [],
+      permissions: access?.permissions ?? [],
+    };
+  }
 
   private signToken(user: { id: string; username: string; roleUser: string }) {
     return this.jwt.sign({
@@ -66,7 +82,7 @@ export class AuthService {
     });
 
     const token = this.signToken(user);
-    return { token, user: serializeUser(user) };
+    return { token, user: await this.withAccess(user) };
   }
 
   async login(dto: LoginDto) {
@@ -86,7 +102,7 @@ export class AuthService {
 
     const token = this.signToken(user);
     void this.gamification?.trackDailyLogin(user.id);
-    return { token, user: serializeUser(user) };
+    return { token, user: await this.withAccess(user) };
   }
 
   async adminLogin(dto: { username: string; password: string }) {
@@ -100,14 +116,18 @@ export class AuthService {
     if (!valid) {
       throw new UnauthorizedException('Identifiants invalides.');
     }
-    if (user.roleUser !== 'admin' && user.roleUser !== 'moderator') {
+    // Any holder of an admin area permission may enter the admin interface.
+    const permissions = this.access
+      ? (await this.access.resolveUser(user)).permissions
+      : undefined;
+    if (!hasAdminAccess({ roleUser: user.roleUser, permissions })) {
       throw new UnauthorizedException("Ce compte n'a pas d'accès administrateur.");
     }
     if (user.isBanned) {
       throw new UnauthorizedException('Compte suspendu.');
     }
     const token = this.signToken(user);
-    return { token, user: serializeUser(user) };
+    return { token, user: await this.withAccess(user) };
   }
 
   async me(id: string) {
@@ -115,7 +135,7 @@ export class AuthService {
     if (!user) {
       throw new NotFoundException('Utilisateur introuvable.');
     }
-    return serializeUser(user);
+    return this.withAccess(user);
   }
 
   async gameHeroes(userId: string, sid: number) {
@@ -215,7 +235,7 @@ export class AuthService {
     if (base) user = (await this.syncAfterLogin(user.id, base)) ?? user;
 
     void this.gamification?.trackDailyLogin(user.id);
-    return { token: this.signToken(user), user: serializeUser(user) };
+    return { token: this.signToken(user), user: await this.withAccess(user) };
   }
 
   private async mergeContent(survivorId: string, victimId: string) {
@@ -284,7 +304,7 @@ export class AuthService {
       },
     });
     if (base) user = (await this.syncAfterLogin(user.id, base)) ?? user;
-    return serializeUser(user);
+    return this.withAccess(user);
   }
 
   /**
@@ -298,7 +318,7 @@ export class AuthService {
       throw new BadRequestException('Aucun compte de jeu lié.');
     }
     const { user: updated } = await this.gameSync.syncUser(userId);
-    return serializeUser(updated);
+    return this.withAccess(updated);
   }
 
   async unlinkMlbb(userId: string) {
@@ -343,7 +363,7 @@ export class AuthService {
         provider: user.provider === 'mlbb' ? 'google' : user.provider,
       },
     });
-    return serializeUser(updated);
+    return this.withAccess(updated);
   }
 
   private async fetchGoogleProfile(accessToken: string) {
@@ -422,7 +442,7 @@ export class AuthService {
     }
 
     void this.gamification?.trackDailyLogin(user.id);
-    return { token: this.signToken(user), user: serializeUser(user) };
+    return { token: this.signToken(user), user: await this.withAccess(user) };
   }
 
   async linkGoogle(userId: string, accessToken: string) {
@@ -474,7 +494,7 @@ export class AuthService {
       where: { id: userId },
       data: { ...g, ...carry, lastActive: new Date() },
     });
-    return serializeUser(user);
+    return this.withAccess(user);
   }
 
   async setProfileSource(userId: string, source: 'google' | 'game') {
@@ -490,7 +510,7 @@ export class AuthService {
       where: { id: userId },
       data: { profileSource: source },
     });
-    return serializeUser(updated);
+    return this.withAccess(updated);
   }
 
   private async uniqueUsernameFrom(base: string): Promise<string> {

@@ -30,6 +30,12 @@ model User {
   isOnline       Boolean   @default(false)
   isBanned       Boolean   @default(false)
   roleUser       String    @default("user")
+  // RBAC (#rbac): ids of the Role documents held by the user. `roleUser` is
+  // kept in sync (derived) for backward compatibility.
+  roleIds        String[]  @db.ObjectId
+  // Dedicated technical account (e.g. the bootstrap `admin` created by
+  // prisma/create-admin.js): hidden from every player-facing feature.
+  isSystemAccount Boolean  @default(false)
 
   provider       String    @default("local")
 
@@ -952,4 +958,19 @@ model MlbbCache {
   value     String // JSON payload
   fetchedAt DateTime
   expiresAt DateTime
+}
+
+// RBAC role: a named set of permission keys (see src/access/permissions.ts).
+// `systemKey` identifies built-in roles ("admin" = Administrateur, all
+// permissions, locked; "moderator" = seeded Modérateur, editable).
+model Role {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  permissions String[]
+  isSystem    Boolean  @default(false)
+  systemKey   String?
+  color       String   @default("#6366f1")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
