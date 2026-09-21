@@ -17,6 +17,7 @@ import {
 } from './rewards.logic';
 import { NOT_EXPIRED, RewardsService } from './rewards.service';
 import { RewardEventsService } from '../gamification/reward-events.service';
+import { SeasonRewardsService } from '../gamification/season-rewards.service';
 import { ACHIEVEMENTS } from '../gamification/achievements.catalog';
 import {
   EndFrameDto,
@@ -33,6 +34,8 @@ const OBJECT_ID = /^[a-f\d]{24}$/i;
 const ELECTION_GRACE_MS = 3 * DAY;
 /** Users re-evaluated per page of "recalculate all" (serverless timeout). */
 export const RECALCULATE_PAGE = 25;
+/** Budget of the bounded steps of the daily job (Vercel stops at 60 s). */
+const DAILY_BUDGET_MS = 40_000;
 /** Events whose participants are rewarded by the daily job (days back). */
 const EVENT_LOOKBACK_DAYS = 30;
 
@@ -63,6 +66,7 @@ export class RewardsAdminService {
     private rewards: RewardsService,
     private gamification: GamificationService,
     private events: RewardEventsService,
+    private seasonRewards: SeasonRewardsService,
   ) {}
 
   // ----- Overview -----
@@ -519,13 +523,17 @@ export class RewardsAdminService {
         return { error: (err as Error)?.message ?? 'failed' };
       }
     };
+    // Fast steps first; the unbounded ones (seasons, reward events) run
+    // last with a shared deadline so the job stays under the 60 s limit.
+    const deadline = Date.now() + DAILY_BUDGET_MS;
     const mvpWeek = await step('mvp_week', () => this.electWeeklyMvp(now));
     const numberOne = await step('number_one', () => this.electMonthlyNumberOne(now));
     const expired = await step('expire', () => this.rewards.expireDue(now));
     const expiringSoon = await step('expiring', () => this.rewards.notifyExpiringSoon(now));
-    const events = await step('events', () => this.events.runDaily(now));
     const eventParticipants = await step('event_participants', () => this.rewardEventParticipants(now));
-    return { ranAt: now, mvpWeek, numberOne, expired, expiringSoon, events, eventParticipants };
+    const seasons = await step('seasons', () => this.seasonRewards.applyRecent(deadline, 14, now));
+    const events = await step('events', () => this.events.runDaily(now, deadline));
+    return { ranAt: now, mvpWeek, numberOne, expired, expiringSoon, eventParticipants, seasons, events };
   }
 
   // ----- Helpers -----

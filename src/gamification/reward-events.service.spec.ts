@@ -26,10 +26,13 @@ function setup(event: Partial<any> = {}) {
     ...event,
   };
   const xp: any[] = [];
+  const joined: Record<string, Date> = {};
   const inWindow = (e: any, where: any) =>
     (!where.userId || e.userId === where.userId) &&
     (!where.type || e.type === where.type) &&
     (!where.refId || typeof where.refId !== 'string' || e.refId === where.refId) &&
+    (!where.refId?.in || where.refId.in.includes(e.refId)) &&
+    (!where.OR || where.OR.some((o: any) => e.refId.startsWith(o.refId.startsWith))) &&
     (!where.createdAt || ((!where.createdAt.gte || e.createdAt >= where.createdAt.gte) && (!where.createdAt.lte || e.createdAt <= where.createdAt.lte)));
   const prisma: any = {
     rewardEvent: {
@@ -51,7 +54,13 @@ function setup(event: Partial<any> = {}) {
         return [...map].map(([userId, n]) => ({ userId, refId: ID, _count: { _all: n } }));
       }),
     },
-    user: { findMany: jest.fn(async ({ where }: any) => (where.id?.in ?? []).map((id: string) => ({ id }))) },
+    user: {
+      findMany: jest.fn(async ({ where }: any) =>
+        (where.id?.in ?? Object.keys(joined))
+          .filter((id: string) => !where.joinedAt || (joined[id] ?? d('2020-01-01T00:00:00Z')) <= where.joinedAt.lte)
+          .map((id: string) => ({ id })),
+      ),
+    },
     adminLog: { create: jest.fn() },
   };
   const gamification = {
@@ -70,7 +79,7 @@ function setup(event: Partial<any> = {}) {
     rewards as unknown as RewardsService,
   );
   const login = (userId: string, iso: string) => xp.push({ userId, type: 'daily_login', refId: iso.slice(0, 10), createdAt: d(iso) });
-  return { service, prisma, gamification, rewards, row, xp, login };
+  return { service, prisma, gamification, rewards, row, xp, login, joined };
 }
 
 describe('RewardEventsService', () => {
@@ -169,5 +178,69 @@ describe('RewardEventsService', () => {
     expect(prisma.rewardEvent.update).toHaveBeenCalledWith(expect.objectContaining({ data: { endsAt: now } }));
     expect(res.remaining).toBe(0);
     expect(res.event.status).toBe('closed');
+  });
+
+  describe('final pass (bounded, exact candidates)', () => {
+    const later = d('2027-07-16T00:05:00Z');
+    const far = () => Date.now() + 60_000;
+
+    it('only processes members meeting every condition in `all` mode, within the scope', async () => {
+      const { service, row, xp, gamification, login } = setup({
+        conditions: {
+          mode: 'all',
+          items: [
+            { type: 'daily_login', count: 1, scope: null },
+            { type: 'bracket_played', count: 1, scope: 'cup' },
+          ],
+        },
+      });
+      login('both', '2027-06-16T10:00:00Z');
+      login('loginOnly', '2027-06-16T10:00:00Z');
+      login('otherCup', '2027-06-16T10:00:00Z');
+      xp.push({ userId: 'both', type: 'bracket_played', refId: 'bracket:cup:m1', createdAt: d('2027-06-17T00:00:00Z') });
+      xp.push({ userId: 'otherCup', type: 'bracket_played', refId: 'bracket:other:m1', createdAt: d('2027-06-17T00:00:00Z') });
+      const res = await service.finalPass(row, later, { close: true, deadline: far() });
+      expect(res).toEqual({ awarded: 1, remaining: 0 });
+      expect(gamification.track.mock.calls.map((c: any[]) => c[0])).toEqual(['both']);
+      expect(row.status).toBe('closed');
+    });
+
+    it('stops at the deadline, reports what is left and closes on a later run', async () => {
+      const { service, row, gamification, login } = setup();
+      for (const u of ['p1', 'p2', 'p3']) for (const day of ['16', '17', '18']) login(u, `2027-06-${day}T10:00:00Z`);
+      const cut = await service.finalPass(row, later, { close: true, deadline: Date.now() - 1 });
+      expect(cut).toEqual({ awarded: 0, remaining: 3 });
+      expect(row.status).toBe('active');
+      const first = await service.finalPass(row, later, { close: true, deadline: far(), batch: 2 });
+      expect(first).toEqual({ awarded: 3, remaining: 0 });
+      expect(gamification.track.mock.calls.map((c: any[]) => c[0])).toEqual(['p1', 'p2', 'p3']);
+      expect(row.status).toBe('closed');
+    });
+
+    it('treats account creation as a source alone and as a filter in `all` mode', async () => {
+      const { service, row, joined, login } = setup({
+        endsAt: d('2027-07-15T00:00:00Z'),
+        conditions: {
+          mode: 'all',
+          items: [
+            { type: 'account_created_before', count: 1, scope: null },
+            { type: 'daily_login', count: 1, scope: null },
+          ],
+        },
+      });
+      joined.old = d('2026-01-01T00:00:00Z');
+      joined.late = d('2027-08-01T00:00:00Z');
+      login('old', '2027-06-16T10:00:00Z');
+      login('late', '2027-06-16T10:00:00Z');
+      expect(await service.eligible(ID, later)).toMatchObject({ eligible: 1, pending: 1 });
+      expect(await service.finalPass(row, later, { close: false, deadline: far() })).toEqual({ awarded: 1, remaining: 0 });
+    });
+
+    it('closes early from the admin with a bounded pass and leaves the rest to the daily job', async () => {
+      const { service, row } = setup();
+      const res = await service.close({ id: 'adm' }, ID, d('2027-06-20T12:00:00Z'));
+      expect(res.remaining).toBe(0);
+      expect(row.endsAt).toEqual(d('2027-06-20T12:00:00Z'));
+    });
   });
 });

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RewardsService } from './rewards.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { RewardEventsService } from '../gamification/reward-events.service';
+import { SeasonRewardsService } from '../gamification/season-rewards.service';
 
 const oid = (n: number) => n.toString(16).padStart(24, '0');
 
@@ -38,6 +39,7 @@ function setup() {
     rewards as unknown as RewardsService,
     gamification as unknown as GamificationService,
     {} as RewardEventsService,
+    {} as SeasonRewardsService,
   );
   return { service, prisma, gamification };
 }

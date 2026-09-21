@@ -160,6 +160,15 @@ describe('SeasonRewardsService', () => {
     expect(rewards.grantFrameSafe).toHaveBeenCalledWith('ace', 'champion_en_titre', expect.objectContaining({ source: 'award' }));
   });
 
+  it('stops at its deadline and reports an incomplete run (finished later by the daily job)', async () => {
+    const { service, gamification } = setup([]);
+    const res = await service.apply('s2', new Date(), Date.now() - 1);
+    expect(res).toMatchObject({ complete: false });
+    expect(gamification.trackSafe).not.toHaveBeenCalled();
+    const full = await service.apply('s2');
+    expect(full).toMatchObject({ complete: true });
+  });
+
   it('does nothing for a season that is not closed', async () => {
     const { service, gamification } = setup([]);
     season.status = 'active';

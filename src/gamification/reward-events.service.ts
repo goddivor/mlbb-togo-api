@@ -36,9 +36,19 @@ import {
 } from './reward-events.logic';
 
 const CACHE_MS = 60_000;
-/** Users rewarded per final pass (the daily job continues with the rest). */
-const FINAL_PASS_BATCH = 300;
-const ELIGIBLE_SCAN = 1000;
+/** Users rewarded per final pass call (the daily job continues with the rest). */
+export const FINAL_PASS_BATCH = 40;
+/** Time budgets (ms): serverless functions stop at 60 s. */
+export const ADMIN_PASS_BUDGET_MS = 15_000;
+export const DAILY_PASS_BUDGET_MS = 30_000;
+
+export interface PassOptions {
+  /** Close the event once nobody is left to reward. */
+  close: boolean;
+  /** Absolute deadline (epoch ms): the pass stops and reports `remaining`. */
+  deadline: number;
+  batch?: number;
+}
 
 export interface Actor {
   id: string;
@@ -74,7 +84,7 @@ type EventRow = {
   updatedAt: Date;
 };
 
-const SLUG = /^[a-z0-9][a-z0-9_-]{1,63}$/;
+const SLUG = /^[a-z0-9][a-z0-9_-]{2,63}$/;
 
 function shapeOf(row: Pick<EventRow, 'startsAt' | 'endsAt' | 'status' | 'conditions' | 'rewards'>): EventShape {
   return {
@@ -245,8 +255,11 @@ export class RewardEventsService implements OnModuleInit {
     const updated = (await this.prisma.rewardEvent.update({ where: { id }, data })) as EventRow;
     this.cache = null;
     await this.log('rewards.event.update', actor, id, { slug: updated.slug, open, status: updated.status });
-    // A widened open window may already qualify players: evaluate them now.
-    if (open && isEvaluating(updated, now)) await this.finalPass(updated, now, false);
+    // A widened open window may already qualify players: reward a first
+    // bounded batch now, XP events and the daily job reward the others.
+    if (open && isEvaluating(updated, now)) {
+      await this.finalPass(updated, now, { close: false, deadline: Date.now() + ADMIN_PASS_BUDGET_MS });
+    }
     return this.serialize(updated, await this.awardedCount(id), now);
   }
 
@@ -284,7 +297,11 @@ export class RewardEventsService implements OnModuleInit {
     return this.serialize(created);
   }
 
-  /** Closes an event now: final pass on the window, then `closed`. */
+  /**
+   * Closes an event now: ends the window, rewards a first bounded batch and
+   * closes it when nobody is left; otherwise the daily job finishes the
+   * final pass (`remaining` > 0, status unchanged until then).
+   */
   async close(actor: Actor, id: string, now = new Date()) {
     let row = await this.find(id);
     if (row.status === 'closed') return { event: this.serialize(row, await this.awardedCount(id), now), awarded: 0, remaining: 0 };
@@ -293,7 +310,7 @@ export class RewardEventsService implements OnModuleInit {
       // Closing early ends the window now (explicit admin action).
       row = (await this.prisma.rewardEvent.update({ where: { id }, data: { endsAt: now } })) as EventRow;
     }
-    const pass = await this.finalPass(row, now, true);
+    const pass = await this.finalPass(row, now, { close: true, deadline: Date.now() + ADMIN_PASS_BUDGET_MS });
     await this.log('rewards.event.close', actor, id, { slug: row.slug, awarded: pass.awarded, remaining: pass.remaining });
     const fresh = await this.find(id);
     return { event: this.serialize(fresh, await this.awardedCount(id), now), awarded: pass.awarded, remaining: pass.remaining };
@@ -303,15 +320,10 @@ export class RewardEventsService implements OnModuleInit {
   async eligible(id: string, now = new Date()) {
     const row = await this.find(id);
     const shape = shapeOf(row);
-    const candidates = await this.candidates(row, shape, now, ELIGIBLE_SCAN);
-    let eligible = 0;
-    for (const userId of candidates) {
-      const progress = await this.progressFor(userId, row, shape, now);
-      if (isQualified(shape.conditions.mode, progress)) eligible++;
-    }
-    // Already rewarded members meet the conditions too.
+    // Candidates are exact (same window, scopes and mode as the rewards).
+    const pending = await this.candidates(row, shape, now);
     const awarded = await this.awardedCount(id);
-    return { eligible: eligible + awarded, awarded, scanned: candidates.length };
+    return { eligible: pending.length + awarded, awarded, pending: pending.length, scanned: pending.length };
   }
 
   /** Seeds the default events of catalogue §6.5 as drafts (idempotent by slug family). */
@@ -469,65 +481,90 @@ export class RewardEventsService implements OnModuleInit {
     return true;
   }
 
-  /** Users that may qualify (not rewarded yet): activity of the condition types in the window. */
-  private async candidates(row: EventRow, shape: EventShape, now: Date, limit: number): Promise<string[]> {
+  /**
+   * Members who meet the conditions in the window and are not rewarded yet,
+   * sorted (deterministic batches). Counts use the same scopes, window and
+   * mode (`all` = intersection, `any` = union) as the player progress, so
+   * every candidate qualifies and `remaining` always shrinks.
+   */
+  private async candidates(row: EventRow, shape: EventShape, now: Date): Promise<string[]> {
     const end = new Date(Math.min(row.endsAt.getTime(), now.getTime()));
     const done = await this.prisma.xpEvent.findMany({
       where: { type: 'event_reward', refId: row.id },
       select: { userId: true },
     });
     const skip = new Set(done.map((d) => d.userId));
-    const ids = new Set<string>();
-    for (const c of shape.conditions.items) {
-      if (c.type === 'account_created_before') {
-        const users = await this.prisma.user.findMany({
-          where: {
-            joinedAt: { lte: row.endsAt },
-            ...PUBLIC_USER_WHERE,
-            ...(skip.size ? { id: { notIn: [...skip] } } : {}),
-          },
-          select: { id: true },
-          orderBy: { joinedAt: 'asc' },
-          take: limit,
-        });
-        users.forEach((u) => ids.add(u.id));
-        continue;
-      }
+    const items = shape.conditions.items;
+    const counted = items.filter((c) => c.type !== 'account_created_before');
+    const byAccount = items.some((c) => c.type === 'account_created_before');
+    const anyMode = shape.conditions.mode === 'any';
+
+    const sets: Set<string>[] = [];
+    for (const c of counted) {
+      const filter = refFilter(c);
+      const refWhere = filter?.equals
+        ? { refId: { in: filter.equals } }
+        : filter?.startsWith
+          ? { OR: filter.startsWith.map((p) => ({ refId: { startsWith: p } })) }
+          : {};
       const groups = await this.prisma.xpEvent.groupBy({
         by: ['userId'],
-        where: { type: c.type, createdAt: { gte: row.startsAt, lte: end } },
+        where: { type: c.type, createdAt: { gte: row.startsAt, lte: end }, ...refWhere },
         _count: { _all: true },
       });
-      groups.filter((g) => g._count._all >= c.count && !skip.has(g.userId)).forEach((g) => ids.add(g.userId));
+      sets.push(new Set(groups.filter((g) => g._count._all >= c.count).map((g) => g.userId)));
     }
-    if (!ids.size) return [];
-    const publicIds = new Set(
-      (
-        await this.prisma.user.findMany({ where: { id: { in: [...ids] }, ...PUBLIC_USER_WHERE }, select: { id: true } })
-      ).map((u) => u.id),
-    );
-    return [...ids].filter((id) => publicIds.has(id)).slice(0, limit);
+    // Account age: a source of candidates on its own (alone or `any`), else a filter.
+    if (byAccount && (anyMode || !counted.length)) {
+      const users = await this.prisma.user.findMany({
+        where: { joinedAt: { lte: row.endsAt }, ...PUBLIC_USER_WHERE },
+        select: { id: true },
+      });
+      sets.push(new Set(users.map((u) => u.id)));
+    }
+    let ids: string[];
+    if (!sets.length) ids = [];
+    else if (anyMode) ids = [...new Set(sets.flatMap((x) => [...x]))];
+    else ids = [...sets[0]].filter((id) => sets.every((x) => x.has(id)));
+    ids = ids.filter((id) => !skip.has(id));
+    if (!ids.length) return [];
+    const eligible = await this.prisma.user.findMany({
+      where: {
+        id: { in: ids },
+        ...PUBLIC_USER_WHERE,
+        ...(byAccount && !anyMode ? { joinedAt: { lte: row.endsAt } } : {}),
+      },
+      select: { id: true },
+    });
+    const ok = new Set(eligible.map((u) => u.id));
+    return ids.filter((id) => ok.has(id)).sort();
   }
 
   /**
-   * Rewards every qualified player not rewarded yet (batched). With `close`,
-   * the event becomes `closed` once nobody is left to process.
+   * Rewards the qualified players not rewarded yet, by small batches within
+   * a time budget. With `close`, the event becomes `closed` once nobody is
+   * left; otherwise `remaining` tells what the next run will process.
    */
-  async finalPass(row: EventRow, now: Date, close: boolean) {
+  async finalPass(row: EventRow, now: Date, opts: PassOptions) {
     const shape = shapeOf(row);
-    const batch = await this.candidates(row, shape, now, FINAL_PASS_BATCH + 1);
-    const todo = batch.slice(0, FINAL_PASS_BATCH);
+    const todo = await this.candidates(row, shape, now);
+    const batch = opts.batch ?? FINAL_PASS_BATCH;
     let awarded = 0;
-    for (const userId of todo) {
-      try {
-        const progress = await this.progressFor(userId, row, shape, now);
-        if (isQualified(shape.conditions.mode, progress) && (await this.applyRewards(userId, row, shape.rewards, now))) awarded++;
-      } catch (err) {
-        this.logger.warn(`final pass ${row.slug} for ${userId} failed: ${(err as Error)?.message}`);
+    let processed = 0;
+    // Small batches, deadline checked before every member.
+    while (processed < todo.length && Date.now() < opts.deadline) {
+      for (const userId of todo.slice(processed, processed + batch)) {
+        if (Date.now() >= opts.deadline) break;
+        try {
+          if (await this.applyRewards(userId, row, shape.rewards, now)) awarded++;
+        } catch (err) {
+          this.logger.warn(`final pass ${row.slug} for ${userId} failed: ${(err as Error)?.message}`);
+        }
+        processed++;
       }
     }
-    const remaining = batch.length > FINAL_PASS_BATCH ? batch.length - FINAL_PASS_BATCH : 0;
-    if (close && !remaining) {
+    const remaining = todo.length - processed;
+    if (opts.close && !remaining) {
       await this.prisma.rewardEvent.update({ where: { id: row.id }, data: { status: 'closed' } });
       this.cache = null;
     }
@@ -538,19 +575,24 @@ export class RewardEventsService implements OnModuleInit {
    * Daily job: publishes scheduled events whose window started, runs the
    * final pass of ended ones and closes them. Idempotent.
    */
-  async runDaily(now = new Date()) {
+  async runDaily(now = new Date(), deadline = Date.now() + DAILY_PASS_BUDGET_MS) {
     const rows = (await this.prisma.rewardEvent.findMany({
       where: { status: { in: ['scheduled', 'active'] } },
     })) as EventRow[];
-    const out = { activated: 0, closed: 0, awarded: 0, pending: 0 };
+    const out = { activated: 0, closed: 0, awarded: 0, pending: 0, remaining: 0 };
     for (const row of rows) {
       const next = nextStatus(row, now);
       if (next === 'active') {
         await this.prisma.rewardEvent.update({ where: { id: row.id }, data: { status: 'active' } });
         out.activated++;
       } else if (next === 'closed') {
-        const pass = await this.finalPass(row, now, true);
+        if (Date.now() >= deadline) {
+          out.pending++;
+          continue;
+        }
+        const pass = await this.finalPass(row, now, { close: true, deadline });
         out.awarded += pass.awarded;
+        out.remaining += pass.remaining;
         if (pass.remaining) out.pending++;
         else out.closed++;
       }

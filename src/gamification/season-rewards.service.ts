@@ -10,6 +10,9 @@ import { SEASON_PODIUM_XP, seasonAwardXp } from './gamification.rules';
 import { stageOf } from './achievement-facts';
 
 type Placement = 1 | 2 | 3;
+
+/** Time budget of the season rewards inside an admin request (ms). */
+export const SEASON_REWARDS_BUDGET_MS = 20_000;
 type PodiumEntry = { placement: Placement; teamId: string };
 
 export interface SeasonFacts {
@@ -72,26 +75,32 @@ export class SeasonRewardsService {
     @Optional() private rewards?: RewardsService,
   ) {}
 
-  async applySafe(seasonId: string) {
+  async applySafe(seasonId: string, deadline?: number) {
     try {
-      return await this.apply(seasonId);
+      return await this.apply(seasonId, new Date(), deadline);
     } catch (err) {
       this.logger.warn(`season rewards ${seasonId} failed: ${(err as Error)?.message}`);
       return null;
     }
   }
 
-  async apply(seasonId: string, now = new Date()) {
+  /**
+   * `deadline` (epoch ms) bounds the work on serverless: the result says
+   * `complete: false` and a later run (daily job) finishes, idempotently.
+   */
+  async apply(seasonId: string, now = new Date(), deadline = Number.POSITIVE_INFINITY) {
+    const late = () => Date.now() >= deadline;
     const season = await this.prisma.esportSeason.findUnique({ where: { id: seasonId } });
     if (!season || season.status !== 'closed') return null;
     const variant = seasonVariant(season.number);
     const summary = parseJson<any>(season.summary ?? 'null', null);
     const facts = await this.facts(seasonId, summary);
     const publicIds = await this.publicIds([...facts.participations.keys()]);
-    const out = { participants: 0, podium: 0, champions: [] as string[], awards: 0, invincibles: 0 };
+    const out = { participants: 0, podium: 0, champions: [] as string[], awards: 0, invincibles: 0, complete: false };
 
     // Participation: at least one league/playoff match in the closed season.
     for (const userId of facts.participations.keys()) {
+      if (late()) return out;
       if (!publicIds.has(userId)) continue;
       const res = await this.gamification.trackSafe(userId, 'season_participation', seasonId, {
         now,
@@ -105,6 +114,7 @@ export class SeasonRewardsService {
       let members = teamPlayers(facts.participations, p.teamId).filter((u) => publicIds.has(u));
       if (!members.length) members = await this.roster(p.teamId);
       for (const userId of members) {
+        if (late()) return out;
         const res = await this.gamification.trackSafe(userId, 'season_podium', seasonId, {
           now,
           amount: SEASON_PODIUM_XP[p.placement],
@@ -130,6 +140,7 @@ export class SeasonRewardsService {
     // Awards: XP by category, season variant frames, achievements.
     const awards = await this.prisma.seasonAward.findMany({ where: { seasonId } });
     for (const a of awards) {
+      if (late()) return out;
       if (!a.userId) continue;
       const res = await this.gamification.trackSafe(a.userId, 'season_award', a.id, {
         now,
@@ -147,10 +158,31 @@ export class SeasonRewardsService {
     }
 
     for (const userId of invinciblePlayers(facts)) {
+      if (late()) return out;
       if (!publicIds.has(userId)) continue;
       if (await this.gamification.unlockAchievement(userId, 'invincibles', { now })) out.invincibles++;
     }
+    out.complete = true;
     return out;
+  }
+
+  /**
+   * Daily catch-up: re-applies (idempotently) the rewards of the seasons
+   * closed in the last `days` days, in case a request was cut off.
+   */
+  async applyRecent(deadline: number, days = 14, now = new Date()) {
+    const seasons = await this.prisma.esportSeason.findMany({
+      where: { status: 'closed', closedAt: { gte: new Date(now.getTime() - days * 86_400_000) } },
+      select: { id: true },
+      orderBy: { closedAt: 'asc' },
+    });
+    let complete = 0;
+    for (const s of seasons) {
+      if (Date.now() >= deadline) break;
+      const res = await this.applySafe(s.id, deadline);
+      if (res?.complete) complete++;
+    }
+    return { seasons: seasons.length, complete };
   }
 
   /**

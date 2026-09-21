@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
-import { SeasonRewardsService } from '../gamification/season-rewards.service';
+import { SEASON_REWARDS_BUDGET_MS, SeasonRewardsService } from '../gamification/season-rewards.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TeamRef } from '../esport/esport-stats.service';
 import {
@@ -384,6 +384,6 @@ export class AwardsService {
     }
     await this.prisma.esportSeason.update({ where: { id: seasonId }, data: { summary: JSON.stringify(next) } });
     // Awards / podium edited after the close: grant what is new (add-only).
-    void this.seasonRewards?.applySafe(seasonId);
+    await this.seasonRewards?.applySafe(seasonId, Date.now() + SEASON_REWARDS_BUDGET_MS);
   }
 }

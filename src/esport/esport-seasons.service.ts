@@ -6,7 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { SeasonRewardsService } from '../gamification/season-rewards.service';
+import { SEASON_REWARDS_BUDGET_MS, SeasonRewardsService } from '../gamification/season-rewards.service';
 import { MatchLike, TeamRef, standingsOf } from './esport-stats.service';
 import {
   CloseSeasonDto,
@@ -444,7 +444,9 @@ export class EsportSeasonsService {
     }
     const updated = await this.prisma.esportSeason.update({ where: { id: season.id }, data });
     // Participation, podium, awards, season frames, reigning champion (idempotent).
-    if (action === 'close') void this.seasonRewards?.applySafe(season.id);
+    // Awaited within a time budget (serverless cuts work after the response);
+    // the daily job re-applies recently closed seasons if it was cut short.
+    if (action === 'close') await this.seasonRewards?.applySafe(season.id, Date.now() + SEASON_REWARDS_BUDGET_MS);
     return serializeSeason(updated as SeasonRecord, now);
   }
 
