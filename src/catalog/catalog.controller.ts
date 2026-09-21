@@ -14,6 +14,6 @@ export class CatalogController {
   @RequirePermissions('admin.catalog')
   @Post('sync')
   sync() {
-    return orUnavailable(this.catalogSync.sync());
+    return orUnavailable(this.catalogSync.sync(), 'The Moonton catalog is temporarily unavailable.');
   }
 }
