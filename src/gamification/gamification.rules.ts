@@ -11,6 +11,10 @@ export const XP_TYPES = [
   'friend_added',
   'achievement',
   'mission',
+  // Recorded by an admin (rewards #122): winner / finalist / MVP of a tournament.
+  'tournament_win',
+  'tournament_final',
+  'tournament_mvp',
 ] as const;
 
 export type XpType = (typeof XP_TYPES)[number];
@@ -26,6 +30,9 @@ export const XP_RULES: Record<XpType, number> = {
   friend_added: 10,
   achievement: 0,
   mission: 0,
+  tournament_win: 400,
+  tournament_final: 150,
+  tournament_mvp: 250,
 };
 
 export const MAX_LEVEL = 200;

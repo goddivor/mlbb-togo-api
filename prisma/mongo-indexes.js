@@ -22,3 +22,12 @@ db.SeasonAward.createIndex(
   },
 );
 print('Index partiel SeasonAward (seasonId, category) en place.');
+db.UserFrame.createIndex(
+  { userId: 1, frameId: 1, variant: 1 },
+  { unique: true, name: 'UserFrame_userId_frameId_variant_key' },
+);
+db.RewardElection.createIndex(
+  { kind: 1, period: 1 },
+  { unique: true, name: 'RewardElection_kind_period_key' },
+);
+print('Index uniques UserFrame (userId, frameId, variant) et RewardElection (kind, period) en place.');

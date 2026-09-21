@@ -5,6 +5,7 @@ import {
   TogoCity,
   normalizeCity,
 } from './geo.constants';
+import { resolveEquippedFrame } from '../rewards/rewards.logic';
 
 /** Minimal shapes the aggregation needs (kept DB-agnostic so it is testable). */
 export interface MapUserInput {
@@ -14,6 +15,10 @@ export interface MapUserInput {
   gameNickname?: string | null;
   city?: string | null;
   privacy?: any;
+  equippedFrame?: string | null;
+  fallbackFrame?: string | null;
+  equippedFrameExpiresAt?: Date | string | null;
+  equippedTitle?: string | null;
 }
 
 export interface MapTeamInput {
@@ -73,6 +78,8 @@ export interface MapPlayerPreview {
   id: string;
   username: string;
   avatar: string | null;
+  equippedFrame: string | null;
+  equippedTitle: string | null;
 }
 
 export interface MapTournamentItem {
@@ -257,7 +264,13 @@ export function aggregateMap(input: MapAggregateInput): MapAggregate {
     if (!b) continue;
     b.players += 1;
     if (b.topPlayers.length < PUBLIC_PLAYERS_LIMIT && isProfilePublic(u.privacy)) {
-      b.topPlayers.push({ id: u.id, username: u.username, avatar: u.avatar ?? null });
+      b.topPlayers.push({
+        id: u.id,
+        username: u.username,
+        avatar: u.avatar ?? null,
+        equippedFrame: resolveEquippedFrame(u, now),
+        equippedTitle: u.equippedTitle ?? null,
+      });
     }
   }
 

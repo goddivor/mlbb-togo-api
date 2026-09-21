@@ -71,6 +71,15 @@ model User {
 
   profileSource  String    @default("game")
 
+  // Rewards (#122): equipped avatar frame (`frameId` or `frameId:variant`),
+  // last permanent frame equipped (restored when a temporary one expires),
+  // expiry of the equipped frame (denormalized so every avatar payload can
+  // resolve the frame without a join) and equipped level title.
+  equippedFrame          String?
+  fallbackFrame          String?
+  equippedFrameExpiresAt DateTime?
+  equippedTitle          String?
+
   // User preferences (settings page).
   notifPrefs     Json?
   privacy        Json?
@@ -849,6 +858,8 @@ model XpEvent {
   type      String
   amount    Int
   refId     String
+  // Short snapshot of the source (e.g. admin correction reason and author).
+  meta      Json?
   createdAt DateTime @default(now())
 
   @@unique([userId, type, refId])
@@ -973,4 +984,68 @@ model Role {
   color       String   @default("#6366f1")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// ----- Rewards (#122): avatar frames, elections, event windows -----
+
+// One row per (user, frame, variant). A new grant reactivates or extends the
+// same row (new period in `history`, `timesGranted + 1`).
+model UserFrame {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String    @db.ObjectId
+  frameId      String
+  variant      String    @default("")
+  // level | achievement | award | admin | event | ranking
+  source       String
+  sourceRef    String?
+  grantedById  String?   @db.ObjectId
+  unlockedAt   DateTime  @default(now())
+  expiresAt    DateTime?
+  expiredAt    DateTime?
+  timesGranted Int       @default(1)
+  // Ownership periods: [{ from, to }] (`to` null while open-ended).
+  history      Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, frameId, variant])
+  @@index([frameId])
+  @@index([expiresAt])
+}
+
+// Admin-managed event windows (CRUD and evaluation come with lot A2).
+model RewardEvent {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  slug        String   @unique
+  name        String
+  description String?
+  startsAt    DateTime
+  endsAt      DateTime
+  // none | yearly
+  recurrence  String   @default("none")
+  conditions  Json?
+  rewards     Json?
+  // draft | scheduled | active | closed
+  status      String   @default("draft")
+  createdById String?  @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, endsAt])
+}
+
+// Idempotency of the weekly MVP / monthly number one elections.
+model RewardElection {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  // mvp_week | number_one_month
+  kind      String
+  // 2026-W38 | 2026-09
+  period    String
+  userId    String?  @db.ObjectId
+  // auto | admin
+  source    String   @default("auto")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([kind, period])
 }
