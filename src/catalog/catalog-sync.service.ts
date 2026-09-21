@@ -91,9 +91,7 @@ export class CatalogSyncService {
       items: await this.apply(db.item as unknown as Delegate, mapGmsItems(details, list), now, true),
       emblems: await this.apply(db.emblem as unknown as Delegate, mapGmsEmblems(emblems), now, true),
       battleSpells: await this.apply(db.battleSpell as unknown as Delegate, mapGmsBattleSpells(spells), now, false),
-      talents: talents
-        ? await this.apply(db.emblemTalent as unknown as Delegate, mapGmsTalents(talents), now, false)
-        : null,
+      talents: talents ? await this.applyTalents(db, talents, now) : null,
       syncedAt: now.toISOString(),
     };
     this.logger.log(
@@ -103,6 +101,16 @@ export class CatalogSyncService {
         `talents ${result.talents ? `+${result.talents.created}/~${result.talents.updated}` : 'unavailable'}`,
     );
     return result;
+  }
+
+  /** Talents only feed the community builds: any failure here is not fatal. */
+  private async applyTalents(db: PrismaClient, records: any[], now: Date): Promise<CatalogCounts | null> {
+    try {
+      return await this.apply(db.emblemTalent as unknown as Delegate, mapGmsTalents(records), now, false);
+    } catch (e) {
+      this.logger.warn(`talents sync failed: ${(e as Error).message}`);
+      return null;
+    }
   }
 
   private async apply(

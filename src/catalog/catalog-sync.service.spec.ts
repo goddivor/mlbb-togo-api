@@ -76,7 +76,14 @@ describe('CatalogSyncService', () => {
     expect(res.items.total).toBe(2);
   });
 
-  it('counts a failed write without aborting the sync', async () => {
+  it('keeps the sync result when writing the talents fails', async () => {
+    prisma.emblemTalent.findMany.mockRejectedValue(new Error('collection missing'));
+    const res = await service.sync();
+    expect(res.talents).toBeNull();
+    expect(res.battleSpells.created).toBe(1);
+  });
+
+    it('counts a failed write without aborting the sync', async () => {
     prisma.item.create.mockRejectedValueOnce(new Error('P2002'));
     const res = await service.sync();
     expect(res.items.failed).toBe(1);
