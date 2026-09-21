@@ -89,7 +89,8 @@ export const TTL = {
 export function normalizeRank(rank?: string | null): RankTier {
   const r = String(rank ?? '').trim().toLowerCase();
   if (!r) return 'all';
-  if (r in RANK_TIERS) return r as RankTier;
+  // Own keys only: `in` would accept `constructor` / `__proto__`.
+  if (Object.prototype.hasOwnProperty.call(RANK_TIERS, r)) return r as RankTier;
   const byValue = Object.entries(RANK_TIERS).find(([, v]) => v === r);
   return (byValue?.[0] as RankTier) ?? 'all';
 }
@@ -110,7 +111,7 @@ export function normalizeTrendDays(days?: string | number | null): TrendDays {
 export function normalizeLane(lane?: string | number | null): string | null {
   const l = String(lane ?? '').trim().toLowerCase();
   if (!l) return null;
-  if (l in LANE_IDS) return l;
+  if (Object.prototype.hasOwnProperty.call(LANE_IDS, l)) return l;
   return LANE_BY_ID[Number(l)] ?? null;
 }
 

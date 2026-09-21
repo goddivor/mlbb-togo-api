@@ -8,6 +8,6 @@ import { HeroMetaService } from './hero-meta.service';
 @Module({
   controllers: [MlbbController],
   providers: [GmsClient, MetaCacheService, MlbbService, HeroMetaService],
-  exports: [MlbbService, HeroMetaService, GmsClient],
+  exports: [MlbbService, HeroMetaService, GmsClient, MetaCacheService],
 })
 export class MlbbModule {}
