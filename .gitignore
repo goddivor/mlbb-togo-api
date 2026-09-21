@@ -6,3 +6,5 @@ dist
 prisma/*.db
 prisma/*.db-journal
 .DS_Store
+
+.vercel
