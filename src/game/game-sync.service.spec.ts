@@ -95,6 +95,7 @@ function makePrisma(user: Record<string, any>) {
 function makeSource(over: Partial<Record<keyof GameDataSource, any>> = {}) {
   return {
     name: 'fake',
+    available: true,
     careerStats: jest.fn(async () =>
       ok({ ...mapCareerStats(samples.stats.data), seasons: mapSeasons(samples.stats.data) }),
     ),
@@ -122,7 +123,7 @@ const linkedUser = {
 
 function build(source: ReturnType<typeof makeSource>, info: MoontonResult = infoOk, user = linkedUser) {
   const prisma = makePrisma(user);
-  const client = { sgPost: jest.fn(async () => info) };
+  const client = { sgPost: jest.fn(async (_path: string, _form?: any, _opts?: any) => info) };
   const service = new GameSyncService(
     prisma as unknown as PrismaService,
     client as unknown as MoontonClient,
@@ -144,13 +145,84 @@ describe('resolveSyncStatus / syncMessage', () => {
     expect(resolveSyncStatus('unreachable', 'unreachable')).toBe('unavailable');
   });
 
+  it('relies on getBaseInfo alone when no stats source is plugged in', () => {
+    expect(resolveSyncStatus('ok', null)).toBe('ok');
+    expect(resolveSyncStatus('token_expired', null)).toBe('token_expired');
+    expect(resolveSyncStatus('unreachable', null)).toBe('unavailable');
+    expect(resolveSyncStatus('error', null)).toBe('unavailable');
+  });
+
   it('summarises failures without payloads', () => {
     expect(syncMessage({ outcome: 'ok', code: 0, message: 'ok' }, offline)).toBe('offline 10407 接口下线');
     expect(syncMessage({ outcome: 'ok', code: 0, message: 'ok' })).toBeNull();
   });
 });
 
-describe('GameSyncService.syncUser', () => {
+describe('GameSyncService.syncUser without a stats source (MLBB Academy closed)', () => {
+  const dead = () => makeSource({ available: false });
+
+  it('calls getBaseInfo only and reports ok', async () => {
+    const source = dead();
+    const { prisma, client, service } = build(source);
+
+    const { status, user } = await service.syncUser(USER_ID, { awaitMatches: true });
+
+    expect(status).toBe('ok');
+    expect(client.sgPost).toHaveBeenCalledTimes(1);
+    expect(client.sgPost.mock.calls[0][0]).toBe('/base/getBaseInfo');
+    for (const fn of ['careerStats', 'seasons', 'frequentHeroes', 'recentMatches', 'heroMatches', 'matchDetail'] as const) {
+      expect(source[fn]).not.toHaveBeenCalled();
+    }
+    expect(user).toMatchObject({
+      gameSyncStatus: 'ok',
+      gameSyncMessage: null,
+      mlbbTokenStatus: 'valid',
+      mlbbTokenExpiredAt: null,
+      gameNickname: 'SAYA AKAN LAWAN',
+      gameRankLevel: 8000,
+      gamePeakRankLevel: 9999,
+      // Untouched cache:
+      gameStats: linkedUser.gameStats,
+      gameSeasons: '[39]',
+      gameFrequentHeroes: linkedUser.gameFrequentHeroes,
+    });
+    expect(user.gameSyncedAt).toBeInstanceOf(Date);
+    expect(user.gameStatsSyncedAt).toBeUndefined();
+    expect(prisma.gameMatch.upsert).not.toHaveBeenCalled();
+  });
+
+  it('flags an expired session from getBaseInfo', async () => {
+    const { service } = build(dead(), infoExpired);
+    const { status, user } = await service.syncUser(USER_ID);
+    expect(status).toBe('token_expired');
+    expect(user.mlbbTokenStatus).toBe('expired');
+    expect(user.gameNickname).toBe('Old nick');
+    expect(user.mlbbToken).toBe('session-token');
+  });
+
+  it('reports unavailable when Moonton does not answer, keeping the identity', async () => {
+    const unreachable: MoontonResult = { ok: false, outcome: 'unreachable', code: null, message: null, httpStatus: null, data: null };
+    const { service } = build(dead(), unreachable);
+    const { status, user } = await service.syncUser(USER_ID);
+    expect(status).toBe('unavailable');
+    expect(user.mlbbTokenStatus).toBe('valid');
+    expect(user.gameNickname).toBe('Old nick');
+    expect(user.gameSyncMessage).toBe('unreachable');
+  });
+
+  it('never calls the source for heroes, match details or the crawl', async () => {
+    const source = dead();
+    const { service } = build(source);
+    expect(await service.seasonHeroes(USER_ID, 40)).toEqual([]);
+    expect(await service.fetchMatchDetail(linkedUser, { bid: '1', sid: 40 })).toBeNull();
+    expect(await service.syncMatches(USER_ID, 'jwt', [40])).toMatchObject({ skipped: true });
+    expect(source.frequentHeroes).not.toHaveBeenCalled();
+    expect(source.matchDetail).not.toHaveBeenCalled();
+    expect(source.recentMatches).not.toHaveBeenCalled();
+  });
+});
+
+describe('GameSyncService.syncUser with a stats source', () => {
   it('keeps cached stats and refreshes identity when Moonton took the stats routes offline', async () => {
     const source = makeSource({ careerStats: jest.fn(async () => offline) });
     const { prisma, service } = build(source);

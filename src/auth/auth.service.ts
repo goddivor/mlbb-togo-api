@@ -288,9 +288,9 @@ export class AuthService {
   }
 
   /**
-   * Manual "Synchroniser": refreshes what Moonton still serves. Always returns
-   * the user; `gameSyncStatus` tells the UI whether the session expired or the
-   * detailed stats routes are offline (stored data is kept either way).
+   * Manual "Synchroniser": refreshes what Moonton still serves (getBaseInfo).
+   * Always returns the user; `gameSyncStatus` tells the UI whether the session
+   * expired or Moonton did not answer (stored data is kept either way).
    */
   async syncGame(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });

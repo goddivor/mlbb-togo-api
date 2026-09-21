@@ -44,11 +44,14 @@ export function mapBaseInfo(d: any): BaseInfo {
 }
 
 /**
- * Overall sync status from the identity call (sg-api) and the detailed stats
- * probe (actgateway). A refused session anywhere wins: the token is dead.
+ * Overall sync status from the identity call (sg-api) and, when a detailed
+ * stats source is plugged in, its probe. A refused session anywhere wins: the
+ * token is dead. Without a stats source (`stats` null, the case since MLBB
+ * Academy closed) the identity call alone decides.
  */
-export function resolveSyncStatus(info: MoontonOutcome, stats: MoontonOutcome): GameSyncStatus {
+export function resolveSyncStatus(info: MoontonOutcome, stats: MoontonOutcome | null): GameSyncStatus {
   if (info === 'token_expired' || stats === 'token_expired') return 'token_expired';
+  if (stats === null) return info === 'ok' ? 'ok' : 'unavailable';
   if (stats === 'ok') return 'ok';
   if (stats === 'offline') return 'moonton_offline';
   return 'unavailable';
@@ -112,8 +115,10 @@ export class GameSyncService {
   }
 
   /**
-   * Refresh a linked account: identity (getBaseInfo), career stats, seasons and
-   * current-season heroes, then crawl the match history in the background.
+   * Refresh a linked account: identity (getBaseInfo) and, only when the
+   * detailed stats source is available, career stats, seasons, current-season
+   * heroes and a background crawl of the match history. Since MLBB Academy
+   * closed (30/06/2026) the source is unavailable and never called.
    * Never wipes stored data: a failed call only updates the status fields.
    */
   async syncUser(userId: string, opts: { prefetched?: PrefetchedInfo; awaitMatches?: boolean } = {}) {
@@ -126,9 +131,9 @@ export class GameSyncService {
 
     const [base, stats] = await Promise.all([
       opts.prefetched ?? this.fetchBaseInfo(jwt, user.mlbbRoleId, user.mlbbZoneId),
-      this.source.careerStats(jwt),
+      this.source.available ? this.source.careerStats(jwt) : Promise.resolve(null),
     ]);
-    const status = resolveSyncStatus(base.result.outcome, stats.outcome);
+    const status = resolveSyncStatus(base.result.outcome, stats?.outcome ?? null);
 
     const data: Record<string, any> = {
       gameSyncAttemptAt: now,
@@ -142,13 +147,13 @@ export class GameSyncService {
     if (status === 'token_expired') {
       data.mlbbTokenStatus = 'expired';
       data.mlbbTokenExpiredAt = user.mlbbTokenExpiredAt ?? now;
-    } else if (base.result.ok || stats.outcome === 'ok') {
+    } else if (base.result.ok || stats?.outcome === 'ok') {
       data.mlbbTokenStatus = 'valid';
       data.mlbbTokenExpiredAt = null;
     }
 
     let seasons: number[] = [];
-    if (stats.data) {
+    if (stats?.data) {
       const { seasons: statSeasons, ...career } = stats.data;
       data.gameStats = toJson(career);
       data.gameStatsSyncedAt = now;
@@ -171,7 +176,7 @@ export class GameSyncService {
 
     const updated = await this.prisma.user.update({ where: { id: userId }, data });
 
-    if (stats.data && seasons.length) {
+    if (stats?.data && seasons.length) {
       const crawl = this.syncMatches(userId, jwt, seasons);
       if (opts.awaitMatches) await crawl;
       else void crawl;
@@ -185,6 +190,7 @@ export class GameSyncService {
    * new, and on any session/route failure. Idempotent (upserts only).
    */
   async syncMatches(userId: string, jwt: string, seasons: number[]) {
+    if (!this.source.available) return { created: 0, updated: 0, skipped: true };
     if (this.running.has(userId)) return { created: 0, updated: 0, skipped: true };
     this.running.add(userId);
     let created = 0;
@@ -292,7 +298,7 @@ export class GameSyncService {
     user: { id: string; mlbbToken: string | null; mlbbRoleId: number | null; mlbbTokenStatus?: string | null },
     match: { bid: string; sid: number },
   ): Promise<MatchDetail | null> {
-    if (!user.mlbbToken || user.mlbbTokenStatus === 'expired') return null;
+    if (!this.source.available || !user.mlbbToken || user.mlbbTokenStatus === 'expired') return null;
     const res = await this.source.matchDetail(user.mlbbToken, match.bid, match.sid, user.mlbbRoleId);
     if (res.outcome === 'token_expired') await this.markTokenExpired(user.id);
     if (!res.data || !res.data.players.length) return null;
@@ -307,10 +313,11 @@ export class GameSyncService {
     return res.data;
   }
 
-  /** Live frequent heroes of a season, cached in GameSeasonStats. */
+  /** Frequent heroes of a season: cache first, then the source when available. */
   async seasonHeroes(userId: string, sid: number): Promise<FrequentHero[]> {
     const cached = await this.prisma.gameSeasonStats.findUnique({ where: { userId_sid: { userId, sid } } });
     if (cached) return JSON.parse(cached.frequentHeroes || '[]');
+    if (!this.source.available) return [];
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user?.mlbbToken || user.mlbbTokenStatus === 'expired') return [];
     const res = await this.source.frequentHeroes(user.mlbbToken, sid, null, PAGE_SIZE);

@@ -29,6 +29,11 @@ export interface SourceResult<T> {
  */
 export interface GameDataSource {
   readonly name: string;
+  /**
+   * False when the provider is known to be dead: the sync then never calls it
+   * and relies on getBaseInfo only.
+   */
+  readonly available: boolean;
   careerStats(jwt: string): Promise<SourceResult<CareerStats & { seasons: number[] }>>;
   seasons(jwt: string): Promise<SourceResult<number[]>>;
   frequentHeroes(jwt: string, sid: number, cursor?: string | null, limit?: number): Promise<SourceResult<Page<FrequentHero>>>;
@@ -55,13 +60,22 @@ function wrap<T>(r: MoontonResult, map: (d: any) => T): SourceResult<T> {
 }
 
 /**
+ * The `battlereport/*` routes belonged to MLBB Academy, which Moonton shut
+ * down for good on 30/06/2026: every route answers `10407` ("接口下线") and no
+ * replacement web API exists (api-research/MOONTON_PLAYER.md). Kept false so
+ * the sync never calls them; flip it only if Moonton brings them back.
+ */
+export const BATTLEREPORT_AVAILABLE = false;
+
+/**
  * actgateway `battlereport/*` routes (headers and parameters documented in
- * api-research/ARENA_UPSTREAM.md). As of 21/09/2026 Moonton answers them all
- * with `10407` (route taken offline): callers must handle `offline`.
+ * api-research/ARENA_UPSTREAM.md). Decommissioned with MLBB Academy (see
+ * BATTLEREPORT_AVAILABLE); kept as a reference implementation.
  */
 @Injectable()
 export class BattlereportSource implements GameDataSource {
   readonly name = 'battlereport';
+  readonly available = BATTLEREPORT_AVAILABLE;
 
   constructor(private readonly client: MoontonClient) {}
 

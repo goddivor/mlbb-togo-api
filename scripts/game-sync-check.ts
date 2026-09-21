@@ -5,6 +5,11 @@
  * outcome, Moonton `code`/`message` and a short summary of the fields (never
  * the token, never the full payload).
  *
+ * MLBB Academy closed on 30/06/2026: every actgateway `battlereport/*` route
+ * answers `10407` and no replacement web API exists, so only getBaseInfo still
+ * serves player data (api-research/MOONTON_PLAYER.md). The script still probes
+ * the battlereport routes and ends with a verdict, so a comeback is noticed.
+ *
  * Get a session: link your game account on the site, or call sg-api
  * base/sendVc + base/login yourself (see api-research/mlbb-upstream.sh) and
  * copy `data.jwt`.
@@ -23,6 +28,7 @@ import {
   mapSeasons,
 } from '../src/game/game.mappers';
 import { mapBaseInfo } from '../src/game/game-sync.service';
+import { BATTLEREPORT_AVAILABLE } from '../src/game/game-data.source';
 
 const jwt = (process.env.MLBB_JWT || '').replace(/^Bearer\s+/i, '').trim();
 if (!jwt) {
@@ -39,7 +45,10 @@ function summary(value: any): string {
   return String(value);
 }
 
+const battlereport: Array<{ route: string; outcome: string }> = [];
+
 function report(route: string, r: MoontonResult, mapped?: any) {
+  if (route.startsWith('act ')) battlereport.push({ route, outcome: r.outcome });
   console.log(`\n=== ${route}`);
   console.log(`outcome=${r.outcome} http=${r.httpStatus} code=${r.code} message=${r.message ?? '-'}`);
   if (r.ok) {
@@ -89,6 +98,29 @@ async function main() {
 
   report('act GET battlereport/friends', await client.actGet('battlereport/friends', { sid }, jwt));
   report('act GET battlereport/privacy/settings', await client.actGet('battlereport/privacy/settings', {}, jwt));
+
+  console.log('\n=== Verdict');
+  console.log(`getBaseInfo (profile, rank, level): ${info.outcome}`);
+  const alive = battlereport.filter((r) => r.outcome === 'ok');
+  const offline = battlereport.filter((r) => r.outcome === 'offline');
+  if (!alive.length && offline.length) {
+    console.log(
+      `battlereport/*: ${offline.length}/${battlereport.length} routes offline (10407). MLBB Academy was shut down ` +
+        'on 30/06/2026 and Moonton offers no replacement web API: career stats, heroes and match history are ' +
+        `not available. The sync uses getBaseInfo only (BATTLEREPORT_AVAILABLE=${BATTLEREPORT_AVAILABLE}).`,
+    );
+  } else if (alive.length) {
+    console.log(
+      `battlereport/*: ${alive.length} route(s) answered again (${alive.map((r) => r.route).join(', ')}). ` +
+        'Check the payloads, then consider BATTLEREPORT_AVAILABLE=true in src/game/game-data.source.ts and ' +
+        'GAME_STATS_ENABLED=true on the frontend.',
+    );
+  } else {
+    console.log(
+      'battlereport/*: no route answered (session refused or Moonton unreachable). A Moonton JWT lives about 7 days: ' +
+        'rerun with a fresh one. Expected with a valid session: 10407 everywhere (MLBB Academy closed on 30/06/2026).',
+    );
+  }
 }
 
 main().catch((e) => {
