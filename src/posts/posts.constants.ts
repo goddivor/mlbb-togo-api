@@ -7,13 +7,11 @@ export const POST_CATEGORIES = [
 ] as const;
 export type PostCategory = (typeof POST_CATEGORIES)[number];
 
-/** Only admins/moderators may publish in these categories. */
+/** Only holders of the `forum.announce` permission may publish here. */
 export const STAFF_ONLY_CATEGORIES: readonly PostCategory[] = [
   'announcement',
   'stream',
 ];
-
-export const STAFF_ROLES = ['admin', 'moderator'];
 
 export const POST_SORTS = ['latest', 'popular', 'pinned'] as const;
 export type PostSort = (typeof POST_SORTS)[number];

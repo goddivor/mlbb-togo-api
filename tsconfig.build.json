@@ -1,4 +1,4 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "api", "**/*spec.ts", "prisma/seed.ts"]
+  "exclude": ["node_modules", "test", "dist", "api", "scripts", "**/__fixtures__/**", "**/*spec.ts", "prisma/seed.ts", "prisma/migrate-rbac.ts"]
 }

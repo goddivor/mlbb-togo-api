@@ -30,6 +30,12 @@ model User {
   isOnline       Boolean   @default(false)
   isBanned       Boolean   @default(false)
   roleUser       String    @default("user")
+  // RBAC (#rbac): ids of the Role documents held by the user. `roleUser` is
+  // kept in sync (derived) for backward compatibility.
+  roleIds        String[]  @db.ObjectId
+  // Dedicated technical account (e.g. the bootstrap `admin` created by
+  // prisma/create-admin.js): hidden from every player-facing feature.
+  isSystemAccount Boolean  @default(false)
 
   provider       String    @default("local")
 
@@ -52,6 +58,16 @@ model User {
   gameRoles      String    @default("[]")
   gameSeasons    String    @default("[]")
   gameSyncedAt   DateTime?
+  // Health of the stored Moonton session and of the last game sync. Stored
+  // game data is never wiped when a sync fails: these fields tell the UI why
+  // it may be stale. mlbbTokenStatus: valid | expired.
+  // gameSyncStatus: ok | moonton_offline | token_expired | unavailable.
+  mlbbTokenStatus    String?
+  mlbbTokenExpiredAt DateTime?
+  gameSyncStatus     String?
+  gameSyncMessage    String?
+  gameSyncAttemptAt  DateTime?
+  gameStatsSyncedAt  DateTime?
 
   profileSource  String    @default("game")
 
@@ -883,3 +899,78 @@ model PickBanDraft {
   updatedAt   DateTime  @updatedAt
 }
 
+
+// ---------------------------------------------------------------------------
+// Game account data (Moonton), cached so anyone can read it without calling
+// Moonton. Filled by the game sync with the owner's session; never deleted on
+// a failed sync (only on unlink / account deletion).
+
+/// Per-season aggregates of a linked game account.
+model GameSeasonStats {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String   @db.ObjectId
+  sid            Int
+  // JSON array of frequent heroes: { heroId, name, image, matches, wins, winRate, power }.
+  frequentHeroes String   @default("[]")
+  syncedAt       DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, sid])
+}
+
+/// One match of a linked game account (battle report summary + optional detail).
+model GameMatch {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String    @db.ObjectId
+  // Moonton battle id as a string (the number overflows JS precision).
+  bid            String
+  sid            Int
+  heroId         Int
+  heroName       String?
+  heroImage      String?
+  kills          Int       @default(0)
+  deaths         Int       @default(0)
+  assists        Int       @default(0)
+  laneId         Int?
+  score          Float     @default(0)
+  mvp            Boolean   @default(false)
+  win            Boolean   @default(false)
+  playedAt       DateTime
+  durationSec    Int?
+  // JSON match detail (10-player scoreboard), null until fetched.
+  detail         String?
+  detailSyncedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([userId, bid])
+  @@index([userId, sid, playedAt])
+  @@index([userId, heroId])
+}
+
+// Cache of Moonton GMS hero statistics (rankings, matchups, builds...), keyed by
+// request signature. Written by MetaCacheService (stale-while-revalidate), so
+// pages never wait on Moonton when a copy exists. Safe to purge at any time.
+model MlbbCache {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String   @unique
+  value     String // JSON payload
+  fetchedAt DateTime
+  expiresAt DateTime
+}
+
+// RBAC role: a named set of permission keys (see src/access/permissions.ts).
+// `systemKey` identifies built-in roles ("admin" = Administrateur, all
+// permissions, locked; "moderator" = seeded Modérateur, editable).
+model Role {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  permissions String[]
+  isSystem    Boolean  @default(false)
+  systemKey   String?
+  color       String   @default("#6366f1")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

@@ -2,8 +2,8 @@ import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ContactService } from './contact.service';
 import { CreateContactDto } from './dto/create-contact.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
 @Controller('contact')
 export class ContactController {
@@ -14,8 +14,8 @@ export class ContactController {
     return this.contact.create(dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.messages')
   @Get()
   findAll() {
     return this.contact.findAll();

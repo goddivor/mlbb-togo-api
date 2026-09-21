@@ -1,5 +1,6 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AccessService } from '../access/access.service';
 import { EsportSeasonsService } from '../esport/esport-seasons.service';
 import { CommunityService } from '../community/community.service';
 import {
@@ -31,6 +32,7 @@ export class SponsorsService {
     private prisma: PrismaService,
     private seasons: EsportSeasonsService,
     private community: CommunityService,
+    @Optional() private access?: AccessService,
   ) {}
 
   // ----- Public reads -----
@@ -145,13 +147,11 @@ export class SponsorsService {
   }
 
   private async notifyAdmins(row: { id: string; company: string; contactName: string }) {
-    const admins = await this.prisma.user.findMany({
-      where: { roleUser: { in: ['admin', 'moderator'] } },
-      select: { id: true },
-    });
+    const adminIds =
+      (await this.access?.userIdsWithPermission(['admin.sponsors', 'sponsors.manage'])) ?? [];
     await Promise.all(
-      admins.map((a) =>
-        this.community.notifyUser(a.id, {
+      adminIds.map((id) =>
+        this.community.notifyUser(id, {
           type: 'sponsorship_request',
           title: 'Nouvelle demande de partenariat',
           message: `${row.company} (${row.contactName}) souhaite devenir sponsor.`,

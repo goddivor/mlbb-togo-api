@@ -26,6 +26,58 @@ export interface PickedHeroMeta {
   strongAgainst: string[]; // heroes this hero beats
   weakAgainst: string[]; // heroes that beat this hero
   bestTeammates: string[];
+  // Full matchup matrix (Academy), when available: change of THIS hero's win
+  // rate, in points, when the keyed hero is an enemy (`vsEnemy`) or a
+  // teammate (`withAlly`). When present it supersedes the top-5 lists above,
+  // so every candidate is scored against every hero on the board.
+  vsEnemy?: Map<string, number>;
+  withAlly?: Map<string, number>;
+}
+
+/** Matrix entry as returned by HeroMetaService.getMatchups (Moonton ids). */
+export interface MatrixRef {
+  heroId: number | null;
+  increaseWinRate: number;
+}
+
+/**
+ * Builds the meta of a picked hero from its full matchup matrix, keyed by OUR
+ * hero ids. The top-5 lists are derived from the matrix for display/fallback.
+ * Returns null when both matrices are empty.
+ */
+export function toPickedMeta(
+  heroId: string,
+  counters: MatrixRef[],
+  teammates: MatrixRef[],
+  byMoontonId: Map<number, string>,
+): PickedHeroMeta | null {
+  const toMap = (list: MatrixRef[]) => {
+    const map = new Map<string, number>();
+    for (const r of list ?? []) {
+      const id = r?.heroId != null ? byMoontonId.get(Number(r.heroId)) : undefined;
+      if (id && id !== heroId && typeof r.increaseWinRate === 'number') map.set(id, r.increaseWinRate);
+    }
+    return map;
+  };
+  const vsEnemy = toMap(counters);
+  const withAlly = toMap(teammates);
+  if (!vsEnemy.size && !withAlly.size) return null;
+
+  const top = (map: Map<string, number>, dir: 1 | -1) =>
+    [...map.entries()]
+      .filter(([, v]) => dir * v > 0)
+      .sort((a, b) => dir * (b[1] - a[1]))
+      .slice(0, 5)
+      .map(([id]) => id);
+
+  return {
+    heroId,
+    strongAgainst: top(vsEnemy, 1),
+    weakAgainst: top(vsEnemy, -1),
+    bestTeammates: top(withAlly, 1),
+    vsEnemy: vsEnemy.size ? vsEnemy : undefined,
+    withAlly: withAlly.size ? withAlly : undefined,
+  };
 }
 
 export interface SuggestionContext {
@@ -51,7 +103,19 @@ export const WEIGHTS = {
   winRate: 0.6, // per point above 50%
   banRate: 0.3, // per point (ban suggestions)
   pickRate: 0.1, // per point
+  // Full-matrix weights, per point of win-rate change.
+  matrixCounter: 6, // candidate lowers (or raises) an enemy pick's win rate
+  matrixSynergy: 4, // candidate raises an ally pick's win rate
+  matrixThreat: 7, // ban: candidate lowers an ally pick's win rate
+  matrixEnemySynergy: 4, // ban: candidate raises an enemy pick's win rate
 };
+
+// Minimum matrix effect (points) for a pair to be named in the reasons.
+export const MATRIX_REASON_THRESHOLD = 1.5;
+// Cap of a single pair's matrix effect (points), so one outlier cannot dominate.
+export const MATRIX_CAP = 8;
+
+const capped = (v: number) => Math.max(-MATRIX_CAP, Math.min(MATRIX_CAP, v));
 
 const LANE_LABEL: Record<string, string> = {
   gold: 'Gold',
@@ -149,27 +213,45 @@ export class PickBanSuggestionService {
     for (const enemyId of ctx.enemyPicks) {
       const meta = ctx.pickedMeta.get(enemyId);
       if (!meta) continue;
-      if (meta.weakAgainst.includes(hero.id)) counters.push(this.nameOf(enemyId, byId));
-      if (meta.strongAgainst.includes(hero.id)) counteredBy.push(this.nameOf(enemyId, byId));
+      if (meta.vsEnemy) {
+        // Matrix: the enemy's win rate change when facing this candidate.
+        const enemyDelta = meta.vsEnemy.get(hero.id);
+        if (enemyDelta == null) continue;
+        const edge = capped(-enemyDelta);
+        score += edge * WEIGHTS.matrixCounter;
+        if (edge >= MATRIX_REASON_THRESHOLD) counters.push(this.nameOf(enemyId, byId));
+        else if (edge <= -MATRIX_REASON_THRESHOLD) counteredBy.push(this.nameOf(enemyId, byId));
+        continue;
+      }
+      if (meta.weakAgainst.includes(hero.id)) {
+        counters.push(this.nameOf(enemyId, byId));
+        score += WEIGHTS.countersEnemy;
+      }
+      if (meta.strongAgainst.includes(hero.id)) {
+        counteredBy.push(this.nameOf(enemyId, byId));
+        score += WEIGHTS.counteredByEnemy;
+      }
     }
-    if (counters.length) {
-      score += counters.length * WEIGHTS.countersEnemy;
-      reasons.push({ kind: 'counters', names: counters });
-    }
-    if (counteredBy.length) {
-      score += counteredBy.length * WEIGHTS.counteredByEnemy;
-      reasons.push({ kind: 'counteredBy', names: counteredBy });
-    }
+    if (counters.length) reasons.push({ kind: 'counters', names: counters });
+    if (counteredBy.length) reasons.push({ kind: 'counteredBy', names: counteredBy });
 
     const synergies: string[] = [];
     for (const allyId of ctx.allyPicks) {
       const meta = ctx.pickedMeta.get(allyId);
-      if (meta?.bestTeammates.includes(hero.id)) synergies.push(this.nameOf(allyId, byId));
+      if (!meta) continue;
+      if (meta.withAlly) {
+        const gain = meta.withAlly.get(hero.id);
+        if (gain == null) continue;
+        score += capped(gain) * WEIGHTS.matrixSynergy;
+        if (gain >= MATRIX_REASON_THRESHOLD) synergies.push(this.nameOf(allyId, byId));
+        continue;
+      }
+      if (meta.bestTeammates.includes(hero.id)) {
+        synergies.push(this.nameOf(allyId, byId));
+        score += WEIGHTS.synergyWithAlly;
+      }
     }
-    if (synergies.length) {
-      score += synergies.length * WEIGHTS.synergyWithAlly;
-      reasons.push({ kind: 'synergy', names: synergies });
-    }
+    if (synergies.length) reasons.push({ kind: 'synergy', names: synergies });
 
     const lanes = (hero.laneKeys ?? []).filter((l) => uncovered.has(l));
     if (lanes.length) {
@@ -192,22 +274,40 @@ export class PickBanSuggestionService {
     const threatens: string[] = [];
     for (const allyId of ctx.allyPicks) {
       const meta = ctx.pickedMeta.get(allyId);
-      if (meta?.weakAgainst.includes(hero.id)) threatens.push(this.nameOf(allyId, byId));
+      if (!meta) continue;
+      if (meta.vsEnemy) {
+        // Matrix: our pick's win rate change when this candidate is an enemy.
+        const delta = meta.vsEnemy.get(hero.id);
+        if (delta == null) continue;
+        const threat = capped(-delta);
+        score += threat * WEIGHTS.matrixThreat;
+        if (threat >= MATRIX_REASON_THRESHOLD) threatens.push(this.nameOf(allyId, byId));
+        continue;
+      }
+      if (meta.weakAgainst.includes(hero.id)) {
+        threatens.push(this.nameOf(allyId, byId));
+        score += WEIGHTS.threatensAlly;
+      }
     }
-    if (threatens.length) {
-      score += threatens.length * WEIGHTS.threatensAlly;
-      reasons.push({ kind: 'threatens', names: threatens });
-    }
+    if (threatens.length) reasons.push({ kind: 'threatens', names: threatens });
 
     const pairsWith: string[] = [];
     for (const enemyId of ctx.enemyPicks) {
       const meta = ctx.pickedMeta.get(enemyId);
-      if (meta?.bestTeammates.includes(hero.id)) pairsWith.push(this.nameOf(enemyId, byId));
+      if (!meta) continue;
+      if (meta.withAlly) {
+        const gain = meta.withAlly.get(hero.id);
+        if (gain == null) continue;
+        score += capped(gain) * WEIGHTS.matrixEnemySynergy;
+        if (gain >= MATRIX_REASON_THRESHOLD) pairsWith.push(this.nameOf(enemyId, byId));
+        continue;
+      }
+      if (meta.bestTeammates.includes(hero.id)) {
+        pairsWith.push(this.nameOf(enemyId, byId));
+        score += WEIGHTS.synergyWithEnemy;
+      }
     }
-    if (pairsWith.length) {
-      score += pairsWith.length * WEIGHTS.synergyWithEnemy;
-      reasons.push({ kind: 'pairsWith', names: pairsWith });
-    }
+    if (pairsWith.length) reasons.push({ kind: 'pairsWith', names: pairsWith });
 
     score += this.metaScore(hero, 'ban', reasons);
     return { hero, score, reasons };

@@ -1,0 +1,81 @@
+{
+  "_request": {
+    "url": "https://api.gms.moontontech.com/api/gms/source/2713644/2755186",
+    "body": {
+      "pageSize": 20,
+      "pageIndex": 1,
+      "filters": [
+        {
+          "field": "main_heroid",
+          "operator": "eq",
+          "value": 6
+        },
+        {
+          "field": "bigrank",
+          "operator": "eq",
+          "value": "7"
+        },
+        {
+          "field": "match_type",
+          "operator": "eq",
+          "value": 1
+        }
+      ],
+      "sorts": []
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "OK",
+    "data": {
+      "records": [
+        {
+          "_createdAt": 1725607498223,
+          "_id": "66daae4aaf5771f18c50393e",
+          "_updatedAt": 1789914300091,
+          "data": {
+            "bigrank": "7",
+            "camp_type": "1",
+            "main_heroid": 6,
+            "match_type": "1",
+            "win_rate": [
+              {
+                "app_rate": 0.008867,
+                "ban_rate": 0.014193,
+                "date": "2026-09-19",
+                "win_rate": 0.403568
+              },
+              {
+                "app_rate": 0.008467,
+                "ban_rate": 0.013178,
+                "date": "2026-09-18",
+                "win_rate": 0.397129
+              },
+              {
+                "app_rate": 0.008329,
+                "ban_rate": 0.01286,
+                "date": "2026-09-17",
+                "win_rate": 0.392267
+              },
+              {
+                "app_rate": 0.008315,
+                "ban_rate": 0.012853,
+                "date": "2026-09-16",
+                "win_rate": 0.390705
+              },
+              {
+                "app_rate": 0.016631,
+                "ban_rate": 0.075665,
+                "date": "2026-09-15",
+                "win_rate": 0.449268
+              }
+            ]
+          },
+          "id": 103059,
+          "sourceId": 2755186
+        }
+      ],
+      "total": 1
+    }
+  }
+}

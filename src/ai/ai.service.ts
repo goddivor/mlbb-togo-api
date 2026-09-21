@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MlbbService } from '../mlbb/mlbb.service';
+import { HeroMetaService } from '../mlbb/hero-meta.service';
 import { parseJson } from '../common/utils/json.util';
 import {
   ANTHROPIC_CLIENT,
@@ -79,6 +80,7 @@ export class AiService {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly mlbb: MlbbService,
+    private readonly heroMeta: HeroMetaService,
     @Optional() @Inject(ANTHROPIC_CLIENT) private readonly client: AnthropicLike | null = null,
     @Optional() limiter?: RateLimiter,
     @Optional() cache?: TtlCache<unknown>,
@@ -186,7 +188,8 @@ export class AiService {
     const id = await this.moontonId(hero);
     if (!id) return null;
     try {
-      return (await this.mlbb.getHeroMeta(id, lang)) as HeroMeta;
+      // Full matrix included so counters/builds score every matchup.
+      return (await this.heroMeta.getHeroMeta(id, lang, { matrix: true })) as HeroMeta;
     } catch (err) {
       this.logger.warn(`getHeroMeta(${id}) failed: ${(err as Error).message}`);
       return null;
@@ -197,9 +200,9 @@ export class AiService {
   private async metaWinRates(lang: AiLang): Promise<Map<string, number>> {
     const map = new Map<string, number>();
     try {
-      const { ranking } = await this.mlbb.getHeroRanking({ limit: 400, lang });
-      for (const r of ranking ?? []) {
-        if (r?.name && typeof r.winRate === 'number') map.set(String(r.name).toLowerCase(), Math.round(r.winRate * 1000) / 10);
+      const { heroes } = await this.heroMeta.getRanking({ rank: 'all', days: 1, lang });
+      for (const r of heroes ?? []) {
+        if (r?.name && typeof r.winRate === 'number') map.set(String(r.name).toLowerCase(), Math.round(r.winRate * 10) / 10);
       }
     } catch (err) {
       this.logger.debug(`ranking unavailable: ${(err as Error).message}`);

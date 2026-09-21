@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { serializeUserCard } from '../users/users.service';
+import { PUBLIC_USER_WHERE } from '../users/public-user.filter';
 
 type SearchPattern = { contains: string; mode: 'insensitive' };
 
@@ -48,12 +49,11 @@ export class SearchService {
   }
 
   private async searchUsers(pattern: SearchPattern, limit: number) {
-    // Public endpoint: exclude banned users and staff (admin/moderator).
+    // Public endpoint: exclude banned users and system accounts (staff stay visible).
     const users = await this.prisma.user.findMany({
       where: {
         username: pattern,
-        isBanned: false,
-        roleUser: { notIn: ['admin', 'moderator'] },
+        ...PUBLIC_USER_WHERE,
       },
       take: limit,
     });

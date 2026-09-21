@@ -32,6 +32,7 @@ import {
   stageFromType,
   typeFromStage,
 } from './esport-match-details';
+import { hasAnyPermission, hasPermission } from '../access/permissions';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
 export const MATCH_TYPES = ['friendly', 'training', 'official'];
@@ -286,7 +287,7 @@ export class EsportService {
 
   // Admin, or captain of the team concerned.
   private async assertTeamManager(teamId: string, user: any) {
-    if (user?.roleUser === 'admin') return;
+    if (hasPermission(user, 'admin.esport')) return;
     if (user?.id && (await this.isCaptain(teamId, user.id))) return;
     throw new ForbiddenException("Réservé au capitaine de l'équipe.");
   }
@@ -325,7 +326,7 @@ export class EsportService {
       where: { teamId_userId: { teamId, userId } },
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
-    const isAdmin = user?.roleUser === 'admin';
+    const isAdmin = hasPermission(user, 'admin.esport');
     const role = data.role === undefined ? undefined : assertRole(data.role);
 
     // Only the admin can change the captain status.
@@ -353,7 +354,7 @@ export class EsportService {
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
     // The captain cannot remove himself (the captain).
-    if (user?.roleUser !== 'admin' && member.isCaptain)
+    if (!hasPermission(user, 'admin.esport') && member.isCaptain)
       throw new ForbiddenException('Le capitaine ne peut pas être retiré.');
     await this.prisma.esportTeamMember.delete({
       where: { teamId_userId: { teamId, userId } },
@@ -610,8 +611,10 @@ export class EsportService {
   }
 
   // Admin, or captain of one of the two teams (except official).
-  private async assertMatchManager(match: any, user: any) {
-    if (user?.roleUser === 'admin') return;
+  // `extra` lists additional permissions accepted for this action (e.g.
+  // `matches.validate` for results and match sheets).
+  private async assertMatchManager(match: any, user: any, extra: string[] = []) {
+    if (hasAnyPermission(user, ['admin.matches', ...extra])) return;
     if (resolveStage(match) !== 'scrim')
       throw new ForbiddenException(
         "Seul l'administrateur peut gérer une rencontre officielle.",
@@ -640,7 +643,7 @@ export class EsportService {
     if (data.seasonId) season = await this.getSeason(data.seasonId);
 
     // The captain can only create friendly/training matches for his team.
-    if (user && user.roleUser !== 'admin') {
+    if (user && !hasPermission(user, 'admin.matches')) {
       if (type === 'official')
         throw new ForbiddenException(
           "Seul l'administrateur peut planifier une rencontre officielle.",
@@ -656,7 +659,7 @@ export class EsportService {
     let stage = isStage(data?.stage) ? data.stage : stageFromType(type);
     if (!isStage(data?.stage) && type === 'official' && season && resolveStatus(season) === 'playoffs')
       stage = 'playoff';
-    if (stage !== 'scrim' && user && user.roleUser !== 'admin')
+    if (stage !== 'scrim' && user && !hasPermission(user, 'admin.matches'))
       throw new ForbiddenException("Seul l'administrateur peut planifier une rencontre officielle.");
     const format = isFormat(data?.format) ? data.format : null;
 
@@ -695,7 +698,7 @@ export class EsportService {
     } else if (patch.type && patch.type !== raw.type) {
       patch.stage = stageFromType(patch.type);
     }
-    if ((patch.stage ?? resolveStage(raw)) !== 'scrim' && user?.roleUser !== 'admin')
+    if ((patch.stage ?? resolveStage(raw)) !== 'scrim' && !hasPermission(user, 'admin.matches'))
       throw new ForbiddenException("Seul l'administrateur peut gérer une rencontre officielle.");
     if (data.format !== undefined) {
       if (data.format !== null && data.format !== '' && !isFormat(data.format))
@@ -728,7 +731,7 @@ export class EsportService {
   async setMatchResult(id: string, data: any, user?: any) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id } });
     if (!m) throw new NotFoundException('Match introuvable.');
-    await this.assertMatchManager(m, user);
+    await this.assertMatchManager(m, user, ['matches.validate']);
     const details = await this.normalizeDetails(m, data ?? {});
     const games: MatchGame[] = details.games ?? parseGames(m.games);
 
@@ -784,7 +787,7 @@ export class EsportService {
   async setMatchDetails(id: string, data: any, user?: any) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id } });
     if (!m) throw new NotFoundException('Match introuvable.');
-    await this.assertMatchManager(m, user);
+    await this.assertMatchManager(m, user, ['matches.validate']);
     const details = await this.normalizeDetails(m, data ?? {});
     if (details.games && m.status === 'completed')
       assertResultMatchesGames(details.games, m, {
@@ -971,7 +974,7 @@ export class EsportService {
   async setMatchPlayers(matchId: string, input: any, user?: any) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id: matchId } });
     if (!m) throw new NotFoundException('Match introuvable.');
-    await this.assertMatchManager(m, user);
+    await this.assertMatchManager(m, user, ['matches.validate']);
     const list: any[] = Array.isArray(input) ? input : [];
     const entries = list.map((p) => this.normalizePlayerEntry(p, m));
 
@@ -1020,7 +1023,7 @@ export class EsportService {
   async removeMatchPlayer(matchId: string, userId: string, user?: any) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id: matchId } });
     if (!m) throw new NotFoundException('Match introuvable.');
-    await this.assertMatchManager(m, user);
+    await this.assertMatchManager(m, user, ['matches.validate']);
     await this.prisma.esportMatchPlayer.deleteMany({ where: { matchId, userId } });
     if (m.mvpUserId === userId)
       await this.prisma.esportMatch.update({ where: { id: matchId }, data: { mvpUserId: null } });

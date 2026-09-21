@@ -8,8 +8,8 @@ import { parseJson, toJson } from '../common/utils/json.util';
 import { computeWinRate } from '../users/users.service';
 import { CreateTeamDto } from './dto/create-team.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
+import { PermissionSubject, hasAnyPermission } from '../access/permissions';
 
-const STAFF_ROLES = ['admin', 'moderator'];
 
 @Injectable()
 export class TeamsService {
@@ -65,11 +65,12 @@ export class TeamsService {
   /** Only the team captain (or staff) may modify or delete a team. */
   private async assertCanManage(
     id: string,
-    user?: { id?: string; roleUser?: string },
+    user?: { id?: string } & PermissionSubject,
   ) {
     const team = await this.prisma.team.findUnique({ where: { id } });
     if (!team) throw new NotFoundException('Équipe introuvable.');
-    const isStaff = STAFF_ROLES.includes(user?.roleUser ?? '');
+    // Staff override: esport managers or forum moderators.
+    const isStaff = hasAnyPermission(user, ['admin.esport', 'forum.moderate']);
     if (team.captainId !== user?.id && !isStaff) {
       throw new ForbiddenException('Action réservée au capitaine de l\'équipe.');
     }
@@ -79,7 +80,7 @@ export class TeamsService {
   async update(
     id: string,
     dto: UpdateTeamDto,
-    user?: { id?: string; roleUser?: string },
+    user?: { id?: string } & PermissionSubject,
   ) {
     await this.assertCanManage(id, user);
     const data: any = {};
@@ -98,7 +99,7 @@ export class TeamsService {
     return this.serialize(team);
   }
 
-  async remove(id: string, user?: { id?: string; roleUser?: string }) {
+  async remove(id: string, user?: { id?: string } & PermissionSubject) {
     await this.assertCanManage(id, user);
     await this.prisma.team.delete({ where: { id } });
     return { success: true };

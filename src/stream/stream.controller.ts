@@ -17,10 +17,9 @@ import { UpdateStreamConfigDto } from './dto/update-stream-config.dto';
 import { SetSeasonVideosDto } from './dto/set-season-videos.dto';
 import { StartLiveDto } from './dto/start-live.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
-const ADMIN = ['admin', 'moderator'];
 
 @Controller('stream')
 export class StreamController {
@@ -53,16 +52,16 @@ export class StreamController {
   }
 
   // Admin: videos attached to a given season.
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Get('seasons/:seasonId/videos')
   getSeasonVideos(@Param('seasonId') seasonId: string) {
     return this.streamService.getSeasonVideos(seasonId);
   }
 
   // Admin: replace a season's video selection.
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Put('seasons/:seasonId/videos')
   setSeasonVideos(
     @Param('seasonId') seasonId: string,
@@ -93,15 +92,15 @@ export class StreamController {
 
   /* ---------------- Admin: config ---------------- */
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Patch('config')
   updateConfig(@Body() dto: UpdateStreamConfigDto) {
     return this.streamService.updateConfig(dto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Post('refresh')
   refresh() {
     return this.streamService.refreshChannel();
@@ -109,29 +108,29 @@ export class StreamController {
 
   /* ---------------- Admin: YouTube connection ---------------- */
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Get('youtube/connect')
   connect() {
     return { url: this.youtube.getAuthUrl() };
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Get('youtube/status')
   status() {
     return this.youtube.getStatus();
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Post('youtube/disconnect')
   disconnect() {
     return this.youtube.disconnect();
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Get('youtube/videos')
   videos(@Query('pageToken') pageToken?: string) {
     return this.youtube.listVideos(pageToken);
@@ -139,22 +138,22 @@ export class StreamController {
 
   /* ---------------- Admin: live control ---------------- */
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Get('live/panel')
   livePanel() {
     return this.youtube.getLivePanel();
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Post('live/start')
   startLive(@Body() dto: StartLiveDto) {
     return this.youtube.startLive(dto.title, dto.description, dto.privacy);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...ADMIN)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.stream')
   @Post('live/stop')
   stopLive() {
     return this.youtube.stopLive();

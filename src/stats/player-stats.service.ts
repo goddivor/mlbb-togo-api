@@ -9,6 +9,7 @@ import {
   mergeBadges,
   resultFor,
 } from './player-stats.util';
+import { isHiddenAccount } from '../users/public-user.filter';
 
 const MAX_PAGE_SIZE = 50;
 
@@ -19,9 +20,9 @@ export class PlayerStatsService {
   private async assertPlayer(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, roleUser: true, badges: true },
+      select: { id: true, isSystemAccount: true, badges: true },
     });
-    if (!user || user.roleUser === 'admin' || user.roleUser === 'moderator')
+    if (!user || isHiddenAccount(user))
       throw new NotFoundException('Utilisateur introuvable.');
     return user;
   }

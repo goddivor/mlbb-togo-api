@@ -6,6 +6,7 @@ import {
   LeaderboardMetric,
   LeaderboardQueryDto,
 } from './dto/leaderboard-query.dto';
+import { PUBLIC_USER_WHERE, isHiddenAccount } from './public-user.filter';
 
 export function decodeRank(level?: number | null): string | null {
   if (level == null) return null;
@@ -172,7 +173,7 @@ export class UsersService {
   async findAll() {
     // Staff accounts (admin/moderator) are special control accounts, not players.
     const users = await this.prisma.user.findMany({
-      where: { isBanned: false, roleUser: { notIn: ['admin', 'moderator'] } },
+      where: { ...PUBLIC_USER_WHERE },
     });
     // Gamification level shown on player cards (users without progress: null).
     const levels = new Map(
@@ -203,6 +204,8 @@ export class UsersService {
       avatar: serializeUserCard(u).avatar,
       email: u.email,
       roleUser: u.roleUser,
+      roleIds: u.roleIds ?? [],
+      isSystemAccount: u.isSystemAccount === true,
       isBanned: u.isBanned,
       isOnline: u.isOnline,
       country: u.country,
@@ -218,7 +221,7 @@ export class UsersService {
 
   async findPublic(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user || user.roleUser === 'admin' || user.roleUser === 'moderator') {
+    if (!user || isHiddenAccount(user)) {
       throw new NotFoundException('Utilisateur introuvable.');
     }
     return serializePublicUser(user);
@@ -252,11 +255,8 @@ export class UsersService {
     const minGames = query.minGames ?? 0;
 
     // Public endpoint: never leak PII (email, googleId, tokens, prefs...) and
-    // exclude staff/banned accounts, exactly like the public directory.
-    const where: Record<string, any> = {
-      isBanned: false,
-      roleUser: { notIn: ['admin', 'moderator'] },
-    };
+    // exclude banned/system accounts, exactly like the public directory.
+    const where: Record<string, any> = { ...PUBLIC_USER_WHERE };
     if (query.role) where.role = query.role;
 
     if (query.seasonId) {
@@ -311,24 +311,41 @@ export class UsersService {
 
   async remove(id: string) {
     await this.findOne(id);
-    await this.prisma.user.delete({ where: { id } });
+    await this.purgeUser(id);
     return { success: true };
   }
 
   /** Self-deletion: remove the account and clean up its owned relations. */
   async deleteSelf(id: string) {
     await this.findOne(id);
-    await Promise.all([
-      this.prisma.friendship.deleteMany({
+    await this.purgeUser(id);
+    return { success: true };
+  }
+
+  /**
+   * Deletes a user and every row that references him, in ONE transaction:
+   * either the whole account goes, or nothing is touched. Rows whose Prisma
+   * relation to User would block the delete (posts, comments, Pick & Ban
+   * drafts) are removed first; comments of others on his posts go with the
+   * posts.
+   */
+  private async purgeUser(id: string) {
+    const p = this.prisma;
+    await p.$transaction([
+      p.friendship.deleteMany({
         where: { OR: [{ requesterId: id }, { addresseeId: id }] },
       }),
-      this.prisma.notification.deleteMany({ where: { userId: id } }),
-      this.prisma.esportTeamMember.deleteMany({ where: { userId: id } }),
-      this.prisma.esportMatchPlayer.deleteMany({ where: { userId: id } }),
-      this.prisma.recruitmentApplication.deleteMany({ where: { userId: id } }),
+      p.notification.deleteMany({ where: { userId: id } }),
+      p.esportTeamMember.deleteMany({ where: { userId: id } }),
+      p.esportMatchPlayer.deleteMany({ where: { userId: id } }),
+      p.recruitmentApplication.deleteMany({ where: { userId: id } }),
+      p.gameMatch.deleteMany({ where: { userId: id } }),
+      p.gameSeasonStats.deleteMany({ where: { userId: id } }),
+      p.pickBanDraft.deleteMany({ where: { ownerId: id } }),
+      p.comment.deleteMany({ where: { OR: [{ authorId: id }, { post: { authorId: id } }] } }),
+      p.post.deleteMany({ where: { authorId: id } }),
+      p.user.delete({ where: { id } }),
     ]);
-    await this.prisma.user.delete({ where: { id } });
-    return { success: true };
   }
 
   async setBan(id: string, isBanned: boolean) {
@@ -340,11 +357,11 @@ export class UsersService {
     return serializeUser(user);
   }
 
-  async setRole(id: string, roleUser: string) {
+  async setSystemAccount(id: string, isSystemAccount: boolean) {
     await this.findOne(id);
     const user = await this.prisma.user.update({
       where: { id },
-      data: { roleUser },
+      data: { isSystemAccount },
     });
     return serializeUser(user);
   }

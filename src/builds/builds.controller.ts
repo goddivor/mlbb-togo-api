@@ -2,8 +2,8 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@n
 import { BuildsService } from './builds.service';
 import { CreateBuildDto, UpdateBuildDto } from './dto/build.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
 @Controller('heroes/:heroId/builds')
 export class BuildsController {
@@ -19,22 +19,22 @@ export class BuildsController {
     return this.buildsService.findOne(buildId);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Post()
   async create(@Param('heroId') heroId: string, @Body() data: CreateBuildDto) {
     return this.buildsService.create(heroId, data);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Patch(':buildId')
   async update(@Param('buildId') buildId: string, @Body() data: UpdateBuildDto) {
     return this.buildsService.update(buildId, data);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Delete(':buildId')
   async delete(@Param('buildId') buildId: string) {
     return this.buildsService.delete(buildId);

@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { MlbbService } from '../mlbb/mlbb.service';
+import { HeroMetaService } from '../mlbb/hero-meta.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import {
   CreatePickBanDraftDto,
@@ -19,6 +19,7 @@ import {
   HeroCandidate,
   PickBanSuggestionService,
   PickedHeroMeta,
+  toPickedMeta,
 } from './pickban-suggestion.service';
 import {
   DraftOrderError,
@@ -59,7 +60,7 @@ export class PickBanService {
 
   constructor(
     private prisma: PrismaService,
-    private mlbb: MlbbService,
+    private heroMeta: HeroMetaService,
     private suggestion: PickBanSuggestionService,
   ) {}
 
@@ -101,21 +102,15 @@ export class PickBanService {
     };
   }
 
-  // Current-season win/pick/ban rates from the Moonton ranking (all ranks).
-  // Empty map when the proxy is unavailable so the board still works.
+  // Current win/pick/ban rates (%) from the Moonton ranking (all ranks, 1 day).
+  // Empty map when Moonton is unavailable so the board still works.
   private async getRates(): Promise<Map<number, HeroRates>> {
     if (this.ratesCache && this.ratesCache.expiresAt > Date.now()) return this.ratesCache.rates;
     const rates = new Map<number, HeroRates>();
     try {
-      const res: any = await this.mlbb.getHeroRanking({ limit: 200 });
-      for (const r of res?.ranking ?? []) {
-        const id = Number(r?.heroId);
-        if (!id) continue;
-        rates.set(id, {
-          winRate: this.pct(r.winRate),
-          pickRate: this.pct(r.pickRate),
-          banRate: this.pct(r.banRate),
-        });
+      const res = await this.heroMeta.getRanking({ rank: 'all', days: 1 });
+      for (const r of res.heroes) {
+        rates.set(r.heroId, { winRate: r.winRate, pickRate: r.pickRate, banRate: r.banRate });
       }
       this.ratesCache = { rates, expiresAt: Date.now() + META_TTL_MS };
     } catch (err) {
@@ -125,7 +120,7 @@ export class PickBanService {
     return rates;
   }
 
-  // Moonton rates are fractions (0.52); tolerate percentages as well.
+  // Stored stats may carry fractions (0.52) or percentages; normalize to %.
   private pct(n: any): number | null {
     if (typeof n !== 'number' || Number.isNaN(n)) return null;
     return Math.round((n <= 1 ? n * 100 : n) * 10) / 10;
@@ -272,8 +267,9 @@ export class PickBanService {
     return { suggestions, action: step.action, team: step.team, metaAvailable };
   }
 
-  // Meta (counters/synergies) of one hero on the board, cached per hero id.
-  // Returns null when the Moonton proxy is unavailable (graceful degradation).
+  // Full matchup matrix of one hero on the board (every enemy and every
+  // teammate, Academy), mapped to OUR hero ids and cached per hero id.
+  // Returns null when Moonton is unavailable (graceful degradation).
   private async getPickedMeta(
     hero: HeroCandidate & { heroId: number | null },
     byMoontonId: Map<number, string>,
@@ -283,17 +279,9 @@ export class PickBanService {
     if (cached && cached.expiresAt > Date.now()) return cached.meta;
 
     try {
-      const raw = await this.mlbb.getHeroMeta(hero.heroId);
-      const map = (list: any[]): string[] =>
-        (Array.isArray(list) ? list : [])
-          .map((x) => byMoontonId.get(Number(x?.heroId)))
-          .filter((id): id is string => !!id);
-      const meta: PickedHeroMeta = {
-        heroId: hero.id,
-        strongAgainst: map(raw?.counters?.strong),
-        weakAgainst: map(raw?.counters?.weak),
-        bestTeammates: map(raw?.synergy?.best),
-      };
+      const m = await this.heroMeta.getMatchups(hero.heroId, { rank: 'all' });
+      const meta = toPickedMeta(hero.id, m.counters, m.teammates, byMoontonId);
+      if (!meta) throw new Error('empty matchup matrix');
       this.metaCache.set(hero.id, { meta, expiresAt: Date.now() + META_TTL_MS });
       return meta;
     } catch (err) {

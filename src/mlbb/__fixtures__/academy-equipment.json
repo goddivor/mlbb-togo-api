@@ -1,0 +1,80 @@
+{
+  "_request": {
+    "url": "https://api.gms.moontontech.com/api/gms/source/2713644/2775075",
+    "body": {
+      "pageSize": 5,
+      "pageIndex": 1,
+      "filters": [],
+      "sorts": []
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "OK",
+    "data": {
+      "records": [
+        {
+          "_createdAt": 1778235301837,
+          "_id": "69fdb7a52b887fe798816c64",
+          "_updatedAt": 1778235301837,
+          "data": {
+            "equipicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_e7f1b44153bd079824ececabb14cf901.png",
+            "equipid": 10002,
+            "equipname": "Bud of Hope"
+          },
+          "id": 102385,
+          "sourceId": 2775075
+        },
+        {
+          "_createdAt": 1778235301837,
+          "_id": "69fdb7a52b887fe798816c63",
+          "_updatedAt": 1778235301837,
+          "data": {
+            "equipicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_4771a1bbc392f679f4e491deb8a5c6cb.png",
+            "equipid": 10003,
+            "equipname": "Flower of Hope"
+          },
+          "id": 102384,
+          "sourceId": 2775075
+        },
+        {
+          "_createdAt": 1778235301837,
+          "_id": "69fdb7a52b887fe798816c62",
+          "_updatedAt": 1778235301837,
+          "data": {
+            "equipicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_4c8cf6531ee2dee8333f21684d72f135.png",
+            "equipid": 10000,
+            "equipname": "Shimmering Lantern"
+          },
+          "id": 102383,
+          "sourceId": 2775075
+        },
+        {
+          "_createdAt": 1778235301837,
+          "_id": "69fdb7a52b887fe798816c61",
+          "_updatedAt": 1778235301837,
+          "data": {
+            "equipicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_2e952dc82ae36183bd9be19ca59fd9bf.png",
+            "equipid": 10001,
+            "equipname": "Lantern of Hope"
+          },
+          "id": 102382,
+          "sourceId": 2775075
+        },
+        {
+          "_createdAt": 1778235301837,
+          "_id": "69fdb7a52b887fe798816c60",
+          "_updatedAt": 1778235301837,
+          "data": {
+            "equipicon": "https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_ca2a5c2be6010eb0ecff954a27bf05db.png",
+            "equipid": 3573,
+            "equipname": "Demon Boots - Favor"
+          },
+          "id": 102381,
+          "sourceId": 2775075
+        }
+      ],
+      "total": 184
+    }
+  }
+}

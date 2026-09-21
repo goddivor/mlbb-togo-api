@@ -1,9 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlayerStatsService } from '../stats/player-stats.service';
 import { UsersService, serializeUserCard } from '../users/users.service';
 import { computePlayerStats, Participation } from '../stats/player-stats.util';
 import { LeaderboardMetric } from '../users/dto/leaderboard-query.dto';
+import { GameService } from '../game/game.service';
+import { GameSyncService } from '../game/game-sync.service';
 import {
   ActivityEvent,
   UpcomingItem,
@@ -32,15 +34,24 @@ const ACTIVE_DRAFT = ['registration', 'closed', 'drafted', 'ongoing'];
 
 @Injectable()
 export class DashboardService {
+  private readonly logger = new Logger('DashboardService');
+
   constructor(
     private prisma: PrismaService,
     private playerStats: PlayerStatsService,
     private users: UsersService,
+    @Optional() private game?: GameService,
+    @Optional() private gameSync?: GameSyncService,
   ) {}
 
   /** Everything the dashboard widgets need, in one round trip. */
   async getDashboard(userId: string, now = new Date()) {
-    const [parts, lastMatches, rank, notifications, upcoming, social, counters] = await Promise.all([
+    // Opportunistic, non-blocking game refresh (rate-limited per user).
+    void this.gameSync
+      ?.maybeSyncInBackground(userId, now)
+      .catch((e) => this.logger.warn(`Game auto-sync skipped: ${e?.message ?? e}`));
+
+    const [parts, lastMatches, rank, notifications, upcoming, social, counters, game] = await Promise.all([
       this.participations(userId),
       this.lastMatches(userId),
       this.rank(userId),
@@ -51,6 +62,7 @@ export class DashboardService {
         where: { id: userId },
         select: { wins: true, losses: true, mvpCount: true, streak: true },
       }),
+      this.gameSummary(userId),
     ]);
 
     // Without per-match rows (legacy or seeded accounts) fall back on the
@@ -67,6 +79,7 @@ export class DashboardService {
     return {
       generatedAt: now,
       quickStats: stats,
+      game,
       rank,
       lastMatches: lastMatches.items,
       upcoming,
@@ -76,6 +89,16 @@ export class DashboardService {
   }
 
   // ---------------------------------------------------------------- sources
+
+  /** Cached game account data of the owner (null when unavailable). */
+  private async gameSummary(userId: string) {
+    if (!this.game) return null;
+    try {
+      return await this.game.getSummary(userId, { id: userId });
+    } catch {
+      return null;
+    }
+  }
 
   private async participations(userId: string): Promise<Participation[]> {
     return this.playerStats.getParticipations(userId);

@@ -2,8 +2,8 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@n
 import { EmblemsService } from './emblems.service';
 import { CreateEmblemDto, UpdateEmblemDto } from './dto/emblem.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 
 @Controller('emblems')
 export class EmblemsController {
@@ -19,22 +19,22 @@ export class EmblemsController {
     return this.emblemsService.findOne(id);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Post()
   async create(@Body() data: CreateEmblemDto) {
     return this.emblemsService.create(data);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Patch(':id')
   async update(@Param('id') id: string, @Body() data: UpdateEmblemDto) {
     return this.emblemsService.update(id, data);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin', 'moderator')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('admin.catalog')
   @Delete(':id')
   async delete(@Param('id') id: string) {
     return this.emblemsService.delete(id);

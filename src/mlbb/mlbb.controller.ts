@@ -1,10 +1,15 @@
 import { Controller, Get, Param, ParseIntPipe, Query, Res } from '@nestjs/common';
 import { Response } from 'express';
 import { MlbbService } from './mlbb.service';
+import { HeroMetaService } from './hero-meta.service';
+import { orUnavailable } from './gms-http.util';
 
 @Controller('mlbb')
 export class MlbbController {
-  constructor(private readonly mlbb: MlbbService) {}
+  constructor(
+    private readonly mlbb: MlbbService,
+    private readonly heroMeta: HeroMetaService,
+  ) {}
 
   @Get('image')
   async image(
@@ -36,23 +41,26 @@ export class MlbbController {
     return this.mlbb.getShowcaseHeroes(count ? Number(count) : 6, lang || 'en');
   }
 
+  // Legacy ranking shape (rates as fractions). Prefer GET /heroes/meta/ranking.
   @Get('ranking')
   getRanking(
     @Query('rank') rank?: string,
-    @Query('matchType') matchType?: string,
+    @Query('days') days?: string,
     @Query('limit') limit?: string,
     @Query('sort') sort?: 'winRate' | 'pickRate' | 'banRate',
     @Query('order') order?: 'desc' | 'asc',
     @Query('lang') lang?: string,
   ) {
-    return this.mlbb.getHeroRanking({
-      rank,
-      matchType: matchType != null ? Number(matchType) : undefined,
-      limit: limit != null ? Number(limit) : undefined,
-      sort,
-      order,
-      lang: lang || 'en',
-    });
+    return orUnavailable(
+      this.heroMeta.getHeroRanking({
+        rank,
+        days: days != null ? Number(days) : undefined,
+        limit: limit != null ? Number(limit) : undefined,
+        sort,
+        order,
+        lang: lang || 'en',
+      }),
+    );
   }
 
   @Get('heroes/:heroId')
@@ -62,6 +70,6 @@ export class MlbbController {
 
   @Get('heroes/:heroId/meta')
   getHeroMeta(@Param('heroId', ParseIntPipe) heroId: number, @Query('lang') lang?: string) {
-    return this.mlbb.getHeroMeta(heroId, lang || 'en');
+    return this.heroMeta.getHeroMeta(heroId, lang || 'en');
   }
 }

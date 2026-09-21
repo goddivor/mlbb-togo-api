@@ -181,7 +181,7 @@ describe('SearchService', () => {
       );
     });
 
-    it('excludes staff (admin/moderator) users', async () => {
+    it('excludes banned and system accounts but keeps staff players', async () => {
       prisma.user.findMany.mockResolvedValue([]);
       prisma.hero.findMany.mockResolvedValue([]);
       prisma.team.findMany.mockResolvedValue([]);
@@ -193,7 +193,8 @@ describe('SearchService', () => {
       expect(prisma.user.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            roleUser: { notIn: ['admin', 'moderator'] },
+            isBanned: false,
+            isSystemAccount: false,
           }),
         }),
       );
