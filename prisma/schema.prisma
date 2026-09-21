@@ -45,6 +45,7 @@ model User {
   gameAvatar     String?
   gameLevel      Int?
   gameRankLevel  Int?
+  gamePeakRankLevel Int?
   gameCountry    String?
   gameStats      String    @default("{}")
   gameFrequentHeroes String @default("[]")
@@ -53,11 +54,16 @@ model User {
   gameSyncedAt   DateTime?
 
   profileSource  String    @default("game")
+
+  // User preferences (settings page).
+  notifPrefs     Json?
+  privacy        Json?
   teamId         String?   @db.ObjectId
   team           Team?     @relation("TeamMembers", fields: [teamId], references: [id])
   posts          Post[]
   comments       Comment[]
   esportMemberships EsportTeamMember[] @relation("EsportMemberships")
+  pickbanDrafts  PickBanDraft[] @relation("PickBanDrafts")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 }
@@ -96,8 +102,27 @@ model Post {
   views      Int       @default(0)
   isPinned   Boolean   @default(false)
   comments   Comment[]
+  // Communication feed (issue #49): share counter, rich content and sponsoring.
+  shares        Int        @default(0)
+  contentFormat String     @default("text")
+  images        String     @default("[]")
+  isSponsored   Boolean    @default(false)
+  sponsorId     String?    @db.ObjectId
+  postLikes     PostLike[]
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+}
+
+// One row per (post, user) like so the like action is an idempotent toggle.
+// `Post.likes` is kept in sync as a denormalized counter.
+model PostLike {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  postId    String   @db.ObjectId
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String   @db.ObjectId
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
 }
 
 model Comment {
@@ -127,6 +152,9 @@ model Tournament {
   banner          String?
   brackets        String   @default("[]")
   streamUrl       String?
+  mvpUserId       String?  @db.ObjectId
+  // Host city (Togo map, issue #70). Free text normalized by src/geo.
+  city            String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
@@ -142,6 +170,8 @@ model Event {
   participants String   @default("[]")
   organizer    String?
   isPublic     Boolean  @default(true)
+  // Host city (Togo map, issue #70).
+  city         String?
   createdAt    DateTime @default(now())
 }
 
@@ -165,7 +195,91 @@ model Hero {
   role        String
   image       String?
   description String?
+
+  // Cache of MLBB data (avoids calling the API on every display).
+  // Optional fields/arrays: safe for reading existing documents.
+  heroId      Int?
+  roles       String[] // playable classes (assassin, mage, fighter...)
+  laneKeys    String[] // recommended lanes (gold/exp/jungle/mid/roam)
+  art         String?  // splash art
+  thumb       String?  // thumbnail
+  stats       Json? // win/pick/ban and meta (MLBB cache)
+  speciality  String[]
+  source      String? // "seed" | "mlbb"
+  syncedAt    DateTime?
+
   createdAt   DateTime @default(now())
+}
+
+// The 5 MLBB lanes. Few rows, but the description and icon (SVG)
+// are editable by the admin (useful when Moonton reworks the game).
+// `compatibleClasses` encodes which classes can hold the lane, without
+// contradiction (e.g. jungle = assassin + fighter, roam = tank + support).
+model Lane {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  key               String   @unique // gold | exp | jungle | mid | roam
+  name              String // "Gold Lane"
+  shortName         String? // "Gold"
+  description       String
+  icon              String // SVG URL
+  color             String?
+  compatibleClasses String[] // classes playable on this lane
+  sort              Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// ---- Game Items (edited by admin) ----
+model Item {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  icon        String?  // URL to item icon
+  type        String?  // e.g. "defense", "attack", "attack_speed", "mana", "cooldown"
+  gold        Int?     // cost in gold
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ---- Emblems (edited by admin) ----
+model Emblem {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  icon        String?  // URL to emblem icon
+  type        String?  // e.g. "support", "order", "chaos"
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ---- Battle Spells (edited by admin) ----
+model BattleSpell {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  icon        String?  // URL to battle spell icon
+  cooldown    String?  // e.g. "60s"
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ---- Hero Builds (recommended by admin per hero) ----
+model HeroBuild {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  heroId        String   @db.ObjectId
+  heroName      String   // denormalized for convenience (hero.name at creation time)
+  name          String?  // e.g. "Recommended", "Offlane", "Burst"
+  description   String?
+  itemIds       String[] // array of Item IDs in order
+  emblemId      String?  @db.ObjectId // single emblem per build
+  battleSpellId String?  @db.ObjectId // single battle spell per build
+  priority      Int      @default(0)  // higher = higher priority (displayed first)
+  sort          Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model AdminLog {
@@ -196,12 +310,34 @@ model FormResponse {
   submittedAt DateTime     @default(now())
 }
 
+model HeroRole {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String   @unique
+  name      String
+  icon      String
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PushSubscription {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+}
+
 model Notification {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   userId    String?  @db.ObjectId
   type      String
   title     String
   message   String
+  // Structured params (actor name, team name, status…) so the client can
+  // render a localized string; title/message stay as a plain-text fallback.
+  data      Json?
   read      Boolean  @default(false)
   link      String?
   createdAt DateTime @default(now())
@@ -213,6 +349,9 @@ model Esport {
   logo        String?
   color       String?
   description String?
+  // JSON object of public target figures shown on the About page
+  // ({ streamAudience, socialReach, teams, offlineEvents }), edited by the admin.
+  figures     String?
   teams       EsportTeam[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
@@ -224,10 +363,14 @@ model EsportTeam {
   image        String?
   description  String?
   type         String             @default("community")
-  isRecruiting Boolean            @default(false)
   esportId     String?            @db.ObjectId
   esport       Esport?            @relation(fields: [esportId], references: [id], onDelete: Cascade)
   members      EsportTeamMember[]
+  staff        EsportTeamStaff[]
+  // JSON array of manual honours (titles/placements) edited by the admin.
+  honours      String?
+  // Home city (Togo map, issue #70).
+  city         String?
   sort         Int                @default(0)
   foundedAt    DateTime           @default(now())
   createdAt    DateTime           @default(now())
@@ -251,24 +394,119 @@ model EsportTeamMember {
   @@unique([teamId, userId])
 }
 
+// Partner / sponsor. `tier` ranks the partnership (title | gold | silver |
+// partner), `seasonIds` links it to the league seasons it sponsors (empty =
+// every season), `isActive` hides it from public pages without deleting it.
 model Sponsor {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  name      String?
-  logo      String
-  url       String?
-  sort      Int      @default(0)
-  createdAt DateTime @default(now())
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String?
+  logo        String
+  url         String?
+  sort        Int      @default(0)
+  tier        String?
+  description String?
+  seasonIds   String[] @default([])
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
 }
 
-model EsportSeason {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
-  name        String
+// Sponsoring package shown on the public "Become a sponsor" page.
+// `benefits` is a JSON array of strings.
+model SponsorOffer {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  name       String
+  tier       String?
+  priceLabel String?
+  benefits   String   @default("[]")
+  highlight  Boolean  @default(false)
+  isActive   Boolean  @default(true)
+  sort       Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Partnership request sent from the public sponsoring form.
+// Lifecycle: new -> contacted -> accepted | declined.
+model SponsorshipRequest {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  company     String
+  contactName String
+  email       String
+  phone       String?
+  message     String
+  offerId     String?  @db.ObjectId
+  status      String   @default("new")
+  adminNote   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Season distinctions (#46): MVP, best player per lane and custom awards.
+// The fixed categories are unique per season (partial index, see
+// prisma/mongo-indexes.js); `criteria` is a JSON snapshot of the stats used.
+model SeasonAward {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  seasonId    String   @db.ObjectId
+  category    String   // mvp | best_gold | best_mid | best_jungle | best_roam | best_exp | custom
+  title       String?  // label of a custom award
+  userId      String?  @db.ObjectId
+  teamId      String?  @db.ObjectId
   description String?
-  startDate   DateTime?
-  endDate     DateTime?
-  isActive    Boolean   @default(false)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  imageUrl    String?
+  criteria    String?  // JSON: stats snapshot (games, kda, mvpCount, ...)
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([seasonId])
+}
+
+// Non-playing staff attached to a team (coach, manager, analyst...).
+// `userId` optionally links the staff entry to a platform account.
+model EsportTeamStaff {
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  teamId    String     @db.ObjectId
+  team      EsportTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId    String?    @db.ObjectId
+  name      String
+  role      String     @default("coach")
+  avatar    String?
+  bio       String?
+  sort      Int        @default(0)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([teamId])
+}
+
+// League season. `isActive` is kept in sync with `status` for backward
+// compatibility (status === 'active' || 'playoffs' <=> isActive).
+// Lifecycle: upcoming -> active -> playoffs -> closed (reopen goes back to
+// active). `summary` is a JSON snapshot frozen at closing (final standings,
+// podium) read by the Hall of Fame. `slug` is unique through a partial index
+// (see prisma/mongo-indexes.js) so legacy documents without a slug stay valid.
+model EsportSeason {
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  name              String
+  slug              String?
+  number            Int?
+  theme             String?
+  slogan            String?
+  description       String?
+  status            String?   // upcoming | active | playoffs | closed
+  startDate         DateTime?
+  endDate           DateTime?
+  playoffsStartDate DateTime?
+  closedAt          DateTime?
+  banner            String?
+  color             String?
+  summary           String?   // JSON snapshot frozen at closing
+  settings          String?   // JSON: standings settings (points, qualifyTop)
+  // JSON: manual podium overrides { regular: [{placement, teamId}] | null, playoffs: [...] | null } (#46)
+  podiums           String?
+  isActive          Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 }
 
 model EsportMatch {
@@ -283,9 +521,93 @@ model EsportMatch {
   scoreB       Int       @default(0)
   winnerTeamId String?   @db.ObjectId
   notes        String?
+  // Competition stage: scrim | league | playoff. Legacy rows (null) derive it
+  // from `type` (friendly/training -> scrim, official -> league).
+  stage        String?
+  // Series format: bo1 | bo3 | bo5 | bo7.
+  format       String?
+  // JSON array of per-game details ({ winnerTeamId, duration, mvpUserId, screenshot }).
+  games        String?
+  // JSON array of screenshot URLs (max 10).
+  screenshots  String?
+  vodUrl       String?
+  streamUrl    String?
+  // Match MVP (mirrors the `isMvp` flag of EsportMatchPlayer when stats exist).
+  mvpUserId    String?   @db.ObjectId
   createdById  String?   @db.ObjectId
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+}
+
+// Per-player participation and stats on an esport match (one row per
+// player and match). Used to build player profiles: history, win rate,
+// KDA, MVP count, badges. Additive model: existing matches simply have
+// no rows.
+model EsportMatchPlayer {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  matchId   String   @db.ObjectId
+  userId    String   @db.ObjectId
+  teamId    String   @db.ObjectId
+  hero      String?  // hero name from the catalog
+  heroId    String?  @db.ObjectId // catalog Hero id (optional)
+  role      String?  // roam | jungle | mid | exp | gold
+  kills     Int      @default(0)
+  deaths    Int      @default(0)
+  assists   Int      @default(0)
+  gold      Int?
+  damage    Int?
+  isMvp     Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([matchId, userId])
+  @@index([userId])
+}
+
+type RecruitmentSlot {
+  role     String
+  quantity Int    @default(1)
+}
+
+model Recruitment {
+  id          String             @id @default(auto()) @map("_id") @db.ObjectId
+  teamId      String             @db.ObjectId
+  createdById String             @db.ObjectId
+  status      String             @default("open")
+  message     String?
+  slots       RecruitmentSlot[]
+  // Requirements advertised by the campaign, used by the advanced filters.
+  // minRankLevel is an in-game rank level (see decodeRank in users.service);
+  // null means the campaign accepts every rank.
+  minRankLevel Int?
+  // Expected commitment: casual | regular | competitive. Null = no expectation.
+  availability String?
+  openedAt    DateTime           @default(now())
+  closedAt    DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+}
+
+model RecruitmentApplication {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  recruitmentId String   @db.ObjectId
+  teamId        String   @db.ObjectId
+  userId        String   @db.ObjectId
+  role          String?
+  message       String?
+  // pending | shortlisted | accepted | rejected | withdrawn
+  status        String   @default("pending")
+  // Candidate-declared availability: casual | regular | competitive.
+  availability  String?
+  // Rank level snapshot taken when the application was submitted, so that
+  // filtering a shortlist stays stable even if the player ranks up later.
+  rankLevel     Int?
+  // Audit trail of the last status change.
+  decidedById   String?  @db.ObjectId
+  decidedAt     DateTime?
+  decisionNote  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model Friendship {
@@ -295,17 +617,6 @@ model Friendship {
   status      String   @default("pending")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-}
-
-model EsportJoinRequest {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  teamId    String   @db.ObjectId
-  userId    String   @db.ObjectId
-  role      String?
-  message   String?
-  status    String   @default("pending")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 model TeamRequest {
@@ -324,17 +635,35 @@ model MessageThread {
   subject        String?
   requestId      String?  @db.ObjectId
   participantIds String[]
+  // Group rooms: "direct" (1-1, participantIds) | "team" (esport roster) |
+  // "tournament" (registered teams / draft registrations) | "draft_team".
+  // Membership of group kinds is derived from the scope, never stored.
+  kind           String   @default("direct")
+  scopeId        String?
+  title          String?
+  avatar         String?
   lastMessageAt  DateTime @default(now())
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
 
+// Per-user read cursor for group rooms (Message.readAt only fits 1-1 chats).
+model ThreadRead {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  threadId   String   @db.ObjectId
+  userId     String   @db.ObjectId
+  lastReadAt DateTime @default(now())
+
+  @@unique([threadId, userId])
+}
+
 model Message {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  threadId  String   @db.ObjectId
-  senderId  String   @db.ObjectId
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  threadId  String    @db.ObjectId
+  senderId  String    @db.ObjectId
   body      String
-  createdAt DateTime @default(now())
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
 }
 
 model Mtl {
@@ -368,3 +697,189 @@ model ContactMessage {
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 }
+
+model StreamConfig {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  youtubeChannel String   @default("eternumesports")
+  channelId      String   @default("")
+  channelTitle   String   @default("")
+  channelAvatar  String   @default("")
+  channelBanner  String   @default("")
+  liveTitle      String   @default("")
+  liveDesc       String   @default("")
+  s1MainVideoId  String   @default("")
+  videos         String   @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model StreamSeasonVideo {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  seasonId  String   @db.ObjectId
+  videoId   String
+  title     String   @default("")
+  thumbnail String   @default("")
+  duration  String   @default("")
+  date      String   @default("")
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([seasonId, videoId])
+}
+
+model YoutubeAccount {
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  channelId        String   @unique
+  channelTitle     String   @default("")
+  channelThumbnail String   @default("")
+  channelBanner    String   @default("")
+  accessToken      String
+  refreshToken     String
+  tokenExpiresAt   DateTime
+  scope            String   @default("")
+  isConnected      Boolean  @default(true)
+  connectedAt      DateTime @default(now())
+  liveBroadcastId  String   @default("")
+  liveStreamId     String   @default("")
+  liveRtmpUrl      String   @default("")
+  liveStreamKey    String   @default("")
+  liveStatus       String   @default("")
+  liveWatchUrl     String   @default("")
+  liveTitle        String   @default("")
+  updatedAt        DateTime @updatedAt
+}
+
+// ---- Draft Simulator (community tournaments 1v1 / 3v3 / 5v5) ----
+model DraftTournament {
+  id                   String    @id @default(auto()) @map("_id") @db.ObjectId
+  name                 String
+  description          String?
+  category             String    // "1v1" | "3v3" | "5v5"
+  teamSize             Int       // 1 | 3 | 5
+  roles                String    @default("[]") // JSON: required roles (admin-defined for non-5v5; the 5 lanes for 5v5)
+  status               String    @default("draft") // draft | registration | closed | drafted | ongoing | completed
+  registrationOpensAt  DateTime?
+  registrationClosesAt DateTime?
+  secondPhaseOpen      Boolean   @default(false)
+  secondPhaseClosesAt  DateTime?
+  createdById          String?   @db.ObjectId
+  // Host city (Togo map, issue #70).
+  city                 String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+model DraftRegistration {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  tournamentId  String   @db.ObjectId
+  userId        String   @db.ObjectId
+  preferredRole String
+  phase         Int      @default(1) // 1 = initial, 2 = second registration phase
+  createdAt     DateTime @default(now())
+
+  @@unique([tournamentId, userId])
+}
+
+model DraftTeam {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  tournamentId String   @db.ObjectId
+  name         String
+  icon         String   @default("")
+  seed         Int      @default(0)
+  complete     Boolean  @default(true)
+  eliminated   Boolean  @default(false) // incomplete team kept out of the bracket
+  createdAt    DateTime @default(now())
+}
+
+model DraftTeamMember {
+  id            String @id @default(auto()) @map("_id") @db.ObjectId
+  tournamentId  String @db.ObjectId
+  teamId        String @db.ObjectId
+  userId        String @db.ObjectId
+  preferredRole String
+  assignedRole  String
+}
+
+model DraftMatch {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  tournamentId String    @db.ObjectId
+  round        Int
+  position     Int
+  teamAId      String?   @db.ObjectId
+  teamBId      String?   @db.ObjectId
+  winnerTeamId String?   @db.ObjectId
+  scheduledAt  DateTime?
+  status       String    @default("pending") // pending | done
+  createdAt    DateTime  @default(now())
+}
+
+// ----- Gamification (XP, levels, achievements, missions) -----
+// Additive models: users without rows simply have no progress yet.
+
+model UserProgress {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @unique @db.ObjectId
+  xp        Int      @default(0)
+  level     Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// One row per XP grant. The [userId, type, refId] unique index makes every
+// grant idempotent (re-submitting a match result never double counts).
+model XpEvent {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  type      String
+  amount    Int
+  refId     String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, type, refId])
+  @@index([userId, createdAt])
+}
+
+model UserAchievement {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String   @db.ObjectId
+  achievementId String
+  unlockedAt    DateTime @default(now())
+
+  @@unique([userId, achievementId])
+}
+
+// Progress of a user on a mission for a given period (day or ISO week).
+model UserMission {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String    @db.ObjectId
+  missionId   String
+  periodKey   String
+  progress    Int       @default(0)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, missionId, periodKey])
+  @@index([userId, periodKey])
+}
+
+model PickBanDraft {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String    @default("Untitled Draft")
+  mode        String    @default("ranked") // ranked | tournament
+  shareCode   String    @unique @db.String
+  ownerId     String    @db.ObjectId
+  owner       User?     @relation("PickBanDrafts", fields: [ownerId], references: [id])
+
+  // Teams: JSON-serialized arrays of picks/bans
+  blueTeam    String    @default("{\"picks\":[],\"bans\":[]}") // Pick[], Ban[]
+  redTeam     String    @default("{\"picks\":[],\"bans\":[]}") // Pick[], Ban[]
+
+  // Draft state
+  currentStep Int       @default(0) // step in the MLBB draft order
+  status      String    @default("active") // active | completed | archived
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+

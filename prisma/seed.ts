@@ -1,11 +1,83 @@
 
+import 'dotenv/config';
+import { createHash } from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import heroes from './heroes.json';
 
 const prisma = new PrismaClient();
 
+/**
+ * Turns a readable fixture key ('t1', 'p3', 'form_1'...) into a valid 24-hex
+ * MongoDB ObjectId. The fixtures below were written for SQLite, where an id
+ * was any string; on MongoDB every id and foreign key must be an ObjectId.
+ * Hashing keeps the fixtures readable and, being deterministic, preserves the
+ * cross-references between them (a team's `captainId` still resolves to the
+ * very user the fixture points at).
+ */
+const oid = (key: string | number): string =>
+  createHash('md5').update(String(key)).digest('hex').slice(0, 24);
+
 const toJson = (value: any) => JSON.stringify(value ?? null);
+
+// Official MLBB role SVG icons (reused for the lanes).
+const LANE_ICON = {
+  marksman: 'https://akmweb.youngjoygame.com/web/gms/image/91f817c656908a83c2e24eecb3b70986.svg',
+  fighter: 'https://akmweb.youngjoygame.com/web/gms/image/6a246099f7eb83a8856306d8b4c84fc2.svg',
+  assassin: 'https://akmweb.youngjoygame.com/web/gms/image/de611167c7310681135f0b4198137bfa.svg',
+  mage: 'https://akmweb.youngjoygame.com/web/gms/image/facab1eacb218d767b5acb80304bfafd.svg',
+  tank: 'https://akmweb.youngjoygame.com/web/gms/image/a3dbb075b4d8186c29f02f7d47da236a.svg',
+};
+
+// The 6 hero classes/roles with their official Moonton SVG/PNG icons.
+const HERO_ROLES = [
+  { key: 'tank', name: 'Tank', icon: 'https://akmweb.youngjoygame.com/web/gms/image/60638c59536d9505c9c731af13f7fdfd.png', sort: 0 },
+  { key: 'fighter', name: 'Fighter', icon: 'https://akmweb.youngjoygame.com/web/gms/image/629e282165d4b63deceaf350426ea440.png', sort: 1 },
+  { key: 'assassin', name: 'Assassin', icon: 'https://akmweb.youngjoygame.com/web/gms/image/d0b8b65a47fc43dc7bb2bac447072fd2.png', sort: 2 },
+  { key: 'mage', name: 'Mage', icon: 'https://akmweb.youngjoygame.com/web/gms/image/1c6985dd0caec2028ccb6d1b8ca95e0f.png', sort: 3 },
+  { key: 'marksman', name: 'Marksman', icon: 'https://akmweb.youngjoygame.com/web/gms/image/025c69a764924f4bac526a2662f1a0b9.png', sort: 4 },
+  { key: 'support', name: 'Support', icon: 'https://akmweb.youngjoygame.com/web/gms/image/1e4609b25a4cd63ee5a13015d4058159.png', sort: 5 },
+];
+
+// The 5 lanes. `compatibleClasses` = classes that can hold the lane
+// (without contradiction: jungle = assassin/fighter, roam = tank/support...).
+const LANES = [
+  {
+    key: 'gold', name: 'Gold Lane', shortName: 'Gold', icon: LANE_ICON.marksman,
+    color: '#f5b642', compatibleClasses: ['marksman'], sort: 1,
+    description: "La voie inférieure, réservée aux tireurs (marksman). Le gold laner farme l'or et devient le principal dégât à distance en fin de partie.",
+  },
+  {
+    key: 'roam', name: 'Roam', shortName: 'Roam', icon: LANE_ICON.tank,
+    color: '#22c55e', compatibleClasses: ['tank', 'support'], sort: 2,
+    description: "Le soutien mobile qui parcourt la carte. Tenue par un tank (initiation, contrôle) ou un support (soins, protection) : il ne farme pas et protège l'équipe.",
+  },
+  {
+    key: 'mid', name: 'Mid Lane', shortName: 'Mid', icon: LANE_ICON.mage,
+    color: '#a855f7', compatibleClasses: ['mage'], sort: 3,
+    description: 'La voie centrale des mages. Position clé pour les dégâts magiques de zone et le contrôle, avec un accès rapide aux deux moitiés de la carte.',
+  },
+  {
+    key: 'jungle', name: 'Jungle', shortName: 'Jungle', icon: LANE_ICON.assassin,
+    color: '#ec4899', compatibleClasses: ['assassin', 'fighter'], sort: 4,
+    description: "La jungle et ses monstres neutres. Tenue par un assassin (pics de dégâts, ganks) ou un fighter (présence physique). Le jungler contrôle le rythme et les objectifs.",
+  },
+  {
+    key: 'exp', name: 'EXP Lane', shortName: 'EXP', icon: LANE_ICON.fighter,
+    color: '#00d4ff', compatibleClasses: ['fighter', 'tank'], sort: 5,
+    description: "La voie supérieure, en un contre un. Tenue par un fighter (duel, split-push) ou un tank (résistance, front-line). Le exp laner encaisse et pèse dans les combats.",
+  },
+];
+
+// Class -> recommended lanes (derived from the compatibilities above).
+const CLASS_TO_LANES: Record<string, string[]> = {
+  marksman: ['gold'],
+  mage: ['mid'],
+  assassin: ['jungle'],
+  fighter: ['exp', 'jungle'],
+  tank: ['roam', 'exp'],
+  support: ['roam'],
+};
 
 const mockPlayers: any[] = [
   {
@@ -267,6 +339,61 @@ const mockFormResponses: any[] = [
   { id: 'resp_3', formId: 'form_2', data: { 'Pseudo MLBB': 'NewPlayer123', 'ID MLBB': '987654321', 'Rang actuel': 'Epic', 'Rôle principal': 'Mage' }, submittedAt: '2024-03-23T09:00:00Z' },
 ];
 
+// ---- Game catalog reference data (official MLBB names) ----
+// Only names, categories and shop prices: no hero-specific recommendation is
+// seeded, builds are curated by admins from the catalog admin page.
+const GAME_ITEMS: Array<{ name: string; type: string; gold: number; sort: number }> = [
+  { name: 'Warrior Boots', type: 'movement', gold: 710, sort: 0 },
+  { name: 'Magic Shoes', type: 'movement', gold: 710, sort: 1 },
+  { name: 'Swift Boots', type: 'movement', gold: 710, sort: 2 },
+  { name: 'Tough Boots', type: 'movement', gold: 710, sort: 3 },
+  { name: 'Demon Boots', type: 'movement', gold: 710, sort: 4 },
+  { name: 'Blade of Despair', type: 'attack', gold: 2260, sort: 10 },
+  { name: 'Endless Battle', type: 'attack', gold: 2470, sort: 11 },
+  { name: "Berserker's Fury", type: 'attack', gold: 2570, sort: 12 },
+  { name: 'Malefic Roar', type: 'attack', gold: 2060, sort: 13 },
+  { name: 'Hunter Strike', type: 'attack', gold: 2010, sort: 14 },
+  { name: "Haas's Claws", type: 'attack', gold: 2050, sort: 15 },
+  { name: 'Windtalker', type: 'attack_speed', gold: 1850, sort: 16 },
+  { name: 'Corrosion Scythe', type: 'attack_speed', gold: 1920, sort: 17 },
+  { name: 'Blood Wings', type: 'magic', gold: 2800, sort: 20 },
+  { name: 'Holy Crystal', type: 'magic', gold: 2120, sort: 21 },
+  { name: 'Lightning Truncheon', type: 'magic', gold: 2250, sort: 22 },
+  { name: 'Genius Wand', type: 'magic', gold: 2000, sort: 23 },
+  { name: 'Divine Glaive', type: 'magic', gold: 2250, sort: 24 },
+  { name: 'Clock of Destiny', type: 'magic', gold: 2150, sort: 25 },
+  { name: 'Immortality', type: 'defense', gold: 2120, sort: 30 },
+  { name: 'Antique Cuirass', type: 'defense', gold: 1910, sort: 31 },
+  { name: "Athena's Shield", type: 'defense', gold: 2150, sort: 32 },
+  { name: 'Oracle', type: 'defense', gold: 2000, sort: 33 },
+  { name: 'Dominance Ice', type: 'defense', gold: 2010, sort: 34 },
+  { name: 'Blade Armor', type: 'defense', gold: 1800, sort: 35 },
+];
+
+const GAME_EMBLEMS: Array<{ name: string; type: string; sort: number }> = [
+  { name: 'Assassin Emblem', type: 'assassin', sort: 0 },
+  { name: 'Mage Emblem', type: 'mage', sort: 1 },
+  { name: 'Marksman Emblem', type: 'marksman', sort: 2 },
+  { name: 'Fighter Emblem', type: 'fighter', sort: 3 },
+  { name: 'Tank Emblem', type: 'tank', sort: 4 },
+  { name: 'Support Emblem', type: 'support', sort: 5 },
+  { name: 'Common Emblem', type: 'common', sort: 6 },
+];
+
+const GAME_BATTLE_SPELLS: Array<{ name: string; cooldown: string; sort: number }> = [
+  { name: 'Flicker', cooldown: '120s', sort: 0 },
+  { name: 'Retribution', cooldown: '35s', sort: 1 },
+  { name: 'Execute', cooldown: '90s', sort: 2 },
+  { name: 'Inspire', cooldown: '75s', sort: 3 },
+  { name: 'Sprint', cooldown: '100s', sort: 4 },
+  { name: 'Petrify', cooldown: '60s', sort: 5 },
+  { name: 'Flameshot', cooldown: '50s', sort: 6 },
+  { name: 'Aegis', cooldown: '60s', sort: 7 },
+  { name: 'Purify', cooldown: '90s', sort: 8 },
+  { name: 'Vengeance', cooldown: '75s', sort: 9 },
+  { name: 'Arrival', cooldown: '60s', sort: 10 },
+];
+
 async function main() {
   console.log('🌱 Démarrage du seed MLBB Togo...');
 
@@ -279,7 +406,8 @@ async function main() {
   await prisma.tournament.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.adminLog.deleteMany();
-  await prisma.hero.deleteMany();
+  // Heroes and lanes are NOT deleted: they are upserted (idempotent) to
+  // preserve data refreshed from MLBB and admin edits.
 
   await prisma.user.updateMany({ data: { teamId: null } });
   await prisma.user.deleteMany();
@@ -290,16 +418,67 @@ async function main() {
   await prisma.mtlImage.deleteMany();
   await prisma.mtl.deleteMany();
 
+  // Lanes: created only once. `update: {}` preserves admin edits
+  // (description/icon) on re-seeds.
+  for (const l of LANES) {
+    await prisma.lane.upsert({ where: { key: l.key }, update: {}, create: l });
+  }
+  console.log(`   - Lanes          : ${LANES.length}`);
+
+  // Hero roles: keep icons in sync on every re-seed.
+  for (const r of HERO_ROLES) {
+    await prisma.heroRole.upsert({
+      where: { key: r.key },
+      update: { name: r.name, icon: r.icon, sort: r.sort },
+      create: r,
+    });
+  }
+  console.log(`   - Rôles          : ${HERO_ROLES.length}`);
+
+  // Heroes: upsert by name. We do not touch fields enriched by an admin
+  // refresh (stats/art/thumb/source); only the base fields are resynced.
   for (const h of heroes as any[]) {
-    await prisma.hero.create({
-      data: {
-        name: h.name,
-        role: h.role,
-        image: h.image ?? undefined,
-      },
+    const role = String(h.role || '').toLowerCase();
+    const base = {
+      role,
+      image: h.image ?? undefined,
+      roles: role ? [role] : [],
+      laneKeys: CLASS_TO_LANES[role] ?? [],
+    };
+    await prisma.hero.upsert({
+      where: { name: h.name },
+      update: base,
+      create: { name: h.name, ...base, source: 'seed' },
     });
   }
   console.log(`   - Héros          : ${(heroes as any[]).length}`);
+
+  // Game catalog (items / emblems / battle spells) used by the hero builds tab.
+  // Upserted by name so admin edits (icon, description) survive a re-seed.
+  for (const it of GAME_ITEMS) {
+    await prisma.item.upsert({
+      where: { name: it.name },
+      update: { type: it.type, gold: it.gold, sort: it.sort },
+      create: it,
+    });
+  }
+  for (const em of GAME_EMBLEMS) {
+    await prisma.emblem.upsert({
+      where: { name: em.name },
+      update: { type: em.type, sort: em.sort },
+      create: em,
+    });
+  }
+  for (const sp of GAME_BATTLE_SPELLS) {
+    await prisma.battleSpell.upsert({
+      where: { name: sp.name },
+      update: { cooldown: sp.cooldown, sort: sp.sort },
+      create: sp,
+    });
+  }
+  console.log(
+    `   - Catalogue jeu  : ${GAME_ITEMS.length} objets, ${GAME_EMBLEMS.length} emblèmes, ${GAME_BATTLE_SPELLS.length} sorts`,
+  );
 
   const eternum = await prisma.esport.create({
     data: {
@@ -317,7 +496,9 @@ async function main() {
     { name: 'ETERNUM EPSILON', image: 'https://res.cloudinary.com/dvh5ywcdi/image/upload/v1772778812/IMG-20260221-WA0017_zngxww.jpg', sort: 5 },
   ];
   for (const t of esportTeams) {
-    await prisma.esportTeam.create({ data: { ...t, esportId: eternum.id } });
+    await prisma.esportTeam.create({
+      data: { ...t, type: 'esport', esportId: eternum.id },
+    });
   }
   const sponsors = [
     { logo: 'https://res.cloudinary.com/dvh5ywcdi/image/upload/file_00000000337c61f4846cda7ce7698a3f_mcmh2e.png', sort: 1 },
@@ -369,12 +550,12 @@ async function main() {
   for (const t of mockTeams) {
     await prisma.team.create({
       data: {
-        id: t.id,
+        id: oid(t.id),
         name: t.name,
         tag: t.tag,
         logo: t.logo ?? undefined,
         description: t.description ?? undefined,
-        captainId: t.captainId ?? undefined,
+        captainId: t.captainId ? oid(t.captainId) : undefined,
         maxMembers: t.maxMembers,
         wins: t.wins,
         losses: t.losses,
@@ -391,7 +572,7 @@ async function main() {
   for (const p of mockPlayers) {
     await prisma.user.create({
       data: {
-        id: p.id,
+        id: oid(p.id),
         username: p.username,
         email: p.email,
         password: passwordHash,
@@ -411,7 +592,7 @@ async function main() {
         lastActive: new Date(p.lastActive),
         isOnline: p.isOnline,
         roleUser: p.role_user,
-        teamId: p.teamId ?? undefined,
+        teamId: p.teamId ? oid(p.teamId) : undefined,
       },
     });
   }
@@ -419,8 +600,8 @@ async function main() {
   for (const post of mockPosts) {
     await prisma.post.create({
       data: {
-        id: post.id,
-        authorId: post.authorId,
+        id: oid(post.id),
+        authorId: oid(post.authorId),
         authorName: post.authorName,
         authorRank: post.authorRank ?? undefined,
         category: post.category,
@@ -435,9 +616,9 @@ async function main() {
     for (const c of post.comments ?? []) {
       await prisma.comment.create({
         data: {
-          id: c.id,
-          postId: post.id,
-          authorId: c.authorId,
+          id: oid(c.id),
+          postId: oid(post.id),
+          authorId: oid(c.authorId),
           authorName: c.authorName,
           content: c.content,
           createdAt: new Date(c.createdAt),
@@ -449,7 +630,7 @@ async function main() {
   for (const t of mockTournaments) {
     await prisma.tournament.create({
       data: {
-        id: t.id,
+        id: oid(t.id),
         name: t.name,
         description: t.description ?? undefined,
         organizer: t.organizer ?? undefined,
@@ -458,7 +639,7 @@ async function main() {
         endDate: t.endDate ?? undefined,
         prizePool: t.prizePool ?? undefined,
         maxTeams: t.maxTeams,
-        registeredTeams: toJson(t.registeredTeams),
+        registeredTeams: toJson((t.registeredTeams ?? []).map(oid)),
         format: t.format ?? undefined,
         rules: t.rules ?? undefined,
         banner: t.banner ?? undefined,
@@ -471,14 +652,14 @@ async function main() {
   for (const e of mockEvents) {
     await prisma.event.create({
       data: {
-        id: e.id,
+        id: oid(e.id),
         title: e.title,
         type: e.type,
         description: e.description ?? undefined,
         date: e.date ?? undefined,
         time: e.time ?? undefined,
         duration: e.duration ?? undefined,
-        participants: toJson(e.participants),
+        participants: toJson((e.participants ?? []).map(oid)),
         organizer: e.organizer ?? undefined,
         isPublic: e.isPublic,
       },
@@ -488,16 +669,16 @@ async function main() {
   for (const m of mockMatches) {
     await prisma.match.create({
       data: {
-        id: m.id,
-        team1: toJson(m.team1),
-        team2: toJson(m.team2),
+        id: oid(m.id),
+        team1: toJson({ ...m.team1, id: oid(m.team1.id) }),
+        team2: toJson({ ...m.team2, id: oid(m.team2.id) }),
         tournament: m.tournament ?? undefined,
         date: m.date ?? undefined,
         status: m.status,
         mvp: m.mvp ?? undefined,
         duration: m.duration ?? undefined,
         format: m.format ?? undefined,
-        games: toJson(m.games),
+        games: toJson((m.games ?? []).map((g: any) => ({ ...g, winner: oid(g.winner) }))),
       },
     });
   }
@@ -505,7 +686,7 @@ async function main() {
   for (const log of mockAdminLogs) {
     await prisma.adminLog.create({
       data: {
-        id: log.id,
+        id: oid(log.id),
         action: log.action,
         admin: log.admin,
         target: log.target ?? undefined,
@@ -518,7 +699,7 @@ async function main() {
   for (const f of mockFormTemplates) {
     await prisma.formTemplate.create({
       data: {
-        id: f.id,
+        id: oid(f.id),
         name: f.name,
         description: f.description ?? undefined,
         fields: toJson(f.fields),
@@ -530,8 +711,8 @@ async function main() {
   for (const r of mockFormResponses) {
     await prisma.formResponse.create({
       data: {
-        id: r.id,
-        formId: r.formId,
+        id: oid(r.id),
+        formId: oid(r.formId),
         data: toJson(r.data),
         submittedAt: new Date(r.submittedAt),
       },
@@ -541,8 +722,8 @@ async function main() {
   for (const n of mockNotifications) {
     await prisma.notification.create({
       data: {
-        id: n.id,
-        userId: n.userId ?? undefined,
+        id: oid(n.id),
+        userId: n.userId ? oid(n.userId) : undefined,
         type: n.type,
         title: n.title,
         message: n.message,
@@ -550,6 +731,15 @@ async function main() {
         link: n.link ?? undefined,
         createdAt: new Date(n.createdAt),
       },
+    });
+  }
+
+  // Stream config: a single document holding the connected YouTube channel.
+  // Videos are attached to admin-created seasons (StreamSeasonVideo), not here.
+  const streamExists = await prisma.streamConfig.findFirst();
+  if (!streamExists) {
+    await prisma.streamConfig.create({
+      data: { youtubeChannel: 'eternumesports' },
     });
   }
 

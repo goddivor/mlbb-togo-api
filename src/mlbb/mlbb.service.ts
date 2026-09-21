@@ -6,9 +6,12 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import sharp from 'sharp';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class MlbbService {
+  constructor(private readonly prisma: PrismaService) {}
+
   private readonly logger = new Logger('MlbbService');
 
   private readonly BASE = 'https://api.gms.moontontech.com';
@@ -250,8 +253,32 @@ export class MlbbService {
   }
 
   async getLatestHeroes(count = 6, lang = 'en') {
+    // Serve OUR database cache first; live fallback only if empty.
+    const cached = await this.readCachedShowcase(count);
+    if (cached.length) return cached;
     const { heroes } = await this.getHeroes(count, lang);
     return heroes;
+  }
+
+  // Reads heroes (non-null art prioritized) from our database and maps them
+  // into a shape close to mapShowcase. Returns [] if no art is cached.
+  private async readCachedShowcase(count: number) {
+    const rows = await this.prisma.hero.findMany({
+      where: { art: { not: null } },
+      orderBy: [{ heroId: 'desc' }, { name: 'asc' }],
+      take: count,
+    });
+    return rows.map((h) => ({
+      heroId: h.heroId,
+      name: h.name,
+      art: h.art,
+      thumb: h.thumb ?? h.image,
+      image: h.image,
+      roles: h.roles ?? [],
+      lanes: h.laneKeys ?? [],
+      laneKeys: h.laneKeys ?? [],
+      stats: h.stats ?? null,
+    }));
   }
 
   private mapShowcase(record: any) {
@@ -285,6 +312,14 @@ export class MlbbService {
   }
 
   async getShowcaseHeroes(count = 6, lang = 'en') {
+    // Serve OUR database cache first; live fallback only if empty.
+    const cached = await this.readCachedShowcase(count);
+    if (cached.length) return cached;
+    return this.getShowcaseHeroesLive(count, lang);
+  }
+
+  // Always live from Moonton (used by the cache refresh).
+  async getShowcaseHeroesLive(count = 6, lang = 'en') {
     const records = await this.fetchHeroRecords(lang);
     return records.slice(0, count).map((r) => this.mapShowcase(r));
   }

@@ -7,14 +7,41 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 import { ChatGateway } from './chat.gateway';
+import { PushService } from '../push/push.service';
+import {
+  DEFAULT_NOTIFICATIONS_LIMIT,
+  NotificationsQueryDto,
+} from './dto/notifications-query.dto';
+import { ROOM_KINDS } from './rooms.util';
 
 const REQUEST_STATUS = ['pending', 'in_review', 'approved', 'rejected'];
+
+/**
+ * Prisma filter for a message that has not been read yet. On MongoDB
+ * `readAt: null` only matches an explicit null, not a missing field (which is
+ * how `message.create` stores an unset optional), so both cases are covered.
+ */
+export const UNREAD_MESSAGE = { OR: [{ readAt: null }, { readAt: { isSet: false } }] };
+
+// Maps a notification type to the preference category the user can toggle
+// in their settings. Types without an entry are always delivered.
+const NOTIF_CATEGORY: Record<string, string> = {
+  friend_request: 'friends',
+  friend_accept: 'friends',
+  message: 'messages',
+  mention: 'messages',
+  team_request: 'teams',
+  request_decision: 'teams',
+  recruitment_application: 'teams',
+  recruitment_decision: 'teams',
+};
 
 @Injectable()
 export class CommunityService {
   constructor(
     private prisma: PrismaService,
     private chat: ChatGateway,
+    private push: PushService,
   ) {}
 
   // ----- Notifications (internal helpers) -----
@@ -22,26 +49,57 @@ export class CommunityService {
   /** Notification publique, utilisable par d'autres modules (esport…). */
   async notifyUser(
     userId: string,
-    data: { type: string; title: string; message: string; link?: string },
+    data: {
+      type: string;
+      title: string;
+      message: string;
+      link?: string;
+      data?: Record<string, any>;
+    },
   ) {
     return this.notify(userId, data);
   }
 
   private async notify(
     userId: string,
-    data: { type: string; title: string; message: string; link?: string },
+    data: {
+      type: string;
+      title: string;
+      message: string;
+      link?: string;
+      data?: Record<string, any>;
+    },
   ) {
+    // Honor the recipient's notification preferences (a category set to false
+    // silences that kind of notification). Unknown categories are allowed.
+    const category = NOTIF_CATEGORY[data.type];
+    if (category) {
+      const recipient = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { notifPrefs: true },
+      });
+      const prefs = (recipient?.notifPrefs as Record<string, boolean>) ?? {};
+      if (prefs[category] === false) return null;
+    }
+
     const notification = await this.prisma.notification.create({
       data: {
         userId,
         type: data.type,
         title: data.title,
         message: data.message,
+        data: data.data ?? undefined,
         link: data.link ?? null,
         read: false,
       },
     });
     this.chat.emitToUser(userId, 'notification:new', notification);
+    // Fire a Web Push so the user is notified even when the app is closed.
+    void this.push.sendToUser(userId, {
+      title: data.title,
+      body: data.message,
+      link: data.link ?? '/dashboard',
+    });
     return notification;
   }
 
@@ -52,6 +110,7 @@ export class CommunityService {
         id: message.id,
         body: message.body,
         senderId: message.senderId,
+        readAt: message.readAt ?? null,
         createdAt: message.createdAt,
       },
     };
@@ -64,6 +123,7 @@ export class CommunityService {
     title: string;
     message: string;
     link?: string;
+    data?: Record<string, any>;
   }) {
     const admins = await this.prisma.user.findMany({
       where: { roleUser: { in: ['admin', 'moderator'] } },
@@ -74,12 +134,53 @@ export class CommunityService {
 
   // ----- Notifications (API) -----
 
-  async listNotifications(userId: string) {
-    return this.prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
+  /**
+   * Paginated history for the signed-in user.
+   *
+   * `userId` is never taken from the query string: it comes from the JWT, so a
+   * user can only ever page through their own mailbox. The `counts` facet is
+   * computed over the whole mailbox (type filter excluded) so the filter chips
+   * keep showing every available type once one of them is selected.
+   */
+  async listNotifications(userId: string, query: NotificationsQueryDto = {}) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? DEFAULT_NOTIFICATIONS_LIMIT;
+    const status = query.status ?? 'all';
+
+    const where: Record<string, any> = { userId };
+    if (query.type) where.type = query.type;
+    if (status === 'unread') where.read = false;
+    if (status === 'read') where.read = true;
+
+    const [total, items, unread, grouped] = await Promise.all([
+      this.prisma.notification.count({ where }),
+      this.prisma.notification.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.notification.count({ where: { userId, read: false } }),
+      this.prisma.notification.groupBy({
+        by: ['type'],
+        where: { userId },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const counts: Record<string, number> = {};
+    for (const g of grouped) counts[g.type] = g._count._all;
+
+    return {
+      items,
+      total,
+      unread,
+      counts,
+      page,
+      limit,
+      // Always at least 1 so the pager has a page to sit on when empty.
+      pages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 
   async unreadCount(userId: string) {
@@ -90,19 +191,28 @@ export class CommunityService {
   }
 
   async markRead(userId: string, id: string) {
-    await this.prisma.notification.updateMany({
+    // updateMany (not update) so an id belonging to somebody else simply
+    // matches nothing instead of flipping their notification.
+    const { count } = await this.prisma.notification.updateMany({
       where: { id, userId },
       data: { read: true },
     });
-    return { ok: true };
+    return { ok: true, updated: count };
   }
 
-  async markAllRead(userId: string) {
-    await this.prisma.notification.updateMany({
-      where: { userId, read: false },
+  /**
+   * Marks the user's unread notifications as read. An optional type narrows it
+   * to the category currently displayed on the page, so "mark all as read"
+   * never silently clears notifications the user cannot see.
+   */
+  async markAllRead(userId: string, type?: string) {
+    const where: Record<string, any> = { userId, read: false };
+    if (type) where.type = type;
+    const { count } = await this.prisma.notification.updateMany({
+      where,
       data: { read: true },
     });
-    return { ok: true };
+    return { ok: true, updated: count };
   }
 
   // ----- Team requests -----
@@ -132,6 +242,7 @@ export class CommunityService {
       title: "Nouvelle demande d'équipe",
       message: `${who} propose l'équipe « ${request.proposedName} ».`,
       link: '/admin/requests',
+      data: { who, teamName: request.proposedName },
     });
     return request;
   }
@@ -179,6 +290,7 @@ export class CommunityService {
       title: titles[status] ?? 'Mise à jour de votre demande',
       message: `Équipe « ${request.proposedName} ».`,
       link: '/messages',
+      data: { status, teamName: request.proposedName },
     });
     return this.withRequester(updated);
   }
@@ -223,8 +335,13 @@ export class CommunityService {
   }
 
   async listThreads(userId: string) {
+    // Group rooms (team / tournament) live in the same collection but are
+    // listed by RoomsService; keep this list to 1-1 conversations only.
     const threads = await this.prisma.messageThread.findMany({
-      where: { participantIds: { has: userId } },
+      where: {
+        participantIds: { has: userId },
+        NOT: { kind: { in: [...ROOM_KINDS] } },
+      },
       orderBy: { lastMessageAt: 'desc' },
     });
     const otherIds = threads.map(
@@ -234,15 +351,21 @@ export class CommunityService {
     const result = [];
     for (const th of threads) {
       const otherId = th.participantIds.find((p) => p !== userId);
-      const last = await this.prisma.message.findFirst({
-        where: { threadId: th.id },
-        orderBy: { createdAt: 'desc' },
-      });
+      const [last, unread] = await Promise.all([
+        this.prisma.message.findFirst({
+          where: { threadId: th.id },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.message.count({
+          where: { threadId: th.id, senderId: { not: userId }, ...UNREAD_MESSAGE },
+        }),
+      ]);
       result.push({
         id: th.id,
         subject: th.subject,
         requestId: th.requestId,
         lastMessageAt: th.lastMessageAt,
+        unread,
         other: otherId ? pmap.get(otherId) ?? null : null,
         lastMessage: last ? { body: last.body, senderId: last.senderId, createdAt: last.createdAt } : null,
       });
@@ -271,9 +394,31 @@ export class CommunityService {
         body: m.body,
         senderId: m.senderId,
         mine: m.senderId === userId,
+        readAt: m.readAt,
         createdAt: m.createdAt,
       })),
     };
+  }
+
+  /** Mark every message in the thread not authored by `userId` as read, and
+   *  tell the other participant(s) so their sent messages show read receipts. */
+  async markThreadRead(userId: string, threadId: string) {
+    const thread = await this.prisma.messageThread.findUnique({
+      where: { id: threadId },
+    });
+    if (!thread) throw new NotFoundException('Conversation introuvable.');
+    if (!thread.participantIds.includes(userId))
+      throw new ForbiddenException('Accès refusé à cette conversation.');
+    const readAt = new Date();
+    const res = await this.prisma.message.updateMany({
+      where: { threadId, senderId: { not: userId }, ...UNREAD_MESSAGE },
+      data: { readAt },
+    });
+    if (res.count > 0) {
+      for (const pid of thread.participantIds.filter((p) => p !== userId))
+        this.chat.emitToUser(pid, 'message:read', { threadId, readerId: userId, readAt });
+    }
+    return { ok: true, read: res.count };
   }
 
   async reply(userId: string, threadId: string, body: string) {

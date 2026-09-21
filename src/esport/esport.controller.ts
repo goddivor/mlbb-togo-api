@@ -6,10 +6,15 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { EsportService } from './esport.service';
+import { EsportStatsService } from './esport-stats.service';
+import { EsportStaffService } from './esport-staff.service';
+import { EsportSeasonsService } from './esport-seasons.service';
+import { CloseSeasonDto, CreateSeasonDto, UpdateSeasonDto } from './dto/season.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -17,7 +22,12 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('esport')
 export class EsportController {
-  constructor(private readonly esport: EsportService) {}
+  constructor(
+    private readonly esport: EsportService,
+    private readonly stats: EsportStatsService,
+    private readonly staff: EsportStaffService,
+    private readonly seasons: EsportSeasonsService,
+  ) {}
 
   // ----- Public -----
 
@@ -32,8 +42,45 @@ export class EsportController {
   }
 
   @Get('teams/:id')
-  getTeam(@Param('id') id: string) {
-    return this.esport.getTeam(id);
+  async getTeam(@Param('id') id: string) {
+    const team = await this.esport.getTeam(id);
+    const [staff, honours] = await Promise.all([
+      this.staff.listStaff(id),
+      this.stats.getHonours(id),
+    ]);
+    return { ...team, staff, honours };
+  }
+
+  // ----- Public: team details (stats / history / schedule / staff) -----
+
+  @Get('teams/:id/stats')
+  getTeamStats(@Param('id') id: string) {
+    return this.stats.getTeamStats(id);
+  }
+
+  @Get('teams/:id/history')
+  getTeamHistory(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('seasonId') seasonId?: string,
+  ) {
+    return this.stats.getTeamHistory(id, Number(page) || 1, Number(limit) || 10, seasonId);
+  }
+
+  @Get('teams/:id/schedule')
+  getTeamSchedule(@Param('id') id: string) {
+    return this.stats.getTeamSchedule(id);
+  }
+
+  @Get('teams/:id/honours')
+  getTeamHonours(@Param('id') id: string) {
+    return this.stats.getHonours(id);
+  }
+
+  @Get('teams/:id/staff')
+  getTeamStaff(@Param('id') id: string) {
+    return this.staff.listStaff(id);
   }
 
   @Get('teams/:id/matches')
@@ -41,35 +88,14 @@ export class EsportController {
     return this.esport.getTeamMatches(id);
   }
 
-  // ----- Join requests -----
-
-  @UseGuards(JwtAuthGuard)
-  @Get('join-requests/mine')
-  myJoinRequests(@CurrentUser() user: any) {
-    return this.esport.myJoinRequests(user.id);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post('teams/:id/join')
-  requestJoin(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
-    return this.esport.requestJoin(user.id, id, body);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get('teams/:id/join-requests')
-  listJoinRequests(@Param('id') id: string, @CurrentUser() user: any) {
-    return this.esport.listJoinRequests(id, user);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Patch('join-requests/:id')
-  decideJoinRequest(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
-    return this.esport.decideJoinRequest(id, user, body);
-  }
-
   @Get('sponsors')
   getSponsors() {
     return this.esport.getSponsors();
+  }
+
+  @Get('org/figures')
+  getFigures() {
+    return this.esport.getFigures();
   }
 
   @Get('mtl')
@@ -77,14 +103,21 @@ export class EsportController {
     return this.esport.getMtl();
   }
 
+  // ----- Public: seasons (lifecycle, theme, frozen summary) -----
+
   @Get('seasons')
-  getSeasons() {
-    return this.esport.listSeasons();
+  getSeasons(@Query('status') status?: string) {
+    return this.seasons.list(status);
+  }
+
+  @Get('seasons/current')
+  getCurrentSeason() {
+    return this.seasons.current();
   }
 
   @Get('seasons/:id')
   getSeason(@Param('id') id: string) {
-    return this.esport.getSeason(id);
+    return this.seasons.get(id);
   }
 
   @Get('matches')
@@ -92,8 +125,23 @@ export class EsportController {
     @Query('seasonId') seasonId?: string,
     @Query('teamId') teamId?: string,
     @Query('status') status?: string,
+    @Query('stage') stage?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.esport.listMatches({ seasonId, teamId, status });
+    return this.esport.listMatches({ seasonId, teamId, status, stage, from, to });
+  }
+
+  // Matches of a period grouped by day (calendar view).
+  @Get('matches/calendar')
+  getMatchesCalendar(
+    @Query('seasonId') seasonId?: string,
+    @Query('teamId') teamId?: string,
+    @Query('stage') stage?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.esport.matchesCalendar({ seasonId, teamId, stage, from, to });
   }
 
   @Get('matches/:id')
@@ -101,7 +149,12 @@ export class EsportController {
     return this.esport.getMatch(id);
   }
 
-  // ----- Admin: organisation -----
+  @Get('matches/:id/players')
+  getMatchPlayers(@Param('id') id: string) {
+    return this.esport.getMatchPlayers(id);
+  }
+
+  // ----- Admin: organization -----
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
@@ -110,7 +163,14 @@ export class EsportController {
     return this.esport.updateOrg(id, body);
   }
 
-  // ----- Admin: équipes -----
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Put('org/figures')
+  updateFigures(@Body() body: any) {
+    return this.esport.updateFigures(body);
+  }
+
+  // ----- Admin: teams -----
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
@@ -140,7 +200,7 @@ export class EsportController {
     return this.esport.transformToEsport(id);
   }
 
-  // ----- Admin: membres -----
+  // ----- Admin: members -----
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
@@ -177,6 +237,40 @@ export class EsportController {
     return this.esport.setCaptain(id, body.userId);
   }
 
+  // ----- Admin: staff & honours -----
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('teams/:id/staff')
+  addStaff(@Param('id') id: string, @Body() body: any) {
+    return this.staff.addStaff(id, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('teams/:id/staff/:staffId')
+  updateStaff(
+    @Param('id') id: string,
+    @Param('staffId') staffId: string,
+    @Body() body: any,
+  ) {
+    return this.staff.updateStaff(id, staffId, body);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Delete('teams/:id/staff/:staffId')
+  removeStaff(@Param('id') id: string, @Param('staffId') staffId: string) {
+    return this.staff.removeStaff(id, staffId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Put('teams/:id/honours')
+  setHonours(@Param('id') id: string, @Body() body: any) {
+    return this.staff.setHonours(id, body?.honours ?? body);
+  }
+
   // ----- Admin: sponsors -----
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -205,25 +299,61 @@ export class EsportController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Post('seasons')
-  createSeason(@Body() body: any) {
-    return this.esport.createSeason(body);
+  createSeason(@Body() body: CreateSeasonDto) {
+    return this.seasons.create(body);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Patch('seasons/:id')
-  updateSeason(@Param('id') id: string, @Body() body: any) {
-    return this.esport.updateSeason(id, body);
+  updateSeason(@Param('id') id: string, @Body() body: UpdateSeasonDto) {
+    return this.seasons.update(id, body);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Delete('seasons/:id')
   deleteSeason(@Param('id') id: string) {
-    return this.esport.deleteSeason(id);
+    return this.seasons.remove(id);
   }
 
-  // ----- Matches (admin, ou capitaine pour amical/entraînement) -----
+  // Lifecycle: upcoming -> active -> playoffs -> closed (-> reopen).
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons/:id/activate')
+  activateSeason(@Param('id') id: string) {
+    return this.seasons.activate(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons/:id/playoffs')
+  startSeasonPlayoffs(@Param('id') id: string) {
+    return this.seasons.startPlayoffs(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('seasons/:id/summary-preview')
+  previewSeasonSummary(@Param('id') id: string) {
+    return this.seasons.previewSummary(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons/:id/close')
+  closeSeason(@Param('id') id: string, @Body() body: CloseSeasonDto) {
+    return this.seasons.close(id, body ?? {});
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('seasons/:id/reopen')
+  reopenSeason(@Param('id') id: string) {
+    return this.seasons.reopen(id);
+  }
+
+  // ----- Matches (admin, or captain for friendly/training) -----
 
   @UseGuards(JwtAuthGuard)
   @Post('matches')
@@ -237,10 +367,35 @@ export class EsportController {
     return this.esport.setMatchResult(id, body, user);
   }
 
+  // Match sheet details: format, games, screenshots, VOD / stream, MVP.
+  @UseGuards(JwtAuthGuard)
+  @Patch('matches/:id/details')
+  setMatchDetails(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.setMatchDetails(id, body, user);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Patch('matches/:id')
   updateMatch(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
     return this.esport.updateMatch(id, body, user);
+  }
+
+  // Per-player stats of a match: full replace of the roster (admin, or
+  // captain for friendly/training).
+  @UseGuards(JwtAuthGuard)
+  @Put('matches/:id/players')
+  setMatchPlayers(@Param('id') id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.esport.setMatchPlayers(id, body?.players ?? body, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('matches/:id/players/:userId')
+  removeMatchPlayer(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.esport.removeMatchPlayer(id, userId, user);
   }
 
   @UseGuards(JwtAuthGuard)

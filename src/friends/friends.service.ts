@@ -3,16 +3,19 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
 import { CommunityService } from '../community/community.service';
+import { GamificationService } from '../gamification/gamification.service';
 
 @Injectable()
 export class FriendsService {
   constructor(
     private prisma: PrismaService,
     private community: CommunityService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   private findBetween(a: string, b: string) {
@@ -54,6 +57,7 @@ export class FriendsService {
       title: "Nouvelle demande d'ami",
       message: `${who} veut vous ajouter en ami.`,
       link: '/friends',
+      data: { who },
     });
     return { ok: true, status: 'pending_out' };
   }
@@ -67,6 +71,8 @@ export class FriendsService {
       where: { id: fr.id },
       data: { status: 'accepted' },
     });
+    void this.gamification?.trackSafe(me, 'friend_added', fr.id);
+    void this.gamification?.trackSafe(otherId, 'friend_added', fr.id);
     const meUser = await this.prisma.user.findUnique({ where: { id: me } });
     const who = meUser ? serializeUserCard(meUser).displayName || meUser.username : 'Un joueur';
     await this.community.notifyUser(otherId, {
@@ -74,6 +80,7 @@ export class FriendsService {
       title: 'Demande acceptée',
       message: `${who} a accepté votre demande d'ami.`,
       link: `/players/${me}`,
+      data: { who },
     });
     return { ok: true, status: 'friends' };
   }

@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsOptional,
   IsString,
+  MaxLength,
 } from 'class-validator';
 
 export class CreateEventDto {
@@ -39,4 +40,9 @@ export class CreateEventDto {
   @IsOptional()
   @IsBoolean()
   isPublic?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  city?: string;
 }

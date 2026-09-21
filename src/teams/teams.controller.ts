@@ -36,13 +36,17 @@ export class TeamsController {
 
   @UseGuards(JwtAuthGuard)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateTeamDto) {
-    return this.teamsService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateTeamDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.teamsService.update(id, dto, user);
   }
 
   @UseGuards(JwtAuthGuard)
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.teamsService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.teamsService.remove(id, user);
   }
 }

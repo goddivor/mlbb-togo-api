@@ -4,10 +4,34 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { normalizeSponsorInput, serializeSponsor } from '../sponsors/sponsors.logic';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
-import { CommunityService } from '../community/community.service';
+import { PlayerStatsService } from '../stats/player-stats.service';
+import { GamificationService } from '../gamification/gamification.service';
+import { kdaOf } from '../stats/player-stats.util';
+import { normalizeFiguresInput, parseFigures } from './esport-figures';
+import { EsportSeasonsService, resolveStatus } from './esport-seasons.service';
+import {
+  MATCH_STAGES,
+  MatchGame,
+  assertResultMatchesGames,
+  groupByDay,
+  isFormat,
+  isStage,
+  normalizeGames,
+  normalizeScreenshots,
+  normalizeUrl,
+  parseGames,
+  parseScreenshots,
+  resolveStage,
+  scoreFromGames,
+  serializeGames,
+  stageFromType,
+  typeFromStage,
+} from './esport-match-details';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
 export const MATCH_TYPES = ['friendly', 'training', 'official'];
@@ -54,9 +78,9 @@ function serializeTeam(team: any) {
     image: team.image ?? null,
     description: team.description ?? null,
     type: team.type ?? 'community',
-    isRecruiting: !!team.isRecruiting,
     esportId: team.esportId ?? null,
     sort: team.sort ?? 0,
+    city: team.city ?? null,
     foundedAt: team.foundedAt,
     memberCount: members.length,
     starterCount: members.filter((m) => !m.isSubstitute).length,
@@ -74,7 +98,9 @@ const teamInclude = {
 export class EsportService {
   constructor(
     private prisma: PrismaService,
-    private community: CommunityService,
+    private playerStats: PlayerStatsService,
+    private seasons: EsportSeasonsService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   private async attachStats(teams: any[]) {
@@ -115,7 +141,31 @@ export class EsportService {
   }
 
   async getSponsors() {
-    return this.prisma.sponsor.findMany({ orderBy: { sort: 'asc' } });
+    const rows = await this.prisma.sponsor.findMany({ orderBy: { sort: 'asc' } });
+    return rows.map(serializeSponsor);
+  }
+
+  /** Public target figures (About page), defaults when no organisation exists. */
+  async getFigures() {
+    const org = await this.prisma.esport.findFirst({
+      select: { id: true, figures: true, updatedAt: true },
+    });
+    return {
+      orgId: org?.id ?? null,
+      updatedAt: org?.updatedAt ?? null,
+      ...parseFigures(org?.figures),
+    };
+  }
+
+  async updateFigures(data: unknown) {
+    const id = await this.resolveOrgId();
+    const figures = normalizeFiguresInput(data);
+    const org = await this.prisma.esport.update({
+      where: { id },
+      data: { figures },
+      select: { id: true, figures: true, updatedAt: true },
+    });
+    return { orgId: org.id, updatedAt: org.updatedAt, ...parseFigures(org.figures) };
   }
 
   async getMtl() {
@@ -124,7 +174,7 @@ export class EsportService {
     });
   }
 
-  // ----- Admin: organisation -----
+  // ----- Admin: organization -----
 
   private async resolveOrgId(esportId?: string) {
     if (esportId) return esportId;
@@ -150,7 +200,7 @@ export class EsportService {
     });
   }
 
-  // ----- Admin: équipes -----
+  // ----- Admin: teams -----
 
   async createTeam(data: any) {
     if (!data?.name)
@@ -163,14 +213,14 @@ export class EsportService {
         image: data.image ?? null,
         description: data.description ?? null,
         type,
-        isRecruiting: !!data.isRecruiting,
         sort: typeof data.sort === 'number' ? data.sort : 0,
         esportId,
+        city: typeof data.city === 'string' && data.city.trim() ? data.city.trim() : null,
       },
     });
 
-    // Créée depuis une demande de joueur : on lie la demande et on
-    // désigne le demandeur comme capitaine.
+    // Created from a player request: we link the request and
+    // designate the requester as captain.
     if (data.requestId) {
       const req = await this.prisma.teamRequest.findUnique({
         where: { id: data.requestId },
@@ -202,9 +252,13 @@ export class EsportService {
         image: data.image === undefined ? undefined : data.image,
         description:
           data.description === undefined ? undefined : data.description,
-        isRecruiting:
-          typeof data.isRecruiting === 'boolean' ? data.isRecruiting : undefined,
         sort: typeof data.sort === 'number' ? data.sort : undefined,
+        city:
+          data.city === undefined
+            ? undefined
+            : typeof data.city === 'string' && data.city.trim()
+              ? data.city.trim()
+              : null,
       },
       include: teamInclude,
     });
@@ -228,9 +282,9 @@ export class EsportService {
     return { ok: true };
   }
 
-  // ----- Admin: membres -----
+  // ----- Admin: members -----
 
-  // Admin, ou capitaine de l'équipe concernée.
+  // Admin, or captain of the team concerned.
   private async assertTeamManager(teamId: string, user: any) {
     if (user?.roleUser === 'admin') return;
     if (user?.id && (await this.isCaptain(teamId, user.id))) return;
@@ -274,7 +328,7 @@ export class EsportService {
     const isAdmin = user?.roleUser === 'admin';
     const role = data.role === undefined ? undefined : assertRole(data.role);
 
-    // Seul l'admin peut toucher au statut de capitaine.
+    // Only the admin can change the captain status.
     if (isAdmin && data.isCaptain === true) await this.clearCaptain(teamId);
     await this.prisma.esportTeamMember.update({
       where: { teamId_userId: { teamId, userId } },
@@ -298,7 +352,7 @@ export class EsportService {
       where: { teamId_userId: { teamId, userId } },
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
-    // Le capitaine ne peut pas se retirer lui-même (le capitaine).
+    // The captain cannot remove himself (the captain).
     if (user?.roleUser !== 'admin' && member.isCaptain)
       throw new ForbiddenException('Le capitaine ne peut pas être retiré.');
     await this.prisma.esportTeamMember.delete({
@@ -330,30 +384,28 @@ export class EsportService {
   // ----- Admin: sponsors -----
 
   async createSponsor(data: any) {
-    if (!data?.logo)
-      throw new BadRequestException('Le logo du sponsor est requis.');
-    return this.prisma.sponsor.create({
+    const input = normalizeSponsorInput(data, false);
+    const row = await this.prisma.sponsor.create({
       data: {
-        name: data.name ?? null,
-        logo: data.logo,
-        url: data.url ?? null,
-        sort: typeof data.sort === 'number' ? data.sort : 0,
+        name: input.name ?? null,
+        logo: input.logo!,
+        url: input.url ?? null,
+        sort: input.sort ?? 0,
+        tier: input.tier ?? null,
+        description: input.description ?? null,
+        seasonIds: input.seasonIds ?? [],
+        isActive: input.isActive ?? true,
       },
     });
+    return serializeSponsor(row);
   }
 
   async updateSponsor(id: string, data: any) {
     const sponsor = await this.prisma.sponsor.findUnique({ where: { id } });
     if (!sponsor) throw new NotFoundException('Sponsor introuvable.');
-    return this.prisma.sponsor.update({
-      where: { id },
-      data: {
-        name: data.name === undefined ? undefined : data.name,
-        logo: data.logo ?? undefined,
-        url: data.url === undefined ? undefined : data.url,
-        sort: typeof data.sort === 'number' ? data.sort : undefined,
-      },
-    });
+    const input = normalizeSponsorInput(data, true);
+    const row = await this.prisma.sponsor.update({ where: { id }, data: input });
+    return serializeSponsor(row);
   }
 
   async deleteSponsor(id: string) {
@@ -363,70 +415,15 @@ export class EsportService {
     return { ok: true };
   }
 
-  // ----- Seasons -----
+  // ----- Seasons (lifecycle lives in EsportSeasonsService) -----
 
   async listSeasons() {
-    return this.prisma.esportSeason.findMany({
-      orderBy: [{ isActive: 'desc' }, { startDate: 'desc' }, { createdAt: 'desc' }],
-    });
+    return this.seasons.list();
   }
 
+  /** Raw season lookup used by match creation (404 when unknown). */
   async getSeason(id: string) {
-    const season = await this.prisma.esportSeason.findUnique({ where: { id } });
-    if (!season) throw new NotFoundException('Saison introuvable.');
-    return season;
-  }
-
-  async createSeason(data: any) {
-    if (!data?.name) throw new BadRequestException('Le nom de la saison est requis.');
-    if (data.isActive) await this.clearActiveSeasons();
-    return this.prisma.esportSeason.create({
-      data: {
-        name: data.name,
-        description: data.description ?? null,
-        startDate: data.startDate ? new Date(data.startDate) : null,
-        endDate: data.endDate ? new Date(data.endDate) : null,
-        isActive: !!data.isActive,
-      },
-    });
-  }
-
-  async updateSeason(id: string, data: any) {
-    await this.getSeason(id);
-    if (data.isActive === true) await this.clearActiveSeasons();
-    return this.prisma.esportSeason.update({
-      where: { id },
-      data: {
-        name: data.name ?? undefined,
-        description: data.description === undefined ? undefined : data.description,
-        startDate:
-          data.startDate === undefined
-            ? undefined
-            : data.startDate
-              ? new Date(data.startDate)
-              : null,
-        endDate:
-          data.endDate === undefined
-            ? undefined
-            : data.endDate
-              ? new Date(data.endDate)
-              : null,
-        isActive: typeof data.isActive === 'boolean' ? data.isActive : undefined,
-      },
-    });
-  }
-
-  async deleteSeason(id: string) {
-    await this.getSeason(id);
-    await this.prisma.esportSeason.delete({ where: { id } });
-    return { ok: true };
-  }
-
-  private async clearActiveSeasons() {
-    await this.prisma.esportSeason.updateMany({
-      where: { isActive: true },
-      data: { isActive: false },
-    });
+    return this.seasons.findRaw(id);
   }
 
   // ----- Matches -----
@@ -442,11 +439,24 @@ export class EsportService {
     return new Map(teams.map((tm) => [tm.id, tm]));
   }
 
-  private serializeMatch(m: any, tmap: Map<string, any>) {
+  /** User cards (id -> card) for the MVP avatars. */
+  private async userCardMap(ids: string[]) {
+    const uniq = Array.from(new Set(ids.filter(Boolean)));
+    const users = uniq.length
+      ? await this.prisma.user.findMany({ where: { id: { in: uniq } } })
+      : [];
+    return new Map(users.map((u) => [u.id, serializeUserCard(u)]));
+  }
+
+  private serializeMatch(m: any, tmap: Map<string, any>, umap?: Map<string, any>, playersCount = 0) {
+    const games = parseGames(m.games);
+    const screenshots = parseScreenshots(m.screenshots);
     return {
       id: m.id,
       seasonId: m.seasonId ?? null,
       type: m.type,
+      stage: resolveStage(m),
+      format: isFormat(m.format) ? m.format : null,
       status: m.status,
       scheduledAt: m.scheduledAt,
       scoreA: m.scoreA ?? 0,
@@ -457,38 +467,152 @@ export class EsportService {
       teamA: tmap.get(m.teamAId) ?? { id: m.teamAId, name: '?' },
       teamB: tmap.get(m.teamBId) ?? { id: m.teamBId, name: '?' },
       winner: m.winnerTeamId ? tmap.get(m.winnerTeamId) ?? null : null,
+      games: games.map((g) => ({ ...g, mvp: g.mvpUserId ? umap?.get(g.mvpUserId) ?? null : null })),
+      gamesCount: games.length,
+      // Player stat rows: with the games, tells whether a scoresheet exists.
+      playersCount,
+      screenshots,
+      screenshotsCount: screenshots.length,
+      vodUrl: m.vodUrl ?? null,
+      streamUrl: m.streamUrl ?? null,
+      mvpUserId: m.mvpUserId ?? null,
+      mvp: m.mvpUserId ? umap?.get(m.mvpUserId) ?? null : null,
     };
   }
 
-  async listMatches(filter: { seasonId?: string; teamId?: string; status?: string } = {}) {
-    const where: any = {};
-    if (filter.seasonId) where.seasonId = filter.seasonId;
-    if (filter.status) where.status = filter.status;
-    if (filter.teamId)
-      where.OR = [{ teamAId: filter.teamId }, { teamBId: filter.teamId }];
-    const matches = await this.prisma.esportMatch.findMany({
-      where,
-      orderBy: [{ scheduledAt: 'desc' }, { createdAt: 'desc' }],
-    });
-    const tmap = await this.teamMap(
-      matches.flatMap((m) => [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
-    );
-    return matches.map((m) => this.serializeMatch(m, tmap));
+  /** Mongo filter for a stage, honouring legacy rows without `stage`. */
+  private stageWhere(stage: string) {
+    if (stage === 'playoff') return { stage: 'playoff' };
+    const legacyTypes = MATCH_TYPES.filter((t) => stageFromType(t) === stage);
+    // MongoDB: `null` only matches an explicit null, rows created before the
+    // column existed have no `stage` key at all (`isSet: false`).
+    return {
+      OR: [
+        { stage },
+        { stage: null, type: { in: legacyTypes } },
+        { stage: { isSet: false }, type: { in: legacyTypes } },
+      ],
+    };
   }
 
+  private buildMatchWhere(filter: {
+    seasonId?: string;
+    teamId?: string;
+    status?: string;
+    stage?: string;
+    from?: string;
+    to?: string;
+  }) {
+    const and: any[] = [];
+    if (filter.seasonId) and.push({ seasonId: filter.seasonId });
+    if (filter.status) and.push({ status: filter.status });
+    if (filter.teamId) and.push({ OR: [{ teamAId: filter.teamId }, { teamBId: filter.teamId }] });
+    if (filter.stage) {
+      if (!isStage(filter.stage))
+        throw new BadRequestException(`Étape invalide. Valeurs : ${MATCH_STAGES.join(', ')}.`);
+      and.push(this.stageWhere(filter.stage));
+    }
+    const range: any = {};
+    if (filter.from) {
+      const d = new Date(filter.from);
+      if (isNaN(d.getTime())) throw new BadRequestException('Date « from » invalide.');
+      range.gte = d;
+    }
+    if (filter.to) {
+      const d = new Date(filter.to);
+      if (isNaN(d.getTime())) throw new BadRequestException('Date « to » invalide.');
+      range.lte = d;
+    }
+    if (Object.keys(range).length) and.push({ scheduledAt: range });
+    return and.length ? { AND: and } : {};
+  }
+
+  private async serializeMatches(matches: any[]) {
+    const [tmap, umap, playerRows] = await Promise.all([
+      this.teamMap(
+        matches.flatMap((m) => [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
+      ),
+      this.userCardMap(matches.map((m) => m.mvpUserId).filter(Boolean) as string[]),
+      matches.length
+        ? this.prisma.esportMatchPlayer.groupBy({
+            by: ['matchId'],
+            where: { matchId: { in: matches.map((m) => m.id) } },
+            _count: { _all: true },
+          })
+        : Promise.resolve([] as { matchId: string; _count: { _all: number } }[]),
+    ]);
+    const counts = new Map(playerRows.map((r) => [r.matchId, r._count._all]));
+    return matches.map((m) => this.serializeMatch(m, tmap, umap, counts.get(m.id) ?? 0));
+  }
+
+  async listMatches(
+    filter: {
+      seasonId?: string;
+      teamId?: string;
+      status?: string;
+      stage?: string;
+      from?: string;
+      to?: string;
+    } = {},
+  ) {
+    const matches = await this.prisma.esportMatch.findMany({
+      where: this.buildMatchWhere(filter),
+      orderBy: [{ scheduledAt: 'desc' }, { createdAt: 'desc' }],
+    });
+    return this.serializeMatches(matches);
+  }
+
+  /**
+   * Calendar view: matches of a period grouped by day (UTC), oldest first.
+   * Without `from`/`to` the whole season (or everything) is returned.
+   */
+  async matchesCalendar(
+    filter: { seasonId?: string; teamId?: string; stage?: string; from?: string; to?: string } = {},
+  ) {
+    const matches = await this.prisma.esportMatch.findMany({
+      where: this.buildMatchWhere(filter),
+      orderBy: [{ scheduledAt: 'asc' }, { createdAt: 'asc' }],
+    });
+    const serialized = await this.serializeMatches(matches);
+    const { days, undated } = groupByDay(serialized);
+    return {
+      from: filter.from ?? null,
+      to: filter.to ?? null,
+      total: serialized.length,
+      days,
+      undated,
+    };
+  }
+
+  /** Full match sheet: teams, result, games, screenshots, links, MVP, player stats. */
   async getMatch(id: string) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id } });
     if (!m) throw new NotFoundException('Match introuvable.');
-    const tmap = await this.teamMap(
-      [m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[],
-    );
-    return this.serializeMatch(m, tmap);
+    const games = parseGames(m.games);
+    const [tmap, umap, players] = await Promise.all([
+      this.teamMap([m.teamAId, m.teamBId, m.winnerTeamId].filter(Boolean) as string[]),
+      this.userCardMap(
+        [m.mvpUserId, ...games.map((g) => g.mvpUserId)].filter(Boolean) as string[],
+      ),
+      this.getMatchPlayers(id),
+    ]);
+    const base = this.serializeMatch(m, tmap, umap, players.players.length);
+    const mvpRow = players.players.find((p) => p.userId === base.mvpUserId) ?? null;
+    return {
+      ...base,
+      // Fall back to the per-player MVP flag for matches recorded before the
+      // `mvpUserId` column existed.
+      mvpUserId: base.mvpUserId ?? players.players.find((p) => p.isMvp)?.userId ?? null,
+      mvp: base.mvp ?? (players.players.find((p) => p.isMvp)?.user ?? null),
+      mvpStats: mvpRow ?? players.players.find((p) => p.isMvp) ?? null,
+      players: { teamA: players.teamA, teamB: players.teamB },
+    };
   }
 
-  // Admin, ou capitaine d'une des deux équipes (hors officiel).
+  // Admin, or captain of one of the two teams (except official).
   private async assertMatchManager(match: any, user: any) {
     if (user?.roleUser === 'admin') return;
-    if (match.type === 'official')
+    if (resolveStage(match) !== 'scrim')
       throw new ForbiddenException(
         "Seul l'administrateur peut gérer une rencontre officielle.",
       );
@@ -512,9 +636,10 @@ export class EsportService {
       select: { id: true },
     });
     if (found.length !== 2) throw new NotFoundException('Équipe introuvable.');
-    if (data.seasonId) await this.getSeason(data.seasonId);
+    let season: any = null;
+    if (data.seasonId) season = await this.getSeason(data.seasonId);
 
-    // Le capitaine ne peut créer que des amicaux/entraînements de son équipe.
+    // The captain can only create friendly/training matches for his team.
     if (user && user.roleUser !== 'admin') {
       if (type === 'official')
         throw new ForbiddenException(
@@ -526,14 +651,27 @@ export class EsportService {
         throw new ForbiddenException("Réservé au capitaine de l'équipe.");
     }
 
+    // Stage: explicit, else derived from the type (an official match created
+    // while the season is in playoffs is a playoff match).
+    let stage = isStage(data?.stage) ? data.stage : stageFromType(type);
+    if (!isStage(data?.stage) && type === 'official' && season && resolveStatus(season) === 'playoffs')
+      stage = 'playoff';
+    if (stage !== 'scrim' && user && user.roleUser !== 'admin')
+      throw new ForbiddenException("Seul l'administrateur peut planifier une rencontre officielle.");
+    const format = isFormat(data?.format) ? data.format : null;
+
     await this.prisma.esportMatch.create({
       data: {
         seasonId: data.seasonId ?? null,
-        type,
+        type: stage === 'scrim' ? type : 'official',
+        stage,
+        format,
         teamAId: data.teamAId,
         teamBId: data.teamBId,
         scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
         notes: data.notes ?? null,
+        streamUrl: normalizeUrl(data?.streamUrl, 'stream'),
+        vodUrl: normalizeUrl(data?.vodUrl, 'VOD'),
         createdById: createdById ?? null,
       },
     });
@@ -547,6 +685,25 @@ export class EsportService {
     const patch: any = {};
     if (data.type !== undefined)
       patch.type = MATCH_TYPES.includes(data.type) ? data.type : undefined;
+    // Stage and type are kept in sync: an explicit stage wins, otherwise a
+    // type change re-derives the stage (legacy clients only send `type`).
+    if (data.stage !== undefined) {
+      if (!isStage(data.stage))
+        throw new BadRequestException(`Étape invalide. Valeurs : ${MATCH_STAGES.join(', ')}.`);
+      patch.stage = data.stage;
+      patch.type = typeFromStage(data.stage, patch.type ?? raw.type);
+    } else if (patch.type && patch.type !== raw.type) {
+      patch.stage = stageFromType(patch.type);
+    }
+    if ((patch.stage ?? resolveStage(raw)) !== 'scrim' && user?.roleUser !== 'admin')
+      throw new ForbiddenException("Seul l'administrateur peut gérer une rencontre officielle.");
+    if (data.format !== undefined) {
+      if (data.format !== null && data.format !== '' && !isFormat(data.format))
+        throw new BadRequestException('Format invalide (bo1, bo3, bo5, bo7).');
+      patch.format = data.format || null;
+    }
+    if (data.vodUrl !== undefined) patch.vodUrl = normalizeUrl(data.vodUrl, 'VOD');
+    if (data.streamUrl !== undefined) patch.streamUrl = normalizeUrl(data.streamUrl, 'stream');
     if (data.seasonId !== undefined) patch.seasonId = data.seasonId || null;
     if (data.teamAId !== undefined) patch.teamAId = data.teamAId;
     if (data.teamBId !== undefined) patch.teamBId = data.teamBId;
@@ -558,36 +715,342 @@ export class EsportService {
     if (patch.teamAId && patch.teamBId && patch.teamAId === patch.teamBId)
       throw new BadRequestException('Une équipe ne peut pas jouer contre elle-même.');
     await this.prisma.esportMatch.update({ where: { id }, data: patch });
+    if (patch.status !== undefined || patch.teamAId || patch.teamBId)
+      await this.recomputeMatchParticipants(id);
     return this.getMatch(id);
   }
 
+  /**
+   * Result of a match. When `games` are provided the score is derived from
+   * them and any explicit score / winner must agree; details (format, MVP,
+   * screenshots, links) can be saved in the same call.
+   */
   async setMatchResult(id: string, data: any, user?: any) {
     const m = await this.prisma.esportMatch.findUnique({ where: { id } });
     if (!m) throw new NotFoundException('Match introuvable.');
     await this.assertMatchManager(m, user);
-    const scoreA = Number.isFinite(+data?.scoreA) ? Math.max(0, +data.scoreA) : 0;
-    const scoreB = Number.isFinite(+data?.scoreB) ? Math.max(0, +data.scoreB) : 0;
+    const details = await this.normalizeDetails(m, data ?? {});
+    const games: MatchGame[] = details.games ?? parseGames(m.games);
+
+    const given = (v: any) => v !== undefined && v !== null && v !== '';
+    let scoreA = given(data?.scoreA) && Number.isFinite(+data.scoreA) ? Math.max(0, +data.scoreA) : 0;
+    let scoreB = given(data?.scoreB) && Number.isFinite(+data.scoreB) ? Math.max(0, +data.scoreB) : 0;
     let winnerTeamId: string | null = null;
     if (data?.winnerTeamId) {
       if (data.winnerTeamId !== m.teamAId && data.winnerTeamId !== m.teamBId)
         throw new BadRequestException("Le vainqueur doit être l'une des deux équipes.");
       winnerTeamId = data.winnerTeamId;
-    } else if (scoreA > scoreB) winnerTeamId = m.teamAId;
-    else if (scoreB > scoreA) winnerTeamId = m.teamBId;
+    }
+    if (games.length) {
+      assertResultMatchesGames(games, m, {
+        scoreA: given(data?.scoreA) ? scoreA : null,
+        scoreB: given(data?.scoreB) ? scoreB : null,
+        winnerTeamId,
+      });
+      const derived = scoreFromGames(games, m);
+      scoreA = derived.scoreA;
+      scoreB = derived.scoreB;
+      winnerTeamId = winnerTeamId ?? derived.winnerTeamId;
+    }
+    if (!winnerTeamId) {
+      if (scoreA > scoreB) winnerTeamId = m.teamAId;
+      else if (scoreB > scoreA) winnerTeamId = m.teamBId;
+    }
 
+    const { games: newGames, ...rest } = details;
     await this.prisma.esportMatch.update({
       where: { id },
-      data: { scoreA, scoreB, winnerTeamId, status: 'completed' },
+      data: {
+        ...rest,
+        ...(newGames ? { games: serializeGames(newGames) } : {}),
+        scoreA,
+        scoreB,
+        winnerTeamId,
+        status: 'completed',
+      },
     });
+    await this.syncMvpFlag(id, m, details.mvpUserId);
+    // Player counters are derived from completed matches (never incremented),
+    // so re-submitting a result can't double count.
+    await this.recomputeMatchParticipants(id);
     return this.getMatch(id);
+  }
+
+  /**
+   * Match sheet details only (admin): format, games, screenshots, VOD /
+   * stream links, MVP. The status and score are untouched, but games must
+   * stay consistent with an already recorded result.
+   */
+  async setMatchDetails(id: string, data: any, user?: any) {
+    const m = await this.prisma.esportMatch.findUnique({ where: { id } });
+    if (!m) throw new NotFoundException('Match introuvable.');
+    await this.assertMatchManager(m, user);
+    const details = await this.normalizeDetails(m, data ?? {});
+    if (details.games && m.status === 'completed')
+      assertResultMatchesGames(details.games, m, {
+        scoreA: m.scoreA,
+        scoreB: m.scoreB,
+        winnerTeamId: m.winnerTeamId,
+      });
+    const { games, ...rest } = details;
+    await this.prisma.esportMatch.update({
+      where: { id },
+      data: { ...rest, ...(games ? { games: serializeGames(games) } : {}) },
+    });
+    await this.syncMvpFlag(id, m, details.mvpUserId);
+    return this.getMatch(id);
+  }
+
+  /**
+   * Validate the optional detail fields of a payload. Only the keys present
+   * in `data` are returned so callers can PATCH partially. `games` is
+   * validated against the (new or stored) format.
+   */
+  private async normalizeDetails(m: any, data: any) {
+    const out: {
+      format?: string | null;
+      games?: MatchGame[];
+      screenshots?: string | null;
+      vodUrl?: string | null;
+      streamUrl?: string | null;
+      mvpUserId?: string | null;
+    } = {};
+    if (data.format !== undefined) {
+      if (data.format !== null && data.format !== '' && !isFormat(data.format))
+        throw new BadRequestException('Format invalide (bo1, bo3, bo5, bo7).');
+      out.format = data.format || null;
+    }
+    const format = out.format !== undefined ? out.format : m.format;
+    if (data.games !== undefined) {
+      out.games = normalizeGames(data.games, m, format);
+      const mvpIds = out.games.map((g) => g.mvpUserId).filter(Boolean) as string[];
+      if (mvpIds.length) await this.assertMatchMvpCandidates(m, mvpIds);
+    } else if (out.format !== undefined) {
+      // Shrinking the format must not leave more games than allowed.
+      const stored = parseGames(m.games);
+      if (stored.length) normalizeGames(stored, m, format);
+    }
+    if (data.screenshots !== undefined) out.screenshots = normalizeScreenshots(data.screenshots);
+    if (data.vodUrl !== undefined) out.vodUrl = normalizeUrl(data.vodUrl, 'VOD');
+    if (data.streamUrl !== undefined) out.streamUrl = normalizeUrl(data.streamUrl, 'stream');
+    if (data.mvpUserId !== undefined) {
+      if (data.mvpUserId) {
+        if (typeof data.mvpUserId !== 'string')
+          throw new BadRequestException('mvpUserId invalide.');
+        await this.assertMatchMvpCandidates(m, [data.mvpUserId]);
+        out.mvpUserId = data.mvpUserId;
+      } else out.mvpUserId = null;
+    }
+    return out;
+  }
+
+  /**
+   * An MVP (match or game) must be a player of the match: a member of one of
+   * the two rosters, or someone already listed in the match player stats
+   * (players who left the team since keep their record).
+   */
+  private async assertMatchMvpCandidates(m: any, ids: string[]) {
+    const uniq = Array.from(new Set(ids));
+    await this.assertUsersExist(uniq);
+    const [members, stats] = await Promise.all([
+      this.prisma.esportTeamMember.findMany({
+        where: { teamId: { in: [m.teamAId, m.teamBId] }, userId: { in: uniq } },
+        select: { userId: true },
+      }),
+      this.prisma.esportMatchPlayer.findMany({
+        where: { matchId: m.id, userId: { in: uniq } },
+        select: { userId: true },
+      }),
+    ]);
+    const allowed = new Set([...members, ...stats].map((r) => r.userId));
+    if (uniq.some((id) => !allowed.has(id)))
+      throw new BadRequestException("Le MVP doit être un joueur de l'une des deux équipes.");
+  }
+
+  private async assertUsersExist(ids: string[]) {
+    const uniq = Array.from(new Set(ids));
+    const found = await this.prisma.user.findMany({
+      where: { id: { in: uniq } },
+      select: { id: true },
+    });
+    if (found.length !== uniq.length) throw new NotFoundException('Joueur introuvable.');
+  }
+
+  /** Mirror the match MVP onto the per-player stats rows (single MVP). */
+  private async syncMvpFlag(matchId: string, m: any, mvpUserId: string | null | undefined) {
+    if (mvpUserId === undefined) return;
+    await this.prisma.esportMatchPlayer.updateMany({
+      where: { matchId, isMvp: true, ...(mvpUserId ? { userId: { not: mvpUserId } } : {}) },
+      data: { isMvp: false },
+    });
+    if (mvpUserId)
+      await this.prisma.esportMatchPlayer.updateMany({
+        where: { matchId, userId: mvpUserId },
+        data: { isMvp: true },
+      });
+    const ids = await this.playerStats.participantIds(matchId);
+    if (ids.length) await this.playerStats.recomputeUsers(ids);
   }
 
   async deleteMatch(id: string, user?: any) {
     const raw = await this.prisma.esportMatch.findUnique({ where: { id } });
     if (!raw) throw new NotFoundException('Match introuvable.');
     await this.assertMatchManager(raw, user);
+    const participants = await this.playerStats.participantIds(id);
+    await this.prisma.esportMatchPlayer.deleteMany({ where: { matchId: id } });
     await this.prisma.esportMatch.delete({ where: { id } });
+    await this.playerStats.recomputeUsers(participants);
     return { ok: true };
+  }
+
+  private async recomputeMatchParticipants(matchId: string) {
+    const ids = await this.playerStats.participantIds(matchId);
+    if (ids.length) await this.playerStats.recomputeUsers(ids);
+    // XP grants are keyed by match id, so re-running is harmless.
+    void this.gamification?.syncMatch(matchId);
+  }
+
+  // ----- Match players (per-player stats) -----
+
+  private serializeMatchPlayer(r: any, umap: Map<string, any>, hmap: Map<string, any>) {
+    const hero = r.hero ? hmap.get(r.hero) : null;
+    return {
+      id: r.id,
+      matchId: r.matchId,
+      userId: r.userId,
+      teamId: r.teamId,
+      hero: r.hero ?? null,
+      heroId: r.heroId ?? null,
+      heroImage: hero?.thumb || hero?.image || null,
+      role: r.role ?? null,
+      kills: r.kills ?? 0,
+      deaths: r.deaths ?? 0,
+      assists: r.assists ?? 0,
+      kda: kdaOf(r.kills ?? 0, r.deaths ?? 0, r.assists ?? 0),
+      gold: r.gold ?? null,
+      damage: r.damage ?? null,
+      isMvp: !!r.isMvp,
+      user: umap.get(r.userId) ?? null,
+    };
+  }
+
+  async getMatchPlayers(matchId: string) {
+    const m = await this.prisma.esportMatch.findUnique({ where: { id: matchId } });
+    if (!m) throw new NotFoundException('Match introuvable.');
+    const rows = await this.prisma.esportMatchPlayer.findMany({
+      where: { matchId },
+      orderBy: { createdAt: 'asc' },
+    });
+    const userIds = Array.from(new Set(rows.map((r) => r.userId)));
+    const users = userIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: userIds } } })
+      : [];
+    const umap = new Map(users.map((u) => [u.id, serializeUserCard(u)]));
+    const names = Array.from(new Set(rows.map((r) => r.hero).filter(Boolean) as string[]));
+    const heroes = names.length
+      ? await this.prisma.hero.findMany({
+          where: { name: { in: names } },
+          select: { name: true, image: true, thumb: true },
+        })
+      : [];
+    const hmap = new Map(heroes.map((h) => [h.name, h]));
+    const players = rows.map((r) => this.serializeMatchPlayer(r, umap, hmap));
+    return {
+      matchId,
+      teamA: players.filter((p) => p.teamId === m.teamAId),
+      teamB: players.filter((p) => p.teamId === m.teamBId),
+      players,
+    };
+  }
+
+  /**
+   * Replaces the per-player stats of a match. Every entry must reference one
+   * of the two teams; at most one MVP per match. Players missing from the
+   * payload are removed. User counters are recomputed afterwards.
+   */
+  async setMatchPlayers(matchId: string, input: any, user?: any) {
+    const m = await this.prisma.esportMatch.findUnique({ where: { id: matchId } });
+    if (!m) throw new NotFoundException('Match introuvable.');
+    await this.assertMatchManager(m, user);
+    const list: any[] = Array.isArray(input) ? input : [];
+    const entries = list.map((p) => this.normalizePlayerEntry(p, m));
+
+    const seen = new Set<string>();
+    for (const e of entries) {
+      if (seen.has(e.userId))
+        throw new BadRequestException('Un joueur ne peut apparaître qu’une fois.');
+      seen.add(e.userId);
+    }
+    if (entries.filter((e) => e.isMvp).length > 1)
+      throw new BadRequestException('Un seul MVP par match.');
+
+    const userIds = entries.map((e) => e.userId);
+    if (userIds.length) {
+      const found = await this.prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true },
+      });
+      if (found.length !== userIds.length)
+        throw new NotFoundException('Joueur introuvable.');
+    }
+
+    const previous = await this.playerStats.participantIds(matchId);
+    const keep = new Set(userIds);
+    const toRemove = previous.filter((id) => !keep.has(id));
+    if (toRemove.length)
+      await this.prisma.esportMatchPlayer.deleteMany({
+        where: { matchId, userId: { in: toRemove } },
+      });
+    for (const e of entries) {
+      await this.prisma.esportMatchPlayer.upsert({
+        where: { matchId_userId: { matchId, userId: e.userId } },
+        create: { matchId, ...e },
+        update: { ...e },
+      });
+    }
+    // Keep the match-level MVP in sync with the per-player flag.
+    const mvp = entries.find((e) => e.isMvp)?.userId ?? null;
+    if (mvp || (m.mvpUserId && !keep.has(m.mvpUserId)))
+      await this.prisma.esportMatch.update({ where: { id: matchId }, data: { mvpUserId: mvp } });
+    await this.playerStats.recomputeUsers([...previous, ...userIds]);
+    void this.gamification?.syncMatch(matchId);
+    return this.getMatchPlayers(matchId);
+  }
+
+  async removeMatchPlayer(matchId: string, userId: string, user?: any) {
+    const m = await this.prisma.esportMatch.findUnique({ where: { id: matchId } });
+    if (!m) throw new NotFoundException('Match introuvable.');
+    await this.assertMatchManager(m, user);
+    await this.prisma.esportMatchPlayer.deleteMany({ where: { matchId, userId } });
+    if (m.mvpUserId === userId)
+      await this.prisma.esportMatch.update({ where: { id: matchId }, data: { mvpUserId: null } });
+    await this.playerStats.recomputeUsers([userId]);
+    return this.getMatchPlayers(matchId);
+  }
+
+  private normalizePlayerEntry(p: any, m: any) {
+    if (!p?.userId || typeof p.userId !== 'string')
+      throw new BadRequestException('userId est requis pour chaque joueur.');
+    if (p.teamId !== m.teamAId && p.teamId !== m.teamBId)
+      throw new BadRequestException("Chaque joueur doit appartenir à l'une des deux équipes.");
+    const int = (v: any, min = 0) => {
+      const n = Math.floor(Number(v));
+      return Number.isFinite(n) ? Math.max(min, n) : 0;
+    };
+    const opt = (v: any) => (v === undefined || v === null || v === '' ? null : int(v));
+    return {
+      userId: p.userId,
+      teamId: p.teamId,
+      hero: typeof p.hero === 'string' && p.hero.trim() ? p.hero.trim() : null,
+      heroId: typeof p.heroId === 'string' && /^[0-9a-f]{24}$/i.test(p.heroId) ? p.heroId : null,
+      role: assertRole(p.role ?? null),
+      kills: int(p.kills),
+      deaths: int(p.deaths),
+      assists: int(p.assists),
+      gold: opt(p.gold),
+      damage: opt(p.damage),
+      isMvp: !!p.isMvp,
+    };
   }
 
   private computeTeamStats(teamId: string, matches: any[]) {
@@ -623,106 +1086,10 @@ export class EsportService {
     return matches.map((m) => this.serializeMatch(m, tmap));
   }
 
-  // ----- Join requests (recrutement, validé par le capitaine) -----
-
   private async isCaptain(teamId: string, userId: string) {
     const cap = await this.prisma.esportTeamMember.findFirst({
       where: { teamId, userId, isCaptain: true },
     });
     return !!cap;
-  }
-
-  async requestJoin(userId: string, teamId: string, data: any) {
-    const team = await this.prisma.esportTeam.findUnique({ where: { id: teamId } });
-    if (!team) throw new NotFoundException('Équipe introuvable.');
-    const member = await this.prisma.esportTeamMember.findUnique({
-      where: { teamId_userId: { teamId, userId } },
-    });
-    if (member) throw new ConflictException('Vous êtes déjà membre de cette équipe.');
-    const pending = await this.prisma.esportJoinRequest.findFirst({
-      where: { teamId, userId, status: 'pending' },
-    });
-    if (pending)
-      throw new ConflictException('Vous avez déjà une demande en attente pour cette équipe.');
-    const role = assertRole(data?.role);
-
-    const req = await this.prisma.esportJoinRequest.create({
-      data: { teamId, userId, role, message: data?.message?.trim() || null },
-    });
-
-    const captain = await this.prisma.esportTeamMember.findFirst({
-      where: { teamId, isCaptain: true },
-    });
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    const who = user ? serializeUserCard(user).displayName || user.username : 'Un joueur';
-    if (captain) {
-      await this.community.notifyUser(captain.userId, {
-        type: 'join_request',
-        title: 'Nouvelle demande de recrutement',
-        message: `${who} souhaite rejoindre « ${team.name} ».`,
-        link: `/teams/${teamId}`,
-      });
-    }
-    return req;
-  }
-
-  async myJoinRequests(userId: string) {
-    return this.prisma.esportJoinRequest.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-    });
-  }
-
-  async listJoinRequests(teamId: string, user: any) {
-    const allowed =
-      user?.roleUser === 'admin' || (await this.isCaptain(teamId, user.id));
-    if (!allowed)
-      throw new ForbiddenException('Réservé au capitaine de l’équipe.');
-    const reqs = await this.prisma.esportJoinRequest.findMany({
-      where: { teamId, status: 'pending' },
-      orderBy: { createdAt: 'asc' },
-    });
-    const users = await this.prisma.user.findMany({
-      where: { id: { in: reqs.map((r) => r.userId) } },
-    });
-    const umap = new Map(users.map((u) => [u.id, serializeUserCard(u)]));
-    return reqs.map((r) => ({ ...r, user: umap.get(r.userId) ?? null }));
-  }
-
-  async decideJoinRequest(id: string, user: any, data: any) {
-    const req = await this.prisma.esportJoinRequest.findUnique({ where: { id } });
-    if (!req) throw new NotFoundException('Demande introuvable.');
-    const team = await this.prisma.esportTeam.findUnique({ where: { id: req.teamId } });
-    if (!team) throw new NotFoundException('Équipe introuvable.');
-    const allowed =
-      user?.roleUser === 'admin' || (await this.isCaptain(req.teamId, user.id));
-    if (!allowed)
-      throw new ForbiddenException('Réservé au capitaine de l’équipe.');
-
-    const status = data?.status === 'accepted' ? 'accepted' : 'rejected';
-
-    if (status === 'accepted') {
-      const already = await this.prisma.esportTeamMember.findUnique({
-        where: { teamId_userId: { teamId: req.teamId, userId: req.userId } },
-      });
-      if (!already) {
-        const role = data?.role !== undefined ? assertRole(data.role) : req.role ?? null;
-        await this.prisma.esportTeamMember.create({
-          data: { teamId: req.teamId, userId: req.userId, role },
-        });
-      }
-    }
-
-    await this.prisma.esportJoinRequest.update({ where: { id }, data: { status } });
-    await this.community.notifyUser(req.userId, {
-      type: 'join_decision',
-      title:
-        status === 'accepted'
-          ? 'Vous avez rejoint une équipe'
-          : 'Demande de recrutement refusée',
-      message: `Équipe « ${team.name} ».`,
-      link: `/teams/${req.teamId}`,
-    });
-    return { ok: true, status };
   }
 }

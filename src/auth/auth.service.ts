@@ -4,9 +4,11 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { GamificationService } from '../gamification/gamification.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -16,16 +18,24 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 
-const MLBB_BASES = [
-  'https://mlbb.rone.dev/api',
-  'https://openmlbb.fastapicloud.dev/api',
-];
+// Moonton upstream, called directly (no third-party proxy).
+// AUTH_BASE handles the account flow (sendVc/login/logout/getBaseInfo).
+// STATS_BASE (actgateway) serves the battlereport/* stats endpoints.
+const AUTH_BASE = 'https://sg-api.mobilelegends.com';
+const STATS_BASE = 'https://app.web.moontontech.com/actgateway';
+// x-actid / x-appid are required by getBaseInfo (Moonton "academy" app).
+const MLBB_X_ACTID = '2728785';
+const MLBB_X_APPID = '2713644';
+const MLBB_ORIGIN = 'https://www.mobilelegends.com';
+const MLBB_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
 
 const EMPTY_GAME_PROFILE = {
   nickname: null,
   avatar: null,
   level: null,
   rankLevel: null,
+  peakRankLevel: null,
   country: null,
   stats: {},
   frequentHeroes: [],
@@ -41,6 +51,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   private signToken(user: { id: string; username: string; roleUser: string }) {
@@ -91,8 +102,12 @@ export class AuthService {
     if (!valid) {
       throw new UnauthorizedException('Identifiants invalides.');
     }
+    if (user.isBanned) {
+      throw new UnauthorizedException('Compte suspendu.');
+    }
 
     const token = this.signToken(user);
+    void this.gamification?.trackDailyLogin(user.id);
     return { token, user: serializeUser(user) };
   }
 
@@ -110,6 +125,9 @@ export class AuthService {
     if (user.roleUser !== 'admin' && user.roleUser !== 'moderator') {
       throw new UnauthorizedException("Ce compte n'a pas d'accès administrateur.");
     }
+    if (user.isBanned) {
+      throw new UnauthorizedException('Compte suspendu.');
+    }
     const token = this.signToken(user);
     return { token, user: serializeUser(user) };
   }
@@ -122,22 +140,76 @@ export class AuthService {
     return serializeUser(user);
   }
 
-  private async mlbbFetch(path: string, init?: any): Promise<any> {
-    let last: any = null;
-    for (const base of MLBB_BASES) {
-      try {
-        const res = await fetch(`${base}${path}`, init);
-        const json = await res.json();
-        if (res.status === 503 || json?.code === 'SERVICE_UNAVAILABLE') {
-          last = json;
-          continue;
-        }
-        return json;
-      } catch {
+  private mlbbBaseHeaders(): Record<string, string> {
+    return {
+      'User-Agent': MLBB_UA,
+      Accept: '*/*',
+      Origin: MLBB_ORIGIN,
+      Referer: `${MLBB_ORIGIN}/`,
+      DNT: '1',
+    };
+  }
 
-      }
+  private encodeForm(data: Record<string, any>): string {
+    const entries = Object.entries(data)
+      .filter(([, v]) => v !== undefined && v !== null)
+      .map(([k, v]) => [k, String(v)] as [string, string]);
+    return new URLSearchParams(entries).toString();
+  }
+
+  /** Form POST to AUTH_BASE (sendVc/login/logout/getBaseInfo). */
+  private async authPost(
+    path: string,
+    data: Record<string, any>,
+    opts: { jwt?: string | null; forInfo?: boolean } = {},
+  ): Promise<any> {
+    const headers: Record<string, string> = {
+      ...this.mlbbBaseHeaders(),
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    };
+    if (opts.jwt) {
+      headers['authorization'] = opts.jwt;
+      headers['x-token'] = opts.jwt;
     }
-    return last;
+    if (opts.forInfo) {
+      headers['x-actid'] = MLBB_X_ACTID;
+      headers['x-appid'] = MLBB_X_APPID;
+    }
+    try {
+      const res = await fetch(`${AUTH_BASE}${path}`, {
+        method: 'POST',
+        headers,
+        body: this.encodeForm(data),
+      });
+      return await res.json();
+    } catch (e) {
+      this.logger.warn(`MLBB authPost ${path} failed: ${e}`);
+      return null;
+    }
+  }
+
+  /** JSON GET to STATS_BASE actgateway (battlereport/*). */
+  private async statsGet(
+    path: string,
+    params: Record<string, any>,
+    jwt: string,
+  ): Promise<any> {
+    const qs = this.encodeForm(params);
+    const url = `${STATS_BASE}/${path}${qs ? `?${qs}` : ''}`;
+    try {
+      const res = await fetch(url, {
+        headers: {
+          ...this.mlbbBaseHeaders(),
+          Accept: 'application/json, text/plain, */*',
+          authorization: jwt,
+          'x-token': jwt,
+        },
+      });
+      return await res.json();
+    } catch (e) {
+      this.logger.warn(`MLBB statsGet ${path} failed: ${e}`);
+      return null;
+    }
   }
 
   private mapFrequentHeroes(result: any): any[] {
@@ -153,29 +225,27 @@ export class AuthService {
     }));
   }
 
-  private async fetchSeasons(token: string): Promise<{ ok: boolean; sids: number[] }> {
-    const json = await this.mlbbFetch('/user/season', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+  private async fetchSeasons(jwt: string): Promise<{ ok: boolean; sids: number[] }> {
+    const json = await this.statsGet('battlereport/season/list', {}, jwt);
     const ok = !!(json && json.code === 0 && json.data);
     const sids = json?.data?.sids;
     return { ok, sids: Array.isArray(sids) ? sids : [] };
   }
 
-  private async fetchFrequentHeroes(token: string, sid: number, limit = 8): Promise<any[]> {
-    const json = await this.mlbbFetch(
-      `/user/heroes/frequent?sid=${sid}&limit=${limit}`,
-      { headers: { Authorization: `Bearer ${token}` } },
+  private async fetchFrequentHeroes(jwt: string, sid: number, limit = 8): Promise<any[]> {
+    const json = await this.statsGet(
+      'battlereport/heros/frequent',
+      { sid, limit },
+      jwt,
     );
     return this.mapFrequentHeroes(json?.data?.result);
   }
 
-  private async fetchGameProfile(token: string) {
-    const headers = { Authorization: `Bearer ${token}` };
+  private async fetchGameProfile(jwt: string, roleId: number, zoneId: number) {
     const [infoR, statsR, seasonRes] = await Promise.all([
-      this.mlbbFetch('/user/info', { headers }),
-      this.mlbbFetch('/user/stats', { headers }),
-      this.fetchSeasons(token),
+      this.authPost('/base/getBaseInfo', { roleId, zoneId }, { jwt, forInfo: true }),
+      this.statsGet('battlereport/stats', {}, jwt),
+      this.fetchSeasons(jwt),
     ]);
 
     const infoOk = !!(infoR && infoR.code === 0 && infoR.data);
@@ -189,7 +259,7 @@ export class AuthService {
 
     const currentSeason = seasons.length ? seasons[0] : null;
     const frequentHeroes =
-      currentSeason != null ? await this.fetchFrequentHeroes(token, currentSeason) : [];
+      currentSeason != null ? await this.fetchFrequentHeroes(jwt, currentSeason) : [];
 
     const roles = await this.computeMainRoles(frequentHeroes);
 
@@ -211,6 +281,7 @@ export class AuthService {
       avatar: info.avatar || null,
       level: info.level ?? null,
       rankLevel: info.rank_level ?? null,
+      peakRankLevel: info.history_rank_level ?? null,
       country: info.reg_country || null,
       stats,
       frequentHeroes,
@@ -255,16 +326,20 @@ export class AuthService {
   }
 
   private async validateMlbbCode(roleId: number, zoneId: number, vc: number) {
-    const json = await this.mlbbFetch('/user/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role_id: roleId, zone_id: zoneId, vc }),
+    const json = await this.authPost('/base/login', {
+      roleId,
+      zoneId,
+      vc,
+      referer: 'academy',
+      type: 'web',
     });
-    if (!json || json.code === 'SERVICE_UNAVAILABLE') {
+    if (!json) {
       throw new BadRequestException('Service MLBB momentanément indisponible. Réessayez dans un instant.');
     }
     if (json.code !== 0 || !json.data) {
-      throw new UnauthorizedException(json.msg || 'Code de vérification invalide ou expiré.');
+      throw new UnauthorizedException(
+        json.msg || json.message || 'Code de vérification invalide ou expiré.',
+      );
     }
     return (json.data.jwt || json.data.token || null) as string | null;
   }
@@ -280,6 +355,7 @@ export class AuthService {
       data.gameAvatar = profile.avatar;
       data.gameLevel = profile.level;
       data.gameRankLevel = profile.rankLevel;
+      data.gamePeakRankLevel = profile.peakRankLevel;
       data.gameCountry = profile.country;
     }
     if (profile.statsOk !== false) {
@@ -294,20 +370,16 @@ export class AuthService {
   }
 
   async mlbbSendVc(roleId: number, zoneId: number) {
-    const json = await this.mlbbFetch('/user/auth/send-vc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role_id: roleId, zone_id: zoneId }),
-    });
+    const json = await this.authPost('/base/sendVc', { roleId, zoneId });
 
-    if (!json || json.code === 'SERVICE_UNAVAILABLE') {
+    if (!json) {
       throw new BadRequestException(
         'Service MLBB momentanément indisponible (trafic élevé). Réessaie dans quelques instants.',
       );
     }
     if (json.code !== 0) {
       throw new BadRequestException(
-        json.msg || "Impossible d'envoyer le code. Vérifie l'ID de jeu et le serveur.",
+        json.msg || json.message || "Impossible d'envoyer le code. Vérifie l'ID de jeu et le serveur.",
       );
     }
     return {
@@ -319,8 +391,8 @@ export class AuthService {
   async mlbbLogin(roleId: number, zoneId: number, vc: number) {
     const mlbbToken = await this.validateMlbbCode(roleId, zoneId, vc);
     const profile = mlbbToken
-      ? await this.fetchGameProfile(mlbbToken)
-      : { nickname: null, avatar: null, level: null, rankLevel: null, country: null, stats: {}, frequentHeroes: [] };
+      ? await this.fetchGameProfile(mlbbToken, roleId, zoneId)
+      : { nickname: null, avatar: null, level: null, rankLevel: null, peakRankLevel: null, country: null, stats: {}, frequentHeroes: [] };
 
     let user = await this.prisma.user.findFirst({ where: { mlbbRoleId: roleId } });
     if (!user) {
@@ -342,6 +414,7 @@ export class AuthService {
       });
     }
 
+    void this.gamification?.trackDailyLogin(user.id);
     return { token: this.signToken(user), user: serializeUser(user) };
   }
 
@@ -369,7 +442,9 @@ export class AuthService {
     }
 
     const mlbbToken = await this.validateMlbbCode(roleId, zoneId, vc);
-    const profile = mlbbToken ? await this.fetchGameProfile(mlbbToken) : EMPTY_GAME_PROFILE;
+    const profile = mlbbToken
+      ? await this.fetchGameProfile(mlbbToken, roleId, zoneId)
+      : EMPTY_GAME_PROFILE;
 
     const owner = await this.prisma.user.findFirst({ where: { mlbbRoleId: roleId } });
     let carry: any = {};
@@ -406,10 +481,14 @@ export class AuthService {
 
   async syncGame(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user?.mlbbToken || !user.mlbbZoneId) {
+    if (!user?.mlbbToken || !user.mlbbZoneId || !user.mlbbRoleId) {
       throw new BadRequestException('Aucun compte de jeu lié.');
     }
-    const profile = await this.fetchGameProfile(user.mlbbToken);
+    const profile = await this.fetchGameProfile(
+      user.mlbbToken,
+      user.mlbbRoleId,
+      user.mlbbZoneId,
+    );
 
     if (!profile.valid) {
       throw new BadRequestException(
@@ -460,15 +539,40 @@ export class AuthService {
 
   private async fetchGoogleProfile(accessToken: string) {
     let profile: any;
-    try {
-      const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!res.ok) throw new Error('userinfo ' + res.status);
-      profile = await res.json();
-    } catch (e: any) {
-      this.logger.warn(`Google userinfo échec: ${e?.message}`);
-      throw new UnauthorizedException('Jeton Google invalide.');
+    // Retry: the network hop to googleapis.com can fail transiently.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(
+          'https://www.googleapis.com/oauth2/v3/userinfo',
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            signal: controller.signal,
+          },
+        ).finally(() => clearTimeout(timeout));
+        if (res.status === 401 || res.status === 403) {
+          // A genuinely invalid/expired token: no point retrying.
+          throw new UnauthorizedException('Jeton Google invalide.');
+        }
+        if (!res.ok) throw new Error('userinfo ' + res.status);
+        profile = await res.json();
+        break;
+      } catch (e: any) {
+        if (e instanceof UnauthorizedException) throw e;
+        // Log the underlying cause (undici hides it behind "fetch failed").
+        this.logger.warn(
+          `Google userinfo échec (tentative ${attempt}/3): ${e?.message}${
+            e?.cause ? ` — ${e.cause?.code || e.cause?.message || e.cause}` : ''
+          }`,
+        );
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 400 * attempt));
+      }
+    }
+    if (!profile) {
+      throw new UnauthorizedException(
+        'Impossible de contacter Google. Vérifiez la connexion et réessayez.',
+      );
     }
     const googleId: string = profile.sub;
     const email: string = profile.email;
@@ -508,6 +612,7 @@ export class AuthService {
       });
     }
 
+    void this.gamification?.trackDailyLogin(user.id);
     return { token: this.signToken(user), user: serializeUser(user) };
   }
 

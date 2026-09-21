@@ -15,6 +15,26 @@ import { EsportModule } from './esport/esport.module';
 import { ContactModule } from './contact/contact.module';
 import { CommunityModule } from './community/community.module';
 import { FriendsModule } from './friends/friends.module';
+import { RecruitmentModule } from './recruitment/recruitment.module';
+import { LanesModule } from './lanes/lanes.module';
+import { ItemsModule } from './items/items.module';
+import { EmblemsModule } from './emblems/emblems.module';
+import { BattleSpellsModule } from './battle-spells/battle-spells.module';
+import { BuildsModule } from './builds/builds.module';
+import { GqlModule } from './graphql/gql.module';
+import { PushModule } from './push/push.module';
+import { StreamModule } from './stream/stream.module';
+import { DraftModule } from './draft/draft.module';
+import { SearchModule } from './search/search.module';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { GamificationModule } from './gamification/gamification.module';
+import { PickBanModule } from './pickban/pickban.module';
+import { AiModule } from './ai/ai.module';
+import { LeagueStatsModule } from './league-stats/league-stats.module';
+import { StandingsModule } from './standings/standings.module';
+import { SponsorsModule } from './sponsors/sponsors.module';
+import { AwardsModule } from './awards/awards.module';
+import { GeoModule } from './geo/geo.module';
 
 @Module({
   imports: [
@@ -34,6 +54,26 @@ import { FriendsModule } from './friends/friends.module';
     ContactModule,
     CommunityModule,
     FriendsModule,
+    RecruitmentModule,
+    LanesModule,
+    ItemsModule,
+    EmblemsModule,
+    BattleSpellsModule,
+    BuildsModule,
+    GqlModule,
+    PushModule,
+    StreamModule,
+    DraftModule,
+    SearchModule,
+    DashboardModule,
+    GamificationModule,
+    PickBanModule,
+    AiModule,
+    LeagueStatsModule,
+    StandingsModule,
+    SponsorsModule,
+    AwardsModule,
+    GeoModule,
   ],
 })
 export class AppModule {}

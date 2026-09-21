@@ -1,9 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import { computeWinRate } from '../users/users.service';
 import { CreateTeamDto } from './dto/create-team.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
+
+const STAFF_ROLES = ['admin', 'moderator'];
 
 @Injectable()
 export class TeamsService {
@@ -56,8 +62,26 @@ export class TeamsService {
     return this.serialize(team);
   }
 
-  async update(id: string, dto: UpdateTeamDto) {
-    await this.findOne(id);
+  /** Only the team captain (or staff) may modify or delete a team. */
+  private async assertCanManage(
+    id: string,
+    user?: { id?: string; roleUser?: string },
+  ) {
+    const team = await this.prisma.team.findUnique({ where: { id } });
+    if (!team) throw new NotFoundException('Équipe introuvable.');
+    const isStaff = STAFF_ROLES.includes(user?.roleUser ?? '');
+    if (team.captainId !== user?.id && !isStaff) {
+      throw new ForbiddenException('Action réservée au capitaine de l\'équipe.');
+    }
+    return team;
+  }
+
+  async update(
+    id: string,
+    dto: UpdateTeamDto,
+    user?: { id?: string; roleUser?: string },
+  ) {
+    await this.assertCanManage(id, user);
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.tag !== undefined) data.tag = dto.tag;
@@ -74,8 +98,8 @@ export class TeamsService {
     return this.serialize(team);
   }
 
-  async remove(id: string) {
-    await this.findOne(id);
+  async remove(id: string, user?: { id?: string; roleUser?: string }) {
+    await this.assertCanManage(id, user);
     await this.prisma.team.delete({ where: { id } });
     return { success: true };
   }

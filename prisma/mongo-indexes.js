@@ -8,3 +8,17 @@ db.User.createIndex(
   { unique: true, name: 'User_mlbbRoleId_partial', partialFilterExpression: { mlbbRoleId: { $type: 'number' } } },
 );
 print('Index partiels User (googleId, mlbbRoleId) en place.');
+db.EsportSeason.createIndex(
+  { slug: 1 },
+  { unique: true, name: 'EsportSeason_slug_partial', partialFilterExpression: { slug: { $type: 'string' } } },
+);
+print('Index partiel EsportSeason (slug) en place.');
+db.SeasonAward.createIndex(
+  { seasonId: 1, category: 1 },
+  {
+    unique: true,
+    name: 'SeasonAward_season_category_partial',
+    partialFilterExpression: { category: { $in: ['mvp', 'best_gold', 'best_mid', 'best_jungle', 'best_roam', 'best_exp'] } },
+  },
+);
+print('Index partiel SeasonAward (seasonId, category) en place.');
