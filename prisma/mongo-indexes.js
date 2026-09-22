@@ -38,3 +38,8 @@ for (const coll of ['Item', 'Emblem', 'BattleSpell']) {
   );
 }
 print('Partial indexes Item/Emblem/BattleSpell (gameId) in place.');
+db.EmblemTalent.createIndex(
+  { gameId: 1 },
+  { unique: true, name: 'EmblemTalent_gameId_partial', partialFilterExpression: { gameId: { $type: 'number' } } },
+);
+print('Partial index EmblemTalent (gameId) in place.');
