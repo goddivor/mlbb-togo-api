@@ -237,6 +237,17 @@ describe('CommunityBuildsService', () => {
       expect(emitted.map((e) => e.type)).toEqual(['published', 'unpublished', 'deleted']);
     });
 
+    it('never turns a build hidden during an unpublish back into a draft', async () => {
+      const build = await publishedBuild();
+      const stale = { ...db.communityBuild.rows[0] };
+      await service.hide(build.id, moderator, { reason: 'spam' });
+      // The author's request read the build before the moderator hid it.
+      db.communityBuild.findUnique.mockResolvedValueOnce(stale);
+      await service.unpublish(build.id, author);
+      expect(db.communityBuild.rows[0].status).toBe('hidden');
+      expect(emitted.map((e) => e.type)).not.toContain('unpublished');
+    });
+
     it('hides drafts from everyone but the author', async () => {
       const draft = await service.create(author, draftInput());
       await expect(service.findOne(draft.id, player)).rejects.toThrow(NotFoundException);

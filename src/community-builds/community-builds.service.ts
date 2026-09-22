@@ -248,8 +248,13 @@ export class CommunityBuildsService {
     const build = await this.getOwned(id, user);
     if (build.status === 'hidden') throw this.badRequest('This build was hidden by a moderator.', 'hidden_by_moderator');
     if (build.status === 'draft') return this.findOne(build.id, user);
-    const updated = await this.prisma.communityBuild.update({ where: { id: build.id }, data: { status: 'draft' } });
-    await this.emit('unpublished', updated, user.id);
+    // Conditional write: a moderator hiding the build meanwhile must win, or
+    // the author could turn a hidden build back into a publishable draft.
+    const { count } = await this.prisma.communityBuild.updateMany({
+      where: { id: build.id, status: 'published' },
+      data: { status: 'draft' },
+    });
+    if (count) await this.emit('unpublished', { ...build, status: 'draft' }, user.id);
     return this.findOne(build.id, user);
   }
 
