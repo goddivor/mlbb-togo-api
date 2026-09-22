@@ -1,4 +1,5 @@
-import { UsersService } from './users.service';
+import { BadRequestException } from '@nestjs/common';
+import { UsersService, serializeUser } from './users.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /** Minimal user row, shaped like what Prisma returns. */
@@ -261,5 +262,60 @@ describe('UsersService account deletion', () => {
     const ops = prisma.$transaction.mock.calls[0][0].map((o: any) => o.op);
     expect(ops).toContain('post.deleteMany');
     expect(ops[ops.length - 1]).toBe('user.delete');
+  });
+});
+
+describe('uploaded avatar override', () => {
+  const UID = '64b000000000000000000001';
+  const OTHER = '64b000000000000000000002';
+  const uploaded = `https://res.cloudinary.com/demo/image/upload/c_limit,w_400,h_400/f_auto,q_auto/v17/mlbb/avatar/${UID}/${UID}_abc123.png`;
+
+  it('only treats Cloudinary delivery URLs of the user avatar slot as uploaded', () => {
+    const base = row({ id: UID, googleAvatar: 'https://google/pic.png', profileSource: 'google' });
+    expect(serializeUser({ ...base, avatar: uploaded }).avatar).toBe(uploaded);
+    // An arbitrary URL that merely contains the path no longer overrides the Google avatar.
+    for (const avatar of [
+      `https://evil.example/avatar/${UID}/me.png`,
+      `https://evil.example/x?avatar/${UID}/a_b`,
+      uploaded.replace(`/avatar/${UID}/`, `/avatar/${OTHER}/`),
+    ]) {
+      const user = serializeUser({ ...base, avatar });
+      expect(user.customAvatar).toBeNull();
+      expect(user.avatar).toBe('https://google/pic.png');
+    }
+  });
+
+  describe('PATCH /users/:id', () => {
+    let prisma: { user: { findUnique: jest.Mock; update: jest.Mock }; mediaAsset: { findFirst: jest.Mock } };
+    let service: UsersService;
+
+    beforeEach(() => {
+      prisma = {
+        user: {
+          findUnique: jest.fn(async () => row({ id: UID })),
+          update: jest.fn(async ({ data }) => row({ id: UID, ...data })),
+        },
+        mediaAsset: { findFirst: jest.fn(async () => null) },
+      };
+      service = new UsersService(prisma as unknown as PrismaService);
+    });
+
+    it('refuses an uploaded-looking avatar that is not one of his tracked uploads', async () => {
+      await expect(service.update(UID, { avatar: uploaded })).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.mediaAsset.findFirst).toHaveBeenCalledWith({
+        where: { purpose: 'avatar', targetId: UID, status: 'approved', url: uploaded },
+        select: { id: true },
+      });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('accepts his tracked upload and plain values without looking them up', async () => {
+      prisma.mediaAsset.findFirst.mockResolvedValueOnce({ id: 'a1' });
+      expect((await service.update(UID, { avatar: uploaded })).customAvatar).toBe(uploaded);
+      await service.update(UID, { avatar: 'https://google/pic.png' });
+      await service.update(UID, { avatar: '' });
+      expect(prisma.mediaAsset.findFirst).toHaveBeenCalledTimes(1);
+      expect(prisma.user.update).toHaveBeenCalledTimes(3);
+    });
   });
 });
