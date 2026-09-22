@@ -1193,7 +1193,7 @@ model MediaAsset {
   targetType   String
   targetId     String?
   uploadedById String    @db.ObjectId
-  status       String    @default("approved") // pending | approved | rejected
+  status       String    @default("approved") // signed | pending | approved | rejected
   bytes        Int
   width        Int
   height       Int
@@ -1203,10 +1203,13 @@ model MediaAsset {
   rejectReason String?
   // Set once the Cloudinary asset was destroyed (rejected rows are kept).
   destroyedAt  DateTime?
+  // `signed` rows only: once past, the never confirmed upload is swept by the daily cron.
+  expiresAt    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   @@index([purpose, status])
+  @@index([status, expiresAt])
   @@index([targetType, targetId])
   @@index([uploadedById])
 }

@@ -22,7 +22,7 @@ import {
   levelFramesUpTo,
   parseFrameKey,
 } from './frames.catalog';
-import { isCronAuthorized } from './rewards-cron.controller';
+import { isCronAuthorized, runMediaStep } from './rewards-cron.controller';
 
 const DAY = 86_400_000;
 const d = (s: string) => new Date(s);
@@ -323,6 +323,16 @@ describe('cron authorization', () => {
     expect(isCronAuthorized('Bearer wrong!', 's3cret')).toBe(false);
     expect(isCronAuthorized(undefined, 's3cret')).toBe(false);
     expect(isCronAuthorized('Bearer ', undefined)).toBe(false);
+  });
+
+  it('runs the media maintenance with a time budget and never fails the daily job', async () => {
+    const now = new Date('2026-09-22T03:00:00Z');
+    const report = { abandoned: { found: 1, deleted: 1, failed: 0, skipped: 0 }, linked: { found: 0, linked: 0 } };
+    const media = { runMaintenance: jest.fn(async () => report) };
+    expect(await runMediaStep(media as any, now, 5000)).toBe(report);
+    expect(media.runMaintenance).toHaveBeenCalledWith(now, { limit: 50, budgetMs: 5000 });
+    media.runMaintenance.mockRejectedValueOnce(new Error('db down'));
+    expect(await runMediaStep(media as any, now)).toEqual({ error: 'db down' });
   });
 });
 

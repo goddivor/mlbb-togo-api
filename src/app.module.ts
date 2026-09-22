@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { EncryptionKeyMissingFilter } from './common/filters/encryption-key-missing.filter';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -89,5 +91,6 @@ import { RewardsModule } from './rewards/rewards.module';
     GameModule,
     RewardsModule,
   ],
+  providers: [{ provide: APP_FILTER, useClass: EncryptionKeyMissingFilter }],
 })
 export class AppModule {}
