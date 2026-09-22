@@ -1,6 +1,6 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { decrypt, encrypt, isEncryptionConfigured } from '../common/utils/crypto.util';
+import { EncryptionKeyMissingError, decrypt, encrypt, isEncryptionConfigured } from '../common/utils/crypto.util';
 import { DEFAULT_AI_MODEL } from '../ai/ai-llm';
 import {
   AnthropicConfig,
@@ -83,11 +83,15 @@ export class IntegrationsService {
       try {
         const parsed = JSON.parse(decrypt(row.value));
         entry.doc = parsed && typeof parsed === 'object' ? parsed : {};
-      } catch {
+      } catch (err) {
         // Logged once per stored value, not on every cache refresh.
         if (this.warnedUnreadable.get(name) !== row.value) {
           this.warnedUnreadable.set(name, row.value);
-          this.logger.warn(`Stored ${name} settings cannot be decrypted (ENCRYPTION_KEY changed?): ignored.`);
+          this.logger.warn(
+            err instanceof EncryptionKeyMissingError
+              ? `Stored ${name} settings ignored: ENCRYPTION_KEY is missing or too short (env fallbacks only).`
+              : `Stored ${name} settings cannot be decrypted (ENCRYPTION_KEY changed?): ignored.`,
+          );
         }
         entry.unreadable = true;
       }
