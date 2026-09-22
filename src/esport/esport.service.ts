@@ -239,6 +239,7 @@ export class EsportService {
             data: { teamId: team.id, userId: req.requesterId, isCaptain: true },
           });
         }
+        void this.gamification?.checkSafe(req.requesterId, ['team']);
       }
     }
     return this.getTeam(team.id);
@@ -317,6 +318,7 @@ export class EsportService {
         sort: typeof data.sort === 'number' ? data.sort : 0,
       },
     });
+    if (data.isCaptain) void this.gamification?.checkSafe(data.userId, ['team']);
     return this.getTeam(teamId);
   }
 
@@ -344,6 +346,7 @@ export class EsportService {
         sort: typeof data.sort === 'number' ? data.sort : undefined,
       },
     });
+    if (isAdmin && data.isCaptain === true) void this.gamification?.checkSafe(userId, ['team']);
     return this.getTeam(teamId);
   }
 
@@ -372,6 +375,7 @@ export class EsportService {
       where: { teamId_userId: { teamId, userId } },
       data: { isCaptain: true },
     });
+    void this.gamification?.checkSafe(userId, ['team']);
     return this.getTeam(teamId);
   }
 

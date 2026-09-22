@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { EncryptionKeyMissingFilter } from './common/filters/encryption-key-missing.filter';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -21,6 +23,7 @@ import { ItemsModule } from './items/items.module';
 import { EmblemsModule } from './emblems/emblems.module';
 import { BattleSpellsModule } from './battle-spells/battle-spells.module';
 import { BuildsModule } from './builds/builds.module';
+import { CommunityBuildsModule } from './community-builds/community-builds.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { GqlModule } from './graphql/gql.module';
 import { PushModule } from './push/push.module';
@@ -67,6 +70,7 @@ import { RewardsModule } from './rewards/rewards.module';
     EmblemsModule,
     BattleSpellsModule,
     BuildsModule,
+    CommunityBuildsModule,
     CatalogModule,
     GqlModule,
     PushModule,
@@ -87,5 +91,6 @@ import { RewardsModule } from './rewards/rewards.module';
     GameModule,
     RewardsModule,
   ],
+  providers: [{ provide: APP_FILTER, useClass: EncryptionKeyMissingFilter }],
 })
 export class AppModule {}

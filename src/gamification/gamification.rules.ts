@@ -15,11 +15,37 @@ export const XP_TYPES = [
   'tournament_win',
   'tournament_final',
   'tournament_mvp',
+  // Catalogue §2.1 (rewards #125).
+  'comment_posted',
+  'like_received',
+  'bracket_win',
+  'bracket_played',
+  'season_participation',
+  'season_podium',
+  'season_win',
+  'season_award',
+  'recruitment_accepted',
+  'recruitment_hire',
+  'pickban_completed',
+  'ai_coach_used',
+  'event_joined',
+  'game_account_linked',
+  'peak_rank_reached',
+  'profile_completed',
+  'stream_watch',
+  'event_reward',
+  'like_pause',
 ] as const;
 
 export type XpType = (typeof XP_TYPES)[number];
 
-/** XP granted per event type (achievement/mission bonuses are per definition). */
+/**
+ * XP granted per event type (achievement/mission bonuses are per definition).
+ * Zero-XP types are counters feeding achievements (likes, stream visits,
+ * bracket games, season titles) or markers (like reciprocity pause).
+ * `season_podium`, `season_award` and `event_reward` amounts are passed by
+ * the caller (placement, award category, event bonus).
+ */
 export const XP_RULES: Record<XpType, number> = {
   match_played: 50,
   match_win: 30,
@@ -33,7 +59,167 @@ export const XP_RULES: Record<XpType, number> = {
   tournament_win: 400,
   tournament_final: 150,
   tournament_mvp: 250,
+  comment_posted: 2,
+  like_received: 0,
+  bracket_win: 40,
+  bracket_played: 0,
+  season_participation: 150,
+  season_podium: 200,
+  season_win: 0,
+  season_award: 250,
+  recruitment_accepted: 100,
+  recruitment_hire: 30,
+  pickban_completed: 5,
+  ai_coach_used: 5,
+  event_joined: 30,
+  game_account_linked: 100,
+  peak_rank_reached: 50,
+  profile_completed: 50,
+  stream_watch: 0,
+  event_reward: 0,
+  like_pause: 0,
 };
+
+/** Season podium XP by placement (catalogue §2.1). */
+export const SEASON_PODIUM_XP: Record<1 | 2 | 3, number> = { 1: 500, 2: 300, 3: 200 };
+
+/** Season award XP by category (catalogue §2.1). */
+export function seasonAwardXp(category: string): number {
+  if (category === 'mvp') return 800;
+  if (category.startsWith('best_')) return 500;
+  return 250;
+}
+
+// ----- Guard-rails (catalogue §2.2) -----
+
+export interface XpLimit {
+  perDay?: number;
+  perWeek?: number;
+  perMonth?: number;
+}
+
+/**
+ * Per-type caps: an event over its cap is not recorded at all (it neither
+ * gives XP nor counts for achievements), which is what prevents farming.
+ */
+export const XP_LIMITS: Partial<Record<XpType, XpLimit>> = {
+  forum_post: { perDay: 5 },
+  friend_added: { perDay: 5 },
+  comment_posted: { perDay: 5 },
+  pickban_completed: { perDay: 2 },
+  ai_coach_used: { perDay: 1, perWeek: 5 },
+  recruitment_hire: { perMonth: 5 },
+};
+
+/** Social XP types sharing the daily social cap. */
+export const SOCIAL_XP_TYPES: readonly XpType[] = [
+  'forum_post',
+  'comment_posted',
+  'friend_added',
+  'pickban_completed',
+  'ai_coach_used',
+];
+
+export const SOCIAL_DAILY_CAP = 60;
+
+export const MIN_POST_LENGTH = 30;
+export const MIN_COMMENT_LENGTH = 10;
+export const MIN_ACCOUNT_AGE_DAYS = 7;
+export const MIN_LIKER_LEVEL = 3;
+/** More than this many likes exchanged by two members in 7 days pauses them. */
+export const RECIPROCITY_LIKES = 30;
+export const RECIPROCITY_WINDOW_DAYS = 7;
+export const RECIPROCITY_PAUSE_DAYS = 30;
+export const PICKBAN_MIN_SECONDS = 60;
+export const RECRUITMENT_COOLDOWN_DAYS = 30;
+
+export interface CapUsage {
+  /** Events of the same type already recorded today / this week / this month. */
+  day: number;
+  week: number;
+  month: number;
+  /** Social XP already granted today. */
+  socialToday: number;
+}
+
+export type CapDecision = { allowed: false; reason: 'cap' } | { allowed: true; amount: number; capped: boolean };
+
+/**
+ * Applies the per-type caps and the daily social cap to a grant. Pure, so
+ * the guard-rails are unit tested without a database.
+ */
+export function applyXpCaps(type: XpType, amount: number, usage: CapUsage): CapDecision {
+  const limit = XP_LIMITS[type];
+  if (limit) {
+    if (limit.perDay !== undefined && usage.day >= limit.perDay) return { allowed: false, reason: 'cap' };
+    if (limit.perWeek !== undefined && usage.week >= limit.perWeek) return { allowed: false, reason: 'cap' };
+    if (limit.perMonth !== undefined && usage.month >= limit.perMonth) return { allowed: false, reason: 'cap' };
+  }
+  if (amount > 0 && SOCIAL_XP_TYPES.includes(type)) {
+    const left = Math.max(0, SOCIAL_DAILY_CAP - usage.socialToday);
+    const granted = Math.min(amount, left);
+    return { allowed: true, amount: granted, capped: granted < amount };
+  }
+  return { allowed: true, amount, capped: false };
+}
+
+/** Plain text length of a post/comment body (HTML/markdown markers ignored). */
+export function textLength(raw: string | null | undefined): number {
+  return String(raw ?? '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/[#*_`>~\[\]()-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim().length;
+}
+
+/** Idempotency key of a friendship, whatever the side (`friend:<a>:<b>`). */
+export function friendPairKey(a: string, b: string): string {
+  return a < b ? `friend:${a}:${b}` : `friend:${b}:${a}`;
+}
+
+/**
+ * Peak rank tiers rewarded once each (`gamePeakRankLevel`, decodeRank
+ * thresholds): Epic, Legend, Mythic, Mythic Honor, Mythic Glory, Mythic Immortal.
+ */
+export const PEAK_RANK_TIERS: readonly { id: string; above: number }[] = [
+  { id: 'epic', above: 75 },
+  { id: 'legend', above: 105 },
+  { id: 'mythic', above: 135 },
+  { id: 'mythic_honor', above: 160 },
+  { id: 'mythic_glory', above: 185 },
+  { id: 'mythic_immortal', above: 235 },
+];
+
+export function peakRankTiers(level: number | null | undefined): string[] {
+  if (level == null) return [];
+  return PEAK_RANK_TIERS.filter((t) => level > t.above).map((t) => t.id);
+}
+
+/** Avatar, bio, city, role and favourite heroes filled in. */
+export function isProfileComplete(u: {
+  avatar?: string | null;
+  gameAvatar?: string | null;
+  bio?: string | null;
+  city?: string | null;
+  role?: string | null;
+  favoriteHeroes?: string | null;
+}): boolean {
+  let heroes: unknown = [];
+  try {
+    heroes = JSON.parse(u.favoriteHeroes || '[]');
+  } catch {
+    heroes = [];
+  }
+  return (
+    !!(u.avatar || u.gameAvatar) &&
+    !!u.bio?.trim() &&
+    !!u.city?.trim() &&
+    !!u.role?.trim() &&
+    Array.isArray(heroes) &&
+    heroes.length > 0
+  );
+}
 
 export const MAX_LEVEL = 200;
 
@@ -143,6 +329,10 @@ export const MISSIONS: MissionDef[] = [
   { id: 'weekly_tournament', period: 'weekly', event: 'tournament_registration', target: 1, reward: 50, icon: 'medal' },
   { id: 'weekly_friend', period: 'weekly', event: 'friend_added', target: 1, reward: 30, icon: 'users' },
   { id: 'weekly_posts', period: 'weekly', event: 'forum_post', target: 3, reward: 40, icon: 'message' },
+  // Catalogue §2.3 (rewards #125).
+  { id: 'daily_comment', period: 'daily', event: 'comment_posted', target: 3, reward: 5, icon: 'message' },
+  { id: 'weekly_pickban', period: 'weekly', event: 'pickban_completed', target: 3, reward: 20, icon: 'target' },
+  { id: 'weekly_bracket', period: 'weekly', event: 'bracket_win', target: 1, reward: 40, icon: 'trophy' },
 ];
 
 export function missionsFor(event: XpType): MissionDef[] {
@@ -150,56 +340,6 @@ export function missionsFor(event: XpType): MissionDef[] {
 }
 
 // ----- Achievements -----
-
-/** Aggregated facts an achievement condition can look at. */
-export interface AchievementContext {
-  level: number;
-  xp: number;
-  /** Number of XP events per type. */
-  counts: Partial<Record<XpType, number>>;
-  missionsCompleted: number;
-  /** Badge keys already derived from esport stats (player-stats.util). */
-  badges: string[];
-}
-
-export interface AchievementDef {
-  id: string;
-  icon: string;
-  reward: number;
-  /** Secret achievements are hidden until unlocked. */
-  secret?: boolean;
-  condition: (ctx: AchievementContext) => boolean;
-}
-
-const count = (ctx: AchievementContext, type: XpType) => ctx.counts[type] ?? 0;
-
-export const ACHIEVEMENTS: AchievementDef[] = [
-  { id: 'first_steps', icon: 'footprints', reward: 20, condition: (c) => c.xp > 0 },
-  { id: 'first_match', icon: 'swords', reward: 30, condition: (c) => count(c, 'match_played') >= 1 },
-  { id: 'matches_10', icon: 'swords', reward: 60, condition: (c) => count(c, 'match_played') >= 10 },
-  { id: 'matches_50', icon: 'shield', reward: 150, condition: (c) => count(c, 'match_played') >= 50 },
-  { id: 'first_win', icon: 'trophy', reward: 40, condition: (c) => count(c, 'match_win') >= 1 },
-  { id: 'wins_10', icon: 'trophy', reward: 100, condition: (c) => count(c, 'match_win') >= 10 },
-  { id: 'mvp_1', icon: 'star', reward: 50, condition: (c) => count(c, 'match_mvp') >= 1 },
-  { id: 'mvp_5', icon: 'star', reward: 120, condition: (c) => count(c, 'match_mvp') >= 5 },
-  { id: 'competitor', icon: 'medal', reward: 40, condition: (c) => count(c, 'tournament_registration') >= 1 },
-  { id: 'veteran', icon: 'medal', reward: 120, condition: (c) => count(c, 'tournament_registration') >= 5 },
-  { id: 'chatterbox', icon: 'message', reward: 30, condition: (c) => count(c, 'forum_post') >= 5 },
-  { id: 'columnist', icon: 'message', reward: 80, condition: (c) => count(c, 'forum_post') >= 25 },
-  { id: 'social', icon: 'users', reward: 30, condition: (c) => count(c, 'friend_added') >= 1 },
-  { id: 'popular', icon: 'users', reward: 80, condition: (c) => count(c, 'friend_added') >= 10 },
-  { id: 'regular', icon: 'sun', reward: 40, condition: (c) => count(c, 'daily_login') >= 7 },
-  { id: 'devoted', icon: 'sun', reward: 100, condition: (c) => count(c, 'daily_login') >= 30 },
-  { id: 'level_5', icon: 'zap', reward: 50, condition: (c) => c.level >= 5 },
-  { id: 'level_10', icon: 'zap', reward: 100, condition: (c) => c.level >= 10 },
-  { id: 'level_25', icon: 'crown', reward: 250, condition: (c) => c.level >= 25 },
-  { id: 'mission_master', icon: 'target', reward: 80, condition: (c) => c.missionsCompleted >= 10 },
-  { id: 'on_fire', icon: 'flame', reward: 60, secret: true, condition: (c) => c.badges.includes('streak_5') },
-  { id: 'hero_master', icon: 'crown', reward: 80, secret: true, condition: (c) => c.badges.includes('hero_master') },
-];
-
-/** Ids of achievements whose condition is met but not yet in `unlocked`. */
-export function newlyUnlocked(ctx: AchievementContext, unlocked: Iterable<string>): AchievementDef[] {
-  const have = new Set(unlocked);
-  return ACHIEVEMENTS.filter((a) => !have.has(a.id) && a.condition(ctx));
-}
+// The catalogue (118 achievements, catalogue §3) lives in achievements.catalog.ts.
+export { ACHIEVEMENTS, newlyUnlocked } from './achievements.catalog';
+export type { AchievementContext, AchievementDef } from './achievements.catalog';

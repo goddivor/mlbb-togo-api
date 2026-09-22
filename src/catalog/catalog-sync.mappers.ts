@@ -10,7 +10,7 @@ export interface CatalogCandidate {
   description: string | null;
   type?: string | null;
   /** Moonton-owned fields (never edited in the admin UI): always kept in sync. */
-  extra?: Record<string, string | null>;
+  extra?: Record<string, string | number | null>;
 }
 
 /** Item metadata persisted as JSON in `Item.gameMeta` for a future item page. */
@@ -236,6 +236,29 @@ export function mapGmsEmblems(records: any[]): CatalogCandidate[] {
       icon: str(d.emblem_icon) ?? str(detail.attriicon),
       description: cleanGmsText(detail.emblemattr?.emblemattr),
       type,
+    });
+  }
+  return dedupe(out.sort((a, b) => a.gameId - b.gameId));
+}
+
+/**
+ * Emblem talents (2718121): `gifttiers` 1 and 2 are the standard talents,
+ * 3 the core talents. The tier is Moonton-owned (always refreshed).
+ */
+export function mapGmsTalents(records: any[]): CatalogCandidate[] {
+  const out: CatalogCandidate[] = [];
+  for (const r of records ?? []) {
+    const d = r?.data ?? {};
+    const skill = d.emblemskill ?? {};
+    const name = str(skill.skillname);
+    if (!isUsableName(name)) continue;
+    const tier = Number(d.gifttiers);
+    out.push({
+      gameId: Number(d.giftid),
+      name,
+      icon: str(skill.skillicon),
+      description: cleanGmsText(skill.skilldesc ?? skill.skilldescemblem),
+      extra: { tier: Number.isInteger(tier) && tier > 0 ? tier : null },
     });
   }
   return dedupe(out.sort((a, b) => a.gameId - b.gameId));

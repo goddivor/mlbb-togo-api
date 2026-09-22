@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { SEASON_REWARDS_BUDGET_MS, SeasonRewardsService } from '../gamification/season-rewards.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TeamRef } from '../esport/esport-stats.service';
 import {
@@ -50,6 +51,7 @@ export class AwardsService {
     private prisma: PrismaService,
     private seasons: EsportSeasonsService,
     private standings: StandingsService,
+    @Optional() private seasonRewards?: SeasonRewardsService,
   ) {}
 
   // ----- Lookups ------------------------------------------------------------
@@ -381,5 +383,7 @@ export class AwardsService {
       next.playoffsPodium = decoratePodium(derived, refs);
     }
     await this.prisma.esportSeason.update({ where: { id: seasonId }, data: { summary: JSON.stringify(next) } });
+    // Awards / podium edited after the close: grant what is new (add-only).
+    await this.seasonRewards?.applySafe(seasonId, Date.now() + SEASON_REWARDS_BUDGET_MS);
   }
 }

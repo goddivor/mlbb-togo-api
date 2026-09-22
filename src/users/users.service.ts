@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -8,6 +8,7 @@ import {
 } from './dto/leaderboard-query.dto';
 import { PUBLIC_USER_WHERE, isHiddenAccount } from './public-user.filter';
 import { resolveEquippedFrame } from '../rewards/rewards.logic';
+import { isUploadedAvatarUrl } from '../media/media.logic';
 
 export function decodeRank(level?: number | null): string | null {
   if (level == null) return null;
@@ -58,13 +59,15 @@ export function compareByMetric(metric: LeaderboardMetric) {
 }
 
 /**
- * Avatar the user uploaded himself through the media flow (#131). Uploaded
- * avatars live under `<folder>/avatar/<userId>/`, which tells them apart from
- * legacy values of the field; they win over the Google / game avatars.
+ * Avatar the user uploaded himself through the media flow (#131): a
+ * Cloudinary delivery URL whose public id is `[<folder>/]avatar/<userId>/...`,
+ * which tells it apart from legacy values of the field; it wins over the
+ * Google / game avatars. Such a URL can only be written by the media flow or,
+ * through `UsersService.update`, when it is one of the user's tracked uploads.
  */
 export function uploadedAvatar(user: any): string | null {
   const avatar = user?.avatar;
-  return typeof avatar === 'string' && user?.id && avatar.includes(`/avatar/${user.id}/`) ? avatar : null;
+  return typeof avatar === 'string' && isUploadedAvatarUrl(avatar, user?.id) ? avatar : null;
 }
 
 export function serializeUser(user: any) {
@@ -316,7 +319,10 @@ export class UsersService {
     await this.findOne(id);
     const data: any = {};
     if (dto.username !== undefined) data.username = dto.username;
-    if (dto.avatar !== undefined) data.avatar = dto.avatar;
+    if (dto.avatar !== undefined) {
+      await this.assertAvatarAllowed(id, dto.avatar);
+      data.avatar = dto.avatar;
+    }
     if (dto.rank !== undefined) data.rank = dto.rank;
     if (dto.role !== undefined) data.role = dto.role;
     if (dto.favoriteHeroes !== undefined)
@@ -329,6 +335,22 @@ export class UsersService {
 
     const user = await this.prisma.user.update({ where: { id }, data });
     return serializeUser(user);
+  }
+
+  /**
+   * A value shaped like an uploaded avatar overrides the Google / game ones:
+   * it must be one of the user's own tracked, approved uploads. Any other
+   * value (legacy URL, empty) keeps the lowest priority and is accepted.
+   */
+  private async assertAvatarAllowed(userId: string, avatar: string) {
+    if (!isUploadedAvatarUrl(avatar, userId)) return;
+    const tracked = await (this.prisma as any).mediaAsset.findFirst({
+      where: { purpose: 'avatar', targetId: userId, status: 'approved', url: avatar },
+      select: { id: true },
+    });
+    if (!tracked) {
+      throw new BadRequestException('Avatar non reconnu : envoyez l’image depuis votre profil.');
+    }
   }
 
   async remove(id: string) {

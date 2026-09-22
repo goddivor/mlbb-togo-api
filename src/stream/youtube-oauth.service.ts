@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { google } from 'googleapis';
 import { PrismaService } from '../prisma/prisma.service';
-import { encrypt, decrypt } from '../common/utils/crypto.util';
+import { encrypt, decrypt, isEncryptionConfigured } from '../common/utils/crypto.util';
+import { ENCRYPTION_KEY_MISSING_MESSAGE } from '../common/filters/encryption-key-missing.filter';
 
 const CLIENT_ID = process.env.YOUTUBE_OAUTH_CLIENT_ID;
 const CLIENT_SECRET = process.env.YOUTUBE_OAUTH_CLIENT_SECRET;
@@ -38,6 +39,8 @@ export class YoutubeOAuthService {
     if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
       throw new BadRequestException('YouTube OAuth is not configured');
     }
+    // The tokens could not be stored: refuse before sending the admin to Google.
+    if (!isEncryptionConfigured()) throw new ServiceUnavailableException(ENCRYPTION_KEY_MISSING_MESSAGE);
     return this.newClient().generateAuthUrl({
       access_type: 'offline',
       scope: SCOPES,

@@ -2,6 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -12,11 +14,16 @@ import { IntegrationsService } from '../integrations/integrations.service';
 import { CloudinaryConfig } from '../integrations/integrations.logic';
 import { hasPermission } from '../access/permissions';
 import {
+  ABANDONED_UPLOAD_MS,
   ALLOWED_FORMATS,
+  MAX_OPEN_SIGNATURES,
   MAX_UPLOAD_BYTES,
+  MEDIA_STATUSES,
   MediaPurpose,
   MediaStatus,
   PURPOSES,
+  SIGNATURE_TTL_SECONDS,
+  SIGNED_STATUS,
   TargetFacts,
   UploadActor,
   VALIDATION_MESSAGES,
@@ -45,6 +52,15 @@ export interface MediaDeps {
   adapters?: Record<string, TargetAdapter>;
 }
 
+export interface MaintenanceOptions {
+  /** Rows handled per task and per run. */
+  limit?: number;
+  /** Wall-clock budget of the sweep (ms): the remaining rows wait for the next run. */
+  budgetMs?: number;
+}
+
+type Usage = { used: boolean; targetId: string | null };
+
 export interface ListFilters {
   purpose?: string;
   status?: string;
@@ -71,6 +87,7 @@ type AssetRow = {
   reviewedAt: Date | null;
   rejectReason: string | null;
   destroyedAt: Date | null;
+  expiresAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -218,7 +235,7 @@ export class MediaService {
     const publicId = publicIdFromUrl(url);
     if (!publicId) return;
     const row: AssetRow | null = await this.db.mediaAsset.findUnique({ where: { publicId } });
-    if (!row || row.id === exceptId) return;
+    if (!row || row.id === exceptId || row.status === SIGNED_STATUS) return;
     if (row.purpose !== owner.purpose || (row.targetId !== null && row.targetId !== owner.targetId)) return;
     if (await this.destroyRemote(row)) {
       await this.db.mediaAsset.delete({ where: { id: row.id } });
@@ -234,22 +251,49 @@ export class MediaService {
     if (previous && previous !== url) await this.releaseUrl(previous, { purpose, targetId }, assetId);
   }
 
-  /** True when the asset is still the target's image (or one of its images). */
-  private async inUse(row: AssetRow): Promise<boolean> {
-    if (!isMediaPurpose(row.purpose)) return false;
-    const def = PURPOSES[row.purpose];
-    const adapter = this.adapterOf(row.purpose);
-    if (!row.targetId) {
-      // Created before its target (create forms): link it once the target exists.
-      const targetId = def.kind === 'single' && adapter.findByUrl ? await adapter.findByUrl(row.url) : null;
-      if (!targetId) return false;
-      await this.db.mediaAsset.update({ where: { id: row.id }, data: { targetId } });
-      row.targetId = targetId;
-      return true;
+  /**
+   * Whether each asset is still displayed by its target, batched per target
+   * type (one query per type, whatever the number of rows). Read-only: an
+   * asset uploaded before its target existed (create forms) is matched by
+   * URL here and linked for good by the daily maintenance.
+   */
+  private async usage(rows: AssetRow[]): Promise<Map<string, Usage>> {
+    const result = new Map<string, Usage>(rows.map((r) => [r.id, { used: false, targetId: r.targetId }]));
+    const candidates = rows.filter(
+      (r) => r.status === 'approved' && !r.destroyedAt && isMediaPurpose(r.purpose) && this.adapters[r.targetType],
+    );
+    const groups = new Map<string, { ids: Set<string>; urls: Set<string> }>();
+    for (const r of candidates) {
+      const group = groups.get(r.targetType) ?? { ids: new Set<string>(), urls: new Set<string>() };
+      if (r.targetId) group.ids.add(r.targetId);
+      else if (PURPOSES[r.purpose as MediaPurpose].kind === 'single') group.urls.add(r.url);
+      groups.set(r.targetType, group);
     }
-    const current = await adapter.read(row.targetId);
-    if (!current) return false;
-    return def.kind === 'single' ? publicIdFromUrl(current) === row.publicId : current.includes(row.publicId);
+    const values = new Map<string, Map<string, string | null>>();
+    const owners = new Map<string, Map<string, string>>();
+    await Promise.all(
+      [...groups].map(async ([type, group]) => {
+        const adapter = this.adapters[type];
+        const [read, found] = await Promise.all([
+          group.ids.size ? adapter.readMany([...group.ids]) : new Map<string, string | null>(),
+          group.urls.size && adapter.findByUrls ? adapter.findByUrls([...group.urls]) : new Map<string, string>(),
+        ]);
+        values.set(type, read);
+        owners.set(type, found);
+      }),
+    );
+    for (const r of candidates) {
+      if (!r.targetId) {
+        const owner = owners.get(r.targetType)?.get(r.url) ?? null;
+        result.set(r.id, { used: !!owner, targetId: owner });
+        continue;
+      }
+      const current = values.get(r.targetType)?.get(r.targetId) ?? null;
+      const single = PURPOSES[r.purpose as MediaPurpose].kind === 'single';
+      const used = !!current && (single ? publicIdFromUrl(current) === r.publicId : current.includes(r.publicId));
+      result.set(r.id, { used, targetId: r.targetId });
+    }
+    return result;
   }
 
   // ----- player/admin upload flow -------------------------------------------------
@@ -266,13 +310,46 @@ export class MediaService {
     const targetId = this.targetIdOf(rawTargetId);
     const status = await this.authorize(purpose, targetId, actor);
     const config = await this.requireConfig();
+    const nowSeconds = this.nowSeconds();
+    // Every ticket leaves a row behind until confirmed or swept: cap the open ones.
+    const open: number = await this.db.mediaAsset.count({
+      where: {
+        uploadedById: actor.id,
+        status: SIGNED_STATUS,
+        createdAt: { gt: new Date((nowSeconds - SIGNATURE_TTL_SECONDS) * 1000) },
+      },
+    });
+    if (open >= MAX_OPEN_SIGNATURES) {
+      throw new HttpException('Trop d’envois en cours : réessayez dans quelques minutes.', HttpStatus.TOO_MANY_REQUESTS);
+    }
+    const publicId = buildPublicId(config.folder, purpose, targetId, actor.id);
     const ticket = buildUploadTicket({
       apiBase: this.apiBase,
       cloudName: config.cloudName,
       apiKey: config.apiKey,
       apiSecret: config.apiSecret,
-      publicId: buildPublicId(config.folder, purpose, targetId, actor.id),
-      nowSeconds: this.nowSeconds(),
+      publicId,
+      nowSeconds,
+    });
+    // Recorded before the upload: a file never confirmed (abandoned, refused,
+    // abuse) is still known, and destroyed by the daily sweep.
+    await this.db.mediaAsset.create({
+      data: {
+        publicId,
+        url: '',
+        secureUrl: '',
+        purpose,
+        targetType: PURPOSES[purpose].targetType,
+        targetId,
+        uploadedById: actor.id,
+        status: SIGNED_STATUS,
+        bytes: 0,
+        width: 0,
+        height: 0,
+        format: '',
+        createdAt: new Date(nowSeconds * 1000),
+        expiresAt: new Date(nowSeconds * 1000 + ABANDONED_UPLOAD_MS),
+      },
     });
     return { ...ticket, status };
   }
@@ -296,8 +373,9 @@ export class MediaService {
     if (!publicId.startsWith(prefix) || !/^[A-Za-z0-9_\-/]+$/.test(publicId)) {
       throw new BadRequestException(VALIDATION_MESSAGES.wrong_slot);
     }
+    // Row recorded at sign time (absent for a ticket signed before it existed).
     const existing: AssetRow | null = await this.db.mediaAsset.findUnique({ where: { publicId } });
-    if (existing) throw new ConflictException('Image déjà enregistrée.');
+    if (existing && existing.status !== SIGNED_STATUS) throw new ConflictException('Image déjà enregistrée.');
 
     let resource;
     try {
@@ -309,27 +387,31 @@ export class MediaService {
     const invalid = validateResource(resource, prefix);
     if (invalid) {
       // Uploaded with our signature into our slot: safe to destroy.
-      await this.client.destroy(config, publicId).catch(() => false);
+      const destroyed = await this.client.destroy(config, publicId).catch(() => false);
+      if (destroyed && existing) await this.db.mediaAsset.delete({ where: { id: existing.id } });
       throw new BadRequestException(VALIDATION_MESSAGES[invalid]);
     }
 
     const url = deliveryUrl(resource.secure_url, def.maxDimension);
-    const row: AssetRow = await this.db.mediaAsset.create({
-      data: {
-        publicId,
-        url,
-        secureUrl: resource.secure_url,
-        purpose,
-        targetType: def.targetType,
-        targetId,
-        uploadedById: actor.id,
-        status,
-        bytes: resource.bytes,
-        width: resource.width,
-        height: resource.height,
-        format: String(resource.format).toLowerCase(),
-      },
-    });
+    const data = {
+      publicId,
+      url,
+      secureUrl: resource.secure_url,
+      purpose,
+      targetType: def.targetType,
+      targetId,
+      uploadedById: actor.id,
+      status,
+      bytes: resource.bytes,
+      width: resource.width,
+      height: resource.height,
+      format: String(resource.format).toLowerCase(),
+      expiresAt: null,
+    };
+    // The signed row is promoted; a legacy ticket (no row) gets a new one.
+    const row: AssetRow = existing
+      ? await this.db.mediaAsset.update({ where: { id: existing.id }, data })
+      : await this.db.mediaAsset.create({ data });
 
     let applied = false;
     if (status === 'approved' && targetId && def.kind === 'single') {
@@ -395,17 +477,17 @@ export class MediaService {
   async deleteAsset(actor: MediaActor, id: string) {
     const row = await this.findRow(id);
     const isAdmin = hasPermission(actor, 'admin.media');
-    const used = row.status === 'approved' && !row.destroyedAt ? await this.inUse(row) : false;
+    const { used, targetId } = (await this.usage([row])).get(row.id)!;
     if (!isAdmin) {
       if (row.uploadedById !== actor.id) throw new ForbiddenException('Suppression non autorisée.');
       if (used) throw new ForbiddenException('Image utilisée : retirez-la depuis son formulaire.');
     }
-    if (used && row.targetId && isMediaPurpose(row.purpose)) {
+    if (used && targetId && isMediaPurpose(row.purpose)) {
       const def = PURPOSES[row.purpose];
       const adapter = this.adapterOf(row.purpose);
-      if (def.kind === 'list') await adapter.detach?.(row.targetId, row.url);
+      if (def.kind === 'list') await adapter.detach?.(targetId, row.url);
       else if (!def.removable) throw new ConflictException('Image obligatoire : remplacez-la avant de la supprimer.');
-      else await adapter.write!(row.targetId, null);
+      else await adapter.write!(targetId, null);
     }
     if (!row.destroyedAt) await this.destroyRemote(row);
     await this.db.mediaAsset.delete({ where: { id: row.id } });
@@ -425,7 +507,8 @@ export class MediaService {
   async list(filters: ListFilters) {
     const limit = Math.min(Math.max(Number(filters.limit) || 24, 1), 60);
     const page = Math.max(Number(filters.page) || 1, 1);
-    const where: Record<string, unknown> = {};
+    // Rows still waiting for their upload (`signed`) are internal: never listed.
+    const where: Record<string, unknown> = { status: { in: [...MEDIA_STATUSES] } };
     if (filters.purpose && isMediaPurpose(filters.purpose)) where.purpose = filters.purpose;
     if (filters.status && isMediaStatus(filters.status)) where.status = filters.status;
     if (filters.uploader?.trim()) {
@@ -447,9 +530,7 @@ export class MediaService {
     ]);
 
     const typed = rows as AssetRow[];
-    const used = await Promise.all(
-      typed.map((r) => (r.status === 'approved' && !r.destroyedAt ? this.inUse(r) : Promise.resolve(false))),
-    );
+    const usage = await this.usage(typed);
     const userIds = [...new Set(typed.flatMap((r) => [r.uploadedById, r.reviewedById]).filter(Boolean))] as string[];
     const users: { id: string; username: string }[] = userIds.length
       ? await this.db.user.findMany({ where: { id: { in: userIds } }, select: { id: true, username: true } })
@@ -469,9 +550,9 @@ export class MediaService {
     }
 
     return {
-      items: typed.map((r, i) =>
+      items: typed.map((r) =>
         this.serialize(r, {
-          inUse: used[i],
+          inUse: usage.get(r.id)?.used ?? false,
           uploader: names.get(r.uploadedById) ?? null,
           reviewer: r.reviewedById ? (names.get(r.reviewedById) ?? null) : null,
           targetLabel: r.targetId ? (labels.get(`${r.targetType}:${r.targetId}`) ?? null) : null,
@@ -520,6 +601,73 @@ export class MediaService {
     });
     await this.log('media.reject', actor, row, reason ?? '');
     return this.serialize(updated);
+  }
+
+  // ----- daily maintenance ------------------------------------------------------------
+
+  /**
+   * Daily job (called by the rewards cron): destroys the uploads signed but
+   * never confirmed, then links the assets uploaded before their target
+   * existed. Bounded per run (row count and time budget); what is left waits
+   * for the next run.
+   */
+  async runMaintenance(now = new Date(), opts: MaintenanceOptions = {}) {
+    const limit = Math.max(opts.limit ?? 50, 1);
+    const deadline = Date.now() + Math.max(opts.budgetMs ?? 10_000, 0);
+    const abandoned = await this.sweepAbandoned(now, limit, deadline);
+    const linked = await this.linkOrphans(limit);
+    return { abandoned, linked };
+  }
+
+  /** Signed uploads never confirmed, past their expiry: destroyed on Cloudinary and forgotten. */
+  async sweepAbandoned(now: Date, limit = 50, deadline = Number.POSITIVE_INFINITY) {
+    const rows: AssetRow[] = await this.db.mediaAsset.findMany({
+      where: { status: SIGNED_STATUS, expiresAt: { lte: now } },
+      orderBy: { expiresAt: 'asc' },
+      take: limit,
+    });
+    const report = { found: rows.length, deleted: 0, failed: 0, skipped: 0 };
+    if (!rows.length) return report;
+    const config = await this.integrations.getCloudinaryConfig();
+    if (!config) {
+      // Nothing can be destroyed: the rows wait for a later run.
+      report.skipped = rows.length;
+      return report;
+    }
+    for (const row of rows) {
+      if (Date.now() >= deadline) {
+        report.skipped += 1;
+        continue;
+      }
+      // `not found` (the file was never uploaded) counts as destroyed.
+      if (await this.destroyRemote(row, config)) {
+        await this.db.mediaAsset.delete({ where: { id: row.id } });
+        report.deleted += 1;
+      } else {
+        report.failed += 1;
+      }
+    }
+    return report;
+  }
+
+  /** Approved assets uploaded before their record existed: linked to it once found by URL. */
+  async linkOrphans(limit = 50) {
+    const singles = (Object.keys(PURPOSES) as MediaPurpose[]).filter((p) => PURPOSES[p].kind === 'single');
+    const rows: AssetRow[] = await this.db.mediaAsset.findMany({
+      // Only rejected rows are ever destroyed: no `destroyedAt` filter (unset fields do not match null on Mongo).
+      where: { status: 'approved', targetId: null, purpose: { in: singles } },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    const usage = await this.usage(rows);
+    let linked = 0;
+    for (const row of rows) {
+      const targetId = usage.get(row.id)?.targetId;
+      if (!targetId) continue;
+      await this.db.mediaAsset.update({ where: { id: row.id }, data: { targetId } });
+      linked += 1;
+    }
+    return { found: rows.length, linked };
   }
 
   private async log(action: string, actor: MediaActor, row: AssetRow, details: string) {

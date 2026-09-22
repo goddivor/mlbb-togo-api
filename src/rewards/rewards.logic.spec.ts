@@ -22,7 +22,7 @@ import {
   levelFramesUpTo,
   parseFrameKey,
 } from './frames.catalog';
-import { isCronAuthorized } from './rewards-cron.controller';
+import { isCronAuthorized, runMediaStep } from './rewards-cron.controller';
 
 const DAY = 86_400_000;
 const d = (s: string) => new Date(s);
@@ -144,6 +144,33 @@ describe('planGrant', () => {
     expect(plan.kind).toBe('extend');
     expect(plan.expiresAt).toEqual(d('2026-09-28T00:00:00Z'));
     expect(plan.history).toEqual([{ from: '2026-09-14T00:00:00.000Z', to: '2026-09-28T00:00:00.000Z' }]);
+  });
+
+  it('does not bridge the grace window over a frame an admin ended early', () => {
+    const monday = d('2026-09-21T00:00:00Z');
+    const endedAt = d('2026-09-20T18:00:00Z');
+    const plan = planGrant(
+      {
+        expiresAt: endedAt,
+        expiredAt: endedAt,
+        timesGranted: 1,
+        history: closeHistory([{ from: '2026-09-14T00:00:00.000Z', to: monday.toISOString() }], endedAt, true),
+      },
+      { days: 7, startsAt: monday, continuityGraceMs: 3 * DAY },
+      d('2026-09-21T00:05:00Z'),
+    ) as any;
+    expect(plan.kind).toBe('reactivate');
+    expect(plan.expiresAt).toEqual(d('2026-09-28T00:00:00Z'));
+    expect(plan.history).toEqual([
+      { from: '2026-09-14T00:00:00.000Z', to: endedAt.toISOString(), endedEarly: true },
+      { from: monday.toISOString(), to: '2026-09-28T00:00:00.000Z' },
+    ]);
+  });
+
+  it('marks early ends in the history only when asked', () => {
+    const h = [{ from: '2026-09-14T00:00:00.000Z', to: '2026-09-21T00:00:00.000Z' }];
+    expect(closeHistory(h, d('2026-09-18T00:00:00Z'))[0]).not.toHaveProperty('endedEarly');
+    expect(closeHistory(h, d('2026-09-18T00:00:00Z'), true)[0]).toMatchObject({ endedEarly: true });
   });
 
   it('turns a temporary frame permanent on a permanent grant', () => {
@@ -296,6 +323,16 @@ describe('cron authorization', () => {
     expect(isCronAuthorized('Bearer wrong!', 's3cret')).toBe(false);
     expect(isCronAuthorized(undefined, 's3cret')).toBe(false);
     expect(isCronAuthorized('Bearer ', undefined)).toBe(false);
+  });
+
+  it('runs the media maintenance with a time budget and never fails the daily job', async () => {
+    const now = new Date('2026-09-22T03:00:00Z');
+    const report = { abandoned: { found: 1, deleted: 1, failed: 0, skipped: 0 }, linked: { found: 0, linked: 0 } };
+    const media = { runMaintenance: jest.fn(async () => report) };
+    expect(await runMediaStep(media as any, now, 5000)).toBe(report);
+    expect(media.runMaintenance).toHaveBeenCalledWith(now, { limit: 50, budgetMs: 5000 });
+    media.runMaintenance.mockRejectedValueOnce(new Error('db down'));
+    expect(await runMediaStep(media as any, now)).toEqual({ error: 'db down' });
   });
 });
 

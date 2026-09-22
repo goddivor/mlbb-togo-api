@@ -235,6 +235,8 @@ export class AuthService {
     if (base) user = (await this.syncAfterLogin(user.id, base)) ?? user;
 
     void this.gamification?.trackDailyLogin(user.id);
+    // First link of this game account (once per mlbbRoleId platform-wide) and peak rank tiers.
+    void this.gamification?.trackGameLinked(user.id, roleId);
     return { token: this.signToken(user), user: await this.withAccess(user) };
   }
 
@@ -304,6 +306,7 @@ export class AuthService {
       },
     });
     if (base) user = (await this.syncAfterLogin(user.id, base)) ?? user;
+    void this.gamification?.trackGameLinked(user.id, roleId);
     return this.withAccess(user);
   }
 
@@ -318,6 +321,7 @@ export class AuthService {
       throw new BadRequestException('Aucun compte de jeu lié.');
     }
     const { user: updated } = await this.gameSync.syncUser(userId);
+    void this.gamification?.syncPeakRank(userId);
     return this.withAccess(updated);
   }
 

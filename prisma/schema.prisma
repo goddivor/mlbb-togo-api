@@ -319,6 +319,93 @@ model HeroBuild {
   updatedAt     DateTime @updatedAt
 }
 
+// ---- Emblem talents (#129), imported by the catalog sync (Academy 2718121) ----
+// Three tiers: tier 1 and 2 are standard talents, tier 3 is the core talent.
+// A community build picks at most one talent per tier.
+model EmblemTalent {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String    @unique
+  description String?
+  icon        String?
+  tier        Int?      // 1 | 2 | 3 (Moonton `gifttiers`)
+  gameId      Int?      // Moonton gift id (partial unique index)
+  syncedAt    DateTime?
+  enabled     Boolean?  @default(true) // false = hidden from pickers (null/missing = enabled)
+  sort        Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// ---- Community builds (#129): hero builds created by players ----
+// Admin-curated builds stay in HeroBuild ("recommended by MLBB Togo").
+model CommunityBuild {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  authorId      String    @db.ObjectId
+  heroId        String    @db.ObjectId // Hero document id
+  heroGameId    Int?      // Moonton hero id (the hero modal addresses heroes with it)
+  heroName      String
+  title         String
+  notes         String?
+  lane          String?   // gold | exp | jungle | mid | roam
+  itemIds       String[]  // Item ids, in purchase order (max 6)
+  emblemId      String?   @db.ObjectId
+  talentIds     String[]  // EmblemTalent ids (max one per tier)
+  battleSpellId String?   @db.ObjectId
+  // draft (author only) | published (public) | hidden (removed by a moderator)
+  status        String    @default("draft")
+  likesCount    Int       @default(0)
+  reportsCount  Int       @default(0) // open reports
+  publishedAt   DateTime?
+  hiddenAt      DateTime?
+  hiddenById    String?   @db.ObjectId
+  hiddenReason  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status, heroId])
+  @@index([authorId])
+}
+
+// Quota counters of the community builds (#129). One document per window:
+// `publish:<userId>:<UTC day>`, `report:<userId>:<UTC day>` (ledgers that
+// survive deleting builds or reports) and `builds:<userId>` (builds owned,
+// decremented on deletion). Incremented atomically under the cap.
+model CommunityBuildQuota {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String   @unique
+  userId    String   @db.ObjectId
+  kind      String   // publish | report | builds
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CommunityBuildLike {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  buildId   String   @db.ObjectId
+  userId    String   @db.ObjectId
+  createdAt DateTime @default(now())
+
+  @@unique([buildId, userId])
+  @@index([userId])
+}
+
+model CommunityBuildReport {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  buildId      String    @db.ObjectId
+  reporterId   String    @db.ObjectId
+  reason       String    // spam | offensive | misleading | other
+  details      String?
+  status       String    @default("open") // open | resolved | dismissed
+  resolvedById String?   @db.ObjectId
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([buildId, reporterId])
+  @@index([status])
+  @@index([reporterId, createdAt])
+}
+
 model AdminLog {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   action    String
@@ -876,6 +963,24 @@ model XpEvent {
 
   @@unique([userId, type, refId])
   @@index([userId, createdAt])
+  // Platform-wide lookups: game account link, event rewards, elections, event candidates.
+  @@index([type, refId])
+  @@index([type, createdAt])
+}
+
+// Atomic per-period counters of the XP guard-rails (daily / weekly / monthly
+// caps, daily social XP): one document per (user, key), incremented with $inc
+// so concurrent grants can never exceed a cap (rewards #125).
+model XpCounter {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  // cap:<type>:<period> | social:<day>
+  key       String
+  value     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, key])
 }
 
 model UserAchievement {
@@ -1088,7 +1193,7 @@ model MediaAsset {
   targetType   String
   targetId     String?
   uploadedById String    @db.ObjectId
-  status       String    @default("approved") // pending | approved | rejected
+  status       String    @default("approved") // signed | pending | approved | rejected
   bytes        Int
   width        Int
   height       Int
@@ -1098,10 +1203,13 @@ model MediaAsset {
   rejectReason String?
   // Set once the Cloudinary asset was destroyed (rejected rows are kept).
   destroyedAt  DateTime?
+  // `signed` rows only: once past, the never confirmed upload is swept by the daily cron.
+  expiresAt    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   @@index([purpose, status])
+  @@index([status, expiresAt])
   @@index([targetType, targetId])
   @@index([uploadedById])
 }

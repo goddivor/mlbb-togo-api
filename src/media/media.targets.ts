@@ -14,12 +14,16 @@ export interface TargetAdapter {
    * joined in one string (used for "is this asset still in use").
    */
   read(id: string): Promise<string | null>;
+  /** Batched `read`: one query for many targets (missing targets are absent). */
+  readMany(ids: string[]): Promise<Map<string, string | null>>;
   /** `single` only: sets (or clears with null) the image field. */
   write?(id: string, url: string | null): Promise<void>;
   /** `list` only: removes an image URL from the target. */
   detach?(id: string, url: string): Promise<void>;
   /** `single` only: id of the target whose field is exactly `url`. */
   findByUrl?(url: string): Promise<string | null>;
+  /** `single` only, batched `findByUrl`: url -> id of the target holding it. */
+  findByUrls?(urls: string[]): Promise<Map<string, string>>;
 }
 
 const toMap = <T extends { id: string }>(rows: T[], label: (r: T) => string | null | undefined) =>
@@ -45,12 +49,22 @@ function singleField(
       const row = await delegate.findUnique({ where: { id }, select: { [field]: true } });
       return (row?.[field] as string | null | undefined) || null;
     },
+    async readMany(ids) {
+      if (!ids.length) return new Map();
+      const rows = await delegate.findMany({ where: { id: { in: ids } }, select: { id: true, [field]: true } });
+      return new Map(rows.map((r: any) => [r.id, (r[field] as string | null | undefined) || null]));
+    },
     async write(id, url) {
       await delegate.update({ where: { id }, data: { [field]: url ?? nullValue } });
     },
     async findByUrl(url) {
       const row = await delegate.findFirst({ where: { [field]: url }, select: { id: true } });
       return row?.id ?? null;
+    },
+    async findByUrls(urls) {
+      if (!urls.length) return new Map();
+      const rows = await delegate.findMany({ where: { [field]: { in: urls } }, select: { id: true, [field]: true } });
+      return new Map(rows.map((r: any) => [r[field] as string, r.id as string]));
     },
   };
 }
@@ -86,6 +100,14 @@ export function createTargetAdapters(prisma: PrismaService): Record<TargetType, 
       async read(id) {
         const row = await p.esportMatch.findUnique({ where: { id }, select: { screenshots: true, games: true } });
         return row ? `${row.screenshots ?? ''}\n${row.games ?? ''}` : null;
+      },
+      async readMany(ids) {
+        if (!ids.length) return new Map();
+        const rows: { id: string; screenshots: string | null; games: string | null }[] = await p.esportMatch.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, screenshots: true, games: true },
+        });
+        return new Map(rows.map((r) => [r.id, `${r.screenshots ?? ''}\n${r.games ?? ''}`]));
       },
       async detach(id, url) {
         const row = await p.esportMatch.findUnique({ where: { id }, select: { screenshots: true, games: true } });

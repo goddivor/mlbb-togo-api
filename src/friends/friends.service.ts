@@ -71,8 +71,8 @@ export class FriendsService {
       where: { id: fr.id },
       data: { status: 'accepted' },
     });
-    void this.gamification?.trackSafe(me, 'friend_added', fr.id);
-    void this.gamification?.trackSafe(otherId, 'friend_added', fr.id);
+    // Once per pair of members for life, young accounts excluded (catalogue §2.2).
+    void this.gamification?.trackFriendship(me, otherId, new Date(), fr.id);
     const meUser = await this.prisma.user.findUnique({ where: { id: me } });
     const who = meUser ? serializeUserCard(meUser).displayName || meUser.username : 'Un joueur';
     await this.community.notifyUser(otherId, {

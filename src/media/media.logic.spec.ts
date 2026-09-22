@@ -9,6 +9,7 @@ import {
   decideUpload,
   deliveryUrl,
   folderPrefix,
+  isUploadedAvatarUrl,
   publicIdFromUrl,
   slotPrefix,
   validateResource,
@@ -103,6 +104,18 @@ describe('public ids', () => {
     expect(publicIdFromUrl('https://akmweb.youngjoygame.com/web/svnres/img/mlbb/homepage/100_ceb.png')).toBeNull();
     expect(publicIdFromUrl('')).toBeNull();
     expect(publicIdFromUrl(null)).toBeNull();
+  });
+
+  it('recognises uploaded avatars of one user only', () => {
+    const url = (id: string) => `https://res.cloudinary.com/demo/image/upload/c_limit,w_400,h_400/f_auto,q_auto/v1/${id}.png`;
+    expect(isUploadedAvatarUrl(url(`mlbb/avatar/${USER}/${USER}_ab12`), USER)).toBe(true);
+    expect(isUploadedAvatarUrl(url(`avatar/${USER}/64b000000000000000000009_ab12`), USER)).toBe(true);
+    expect(isUploadedAvatarUrl(url(`mlbb/avatar/${USER}/${USER}_ab12`), '64b000000000000000000009')).toBe(false);
+    expect(isUploadedAvatarUrl(url(`mlbb/team/${USER}/${USER}_ab12`), USER)).toBe(false);
+    expect(isUploadedAvatarUrl(url(`mlbb/xavatar/${USER}/${USER}_ab12`), USER)).toBe(false);
+    expect(isUploadedAvatarUrl(`https://evil.example/avatar/${USER}/${USER}_ab12.png`, USER)).toBe(false);
+    expect(isUploadedAvatarUrl(url(`mlbb/avatar/${USER}/${USER}_ab12`), null)).toBe(false);
+    expect(isUploadedAvatarUrl(url(`mlbb/avatar/${USER}/${USER}_ab12`), '.*')).toBe(false);
   });
 });
 

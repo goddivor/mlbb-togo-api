@@ -3,8 +3,10 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SEASON_REWARDS_BUDGET_MS, SeasonRewardsService } from '../gamification/season-rewards.service';
 import { MatchLike, TeamRef, standingsOf } from './esport-stats.service';
 import {
   CloseSeasonDto,
@@ -269,7 +271,10 @@ function toDate(v: string | null | undefined): Date | null | undefined {
 
 @Injectable()
 export class EsportSeasonsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private seasonRewards?: SeasonRewardsService,
+  ) {}
 
   // ----- Reads -----
 
@@ -438,6 +443,10 @@ export class EsportSeasonsService {
       data.summary = null;
     }
     const updated = await this.prisma.esportSeason.update({ where: { id: season.id }, data });
+    // Participation, podium, awards, season frames, reigning champion (idempotent).
+    // Awaited within a time budget (serverless cuts work after the response);
+    // the daily job re-applies recently closed seasons if it was cut short.
+    if (action === 'close') await this.seasonRewards?.applySafe(season.id, Date.now() + SEASON_REWARDS_BUDGET_MS);
     return serializeSeason(updated as SeasonRecord, now);
   }
 

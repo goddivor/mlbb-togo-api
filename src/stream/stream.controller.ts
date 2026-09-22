@@ -19,6 +19,7 @@ import { StartLiveDto } from './dto/start-live.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
+import { EncryptionKeyMissingError } from '../common/utils/crypto.util';
 
 
 @Controller('stream')
@@ -85,8 +86,9 @@ export class StreamController {
     try {
       await this.youtube.handleCallback(code);
       return res.redirect(`${base}/admin/stream?connected=1`);
-    } catch {
-      return res.redirect(`${base}/admin/stream?connected=0`);
+    } catch (err) {
+      const reason = err instanceof EncryptionKeyMissingError ? '&reason=encryption_key' : '';
+      return res.redirect(`${base}/admin/stream?connected=0${reason}`);
     }
   }
 

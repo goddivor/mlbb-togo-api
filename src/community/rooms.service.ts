@@ -433,6 +433,8 @@ export class RoomsService {
           link: `/messages?room=${scope.kind}:${scope.scopeId}`,
           data: {
             who,
+            // Distinct mentioning members (talk_of_the_town achievement).
+            fromUserId: userId,
             room: scope.title,
             threadId: thread.id,
             kind: scope.kind,

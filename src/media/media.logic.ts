@@ -20,6 +20,13 @@ export type MediaPurpose = (typeof MEDIA_PURPOSES)[number];
 export const MEDIA_STATUSES = ['pending', 'approved', 'rejected'] as const;
 export type MediaStatus = (typeof MEDIA_STATUSES)[number];
 
+/**
+ * Internal status of a row recorded at sign time, before the browser uploads
+ * the file. `confirm` promotes it; the daily cron sweeps the ones never
+ * confirmed. Never listed in the media library.
+ */
+export const SIGNED_STATUS = 'signed';
+
 export type TargetType =
   | 'user'
   | 'esportTeam'
@@ -134,6 +141,10 @@ export const MAX_SOURCE_DIMENSION = 6000;
 export const MIN_SOURCE_DIMENSION = 16;
 /** Cloudinary refuses a signed upload whose timestamp is older than 1 hour. */
 export const SIGNATURE_TTL_SECONDS = 3600;
+/** A signed upload not confirmed after this delay is abandoned (swept by the cron). */
+export const ABANDONED_UPLOAD_MS = 24 * 3600 * 1000;
+/** Signed but not yet confirmed uploads one user may have open within the signature TTL. */
+export const MAX_OPEN_SIGNATURES = 20;
 
 // ----- permissions ------------------------------------------------------------
 
@@ -231,6 +242,19 @@ export function publicIdFromUrl(url: string | null | undefined): string | null {
   if (!url || typeof url !== 'string') return null;
   const m = url.match(/\/image\/upload\/(?:.*?\/)?v\d+\/(.+?)(?:\.[A-Za-z0-9]+)?(?:[?#].*)?$/);
   return m ? decodeURIComponent(m[1]) : null;
+}
+
+/**
+ * True when `url` is a Cloudinary delivery URL of an avatar uploaded for
+ * `userId` through the media flow (public id `[<folder>/]avatar/<userId>/<uploaderId>_<random>`).
+ * Only the shape is checked here: whether the asset is tracked is checked
+ * against the database before such a URL is ever written.
+ */
+export function isUploadedAvatarUrl(url: string | null | undefined, userId: string | null | undefined): boolean {
+  if (!userId || !isSafeSegment(userId)) return false;
+  const publicId = publicIdFromUrl(url);
+  if (!publicId) return false;
+  return new RegExp(`(?:^|/)avatar/${userId}/[A-Za-z0-9-]+_[A-Za-z0-9]+$`).test(publicId);
 }
 
 // ----- signatures ---------------------------------------------------------------

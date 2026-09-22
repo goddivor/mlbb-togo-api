@@ -2,12 +2,16 @@ import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RewardsService } from './rewards.service';
+import { RewardEventsService } from '../gamification/reward-events.service';
 import { FRAMES, TITLES } from './frames.catalog';
 import { EquipFrameDto, EquipTitleDto } from './dto/rewards.dto';
 
 @Controller('rewards')
 export class RewardsController {
-  constructor(private readonly rewards: RewardsService) {}
+  constructor(
+    private readonly rewards: RewardsService,
+    private readonly events: RewardEventsService,
+  ) {}
 
   /** Public catalogue: frames and titles definitions. */
   @Get('catalog')
@@ -22,6 +26,13 @@ export class RewardsController {
   @Get('me/collection')
   collection(@CurrentUser() user: any) {
     return this.rewards.collection(user.id);
+  }
+
+  /** Reward events in their window with the player's progress. */
+  @UseGuards(JwtAuthGuard)
+  @Get('me/events')
+  myEvents(@CurrentUser() user: any) {
+    return this.events.activeFor(user.id);
   }
 
   /** Equips a frame (`frameId` or `frameId:variant`); null = back to the rank frame. */
