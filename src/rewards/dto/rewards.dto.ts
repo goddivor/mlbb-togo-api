@@ -3,7 +3,9 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsDateString,
   IsIn,
+  IsObject,
   IsInt,
   IsMongoId,
   IsOptional,
@@ -119,8 +121,67 @@ export class MvpWeekDto {
 }
 
 export class RecalculateDto {
-  /** Omitted = every user with progress. */
+  /** Omitted = every user with progress, one page per call. */
   @IsOptional()
   @IsMongoId()
   userId?: string;
+
+  /** `nextCursor` of the previous page (recalculate all). */
+  @IsOptional()
+  @IsMongoId()
+  cursor?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+}
+
+/** Reward event (catalogue §6.5). Conditions and rewards are normalised by the service. */
+export class RewardEventDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  slug?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  description?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  startsAt?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endsAt?: string;
+
+  @IsOptional()
+  @IsIn(['none', 'yearly'])
+  recurrence?: 'none' | 'yearly';
+
+  @IsOptional()
+  @IsIn(['draft', 'scheduled'])
+  status?: 'draft' | 'scheduled';
+
+  @IsOptional()
+  @IsIn(['all', 'any'])
+  conditionMode?: 'all' | 'any';
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  conditions?: { type: string; count?: number; scope?: string | null }[];
+
+  @IsOptional()
+  @IsObject()
+  rewards?: { achievementId?: string | null; frameId?: string | null; frameDays?: number | null; xp?: number };
 }

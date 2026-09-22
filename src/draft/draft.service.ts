@@ -441,7 +441,15 @@ export class DraftService {
       where: { id },
       data: { status: 'drafted' },
     });
+    void this.rewardDraftMembers(id);
     return this.getBracket(id);
+  }
+
+  /** Draft achievements (mercenary, all formats) once the teams are drawn. */
+  private async rewardDraftMembers(tournamentId: string) {
+    if (!this.gamification) return;
+    const members = await this.prisma.draftTeamMember.findMany({ where: { tournamentId }, select: { userId: true } });
+    for (const m of members) await this.gamification.checkSafe(m.userId, ['draft']);
   }
 
   // Single-elimination bracket over the complete teams.
@@ -503,7 +511,29 @@ export class DraftService {
       data: { winnerTeamId, status: 'done' },
     });
     await this.advanceWinner(tournamentId, updated, winnerTeamId);
+    void this.rewardBracketResult(tournamentId, updated);
     return this.getBracket(tournamentId);
+  }
+
+  /** bracket_played / bracket_win XP for the two drawn line-ups (never throws). */
+  private async rewardBracketResult(tournamentId: string, match: { id: string; teamAId: string | null; teamBId: string | null; winnerTeamId: string | null }) {
+    if (!this.gamification || !match.winnerTeamId || !match.teamAId || !match.teamBId) return;
+    try {
+      const loser = match.winnerTeamId === match.teamAId ? match.teamBId : match.teamAId;
+      const members = await this.prisma.draftTeamMember.findMany({
+        where: { teamId: { in: [match.winnerTeamId, loser] } },
+        select: { teamId: true, userId: true },
+      });
+      await this.gamification.trackBracketResult({
+        tournamentId,
+        matchId: match.id,
+        draft: true,
+        winners: members.filter((m) => m.teamId === match.winnerTeamId).map((m) => m.userId),
+        losers: members.filter((m) => m.teamId === loser).map((m) => m.userId),
+      });
+    } catch {
+      /* XP never blocks the result */
+    }
   }
 
   // Place a winner into the next round's match slot.

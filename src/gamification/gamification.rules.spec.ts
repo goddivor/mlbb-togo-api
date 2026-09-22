@@ -10,6 +10,17 @@ import {
   periodKey,
   weekKey,
   xpForLevel,
+  CapUsage,
+  MIN_COMMENT_LENGTH,
+  MIN_POST_LENGTH,
+  SEASON_PODIUM_XP,
+  XP_RULES,
+  applyXpCaps,
+  friendPairKey,
+  isProfileComplete,
+  peakRankTiers,
+  seasonAwardXp,
+  textLength,
 } from './gamification.rules';
 
 const ctx = (over: Partial<AchievementContext> = {}): AchievementContext => ({
@@ -109,7 +120,7 @@ describe('achievement conditions', () => {
 
   it('unlocks first_steps and first_match after the first match', () => {
     const ids = newlyUnlocked(ctx({ xp: 50, counts: { match_played: 1 } }), []).map((a) => a.id);
-    expect(ids).toEqual(['first_steps', 'first_match']);
+    expect([...ids].sort()).toEqual(['first_match', 'first_steps']);
   });
 
   it('skips already unlocked achievements', () => {
@@ -147,5 +158,58 @@ describe('achievement conditions', () => {
       (a) => a.id,
     );
     expect(ids).toEqual(['mission_master']);
+  });
+});
+
+describe('guard-rails (pure)', () => {
+  const usage = (over: Partial<CapUsage> = {}): CapUsage => ({ day: 0, week: 0, month: 0, socialToday: 0, ...over });
+
+  it('refuses a capped type once its daily, weekly or monthly limit is reached', () => {
+    expect(applyXpCaps('forum_post', 5, usage({ day: 4 }))).toEqual({ allowed: true, amount: 5, capped: false });
+    expect(applyXpCaps('forum_post', 5, usage({ day: 5 }))).toEqual({ allowed: false, reason: 'cap' });
+    expect(applyXpCaps('pickban_completed', 5, usage({ day: 2 }))).toEqual({ allowed: false, reason: 'cap' });
+    expect(applyXpCaps('ai_coach_used', 5, usage({ week: 5 }))).toEqual({ allowed: false, reason: 'cap' });
+    expect(applyXpCaps('recruitment_hire', 30, usage({ month: 5 }))).toEqual({ allowed: false, reason: 'cap' });
+  });
+
+  it('trims social XP to the 60 XP daily cap and leaves competitive XP alone', () => {
+    expect(applyXpCaps('comment_posted', 2, usage({ socialToday: 59 }))).toEqual({ allowed: true, amount: 1, capped: true });
+    expect(applyXpCaps('friend_added', 10, usage({ socialToday: 60 }))).toEqual({ allowed: true, amount: 0, capped: true });
+    expect(applyXpCaps('match_played', 50, usage({ socialToday: 60 }))).toEqual({ allowed: true, amount: 50, capped: false });
+    expect(applyXpCaps('like_received', 0, usage({ socialToday: 60 }))).toEqual({ allowed: true, amount: 0, capped: false });
+  });
+
+  it('measures text length without markup', () => {
+    expect(textLength('<p>**Hello**   world</p>')).toBe(11);
+    expect(textLength(null)).toBe(0);
+    expect(textLength('x'.repeat(MIN_POST_LENGTH)) >= MIN_POST_LENGTH).toBe(true);
+    expect(textLength('trop court') >= MIN_COMMENT_LENGTH).toBe(true);
+  });
+
+  it('keys a friendship by pair, whatever the side', () => {
+    expect(friendPairKey('b', 'a')).toBe('friend:a:b');
+    expect(friendPairKey('a', 'b')).toBe('friend:a:b');
+  });
+
+  it('lists the peak rank tiers reached', () => {
+    expect(peakRankTiers(null)).toEqual([]);
+    expect(peakRankTiers(75)).toEqual([]);
+    expect(peakRankTiers(136)).toEqual(['epic', 'legend', 'mythic']);
+    expect(peakRankTiers(300)).toHaveLength(6);
+  });
+
+  it('requires avatar, bio, city, role and favourite heroes for a complete profile', () => {
+    const full = { avatar: 'a.png', bio: 'Tank main', city: 'Lomé', role: 'tank', favoriteHeroes: '["Tigreal"]' };
+    expect(isProfileComplete(full)).toBe(true);
+    expect(isProfileComplete({ ...full, avatar: null, gameAvatar: 'g.png' })).toBe(true);
+    expect(isProfileComplete({ ...full, favoriteHeroes: '[]' })).toBe(false);
+    expect(isProfileComplete({ ...full, bio: '  ' })).toBe(false);
+  });
+
+  it('adds the missions of catalogue §2.3 and the season XP grid', () => {
+    expect(MISSIONS.map((m) => m.id)).toEqual(expect.arrayContaining(['daily_comment', 'weekly_pickban', 'weekly_bracket']));
+    expect(SEASON_PODIUM_XP).toEqual({ 1: 500, 2: 300, 3: 200 });
+    expect([seasonAwardXp('mvp'), seasonAwardXp('best_gold'), seasonAwardXp('custom')]).toEqual([800, 500, 250]);
+    expect(XP_RULES.like_received).toBe(0);
   });
 });

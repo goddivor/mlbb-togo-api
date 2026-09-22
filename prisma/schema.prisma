@@ -963,6 +963,24 @@ model XpEvent {
 
   @@unique([userId, type, refId])
   @@index([userId, createdAt])
+  // Platform-wide lookups: game account link, event rewards, elections, event candidates.
+  @@index([type, refId])
+  @@index([type, createdAt])
+}
+
+// Atomic per-period counters of the XP guard-rails (daily / weekly / monthly
+// caps, daily social XP): one document per (user, key), incremented with $inc
+// so concurrent grants can never exceed a cap (rewards #125).
+model XpCounter {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  // cap:<type>:<period> | social:<day>
+  key       String
+  value     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, key])
 }
 
 model UserAchievement {

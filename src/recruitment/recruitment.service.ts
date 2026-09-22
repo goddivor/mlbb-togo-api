@@ -4,7 +4,9 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { GamificationService } from '../gamification/gamification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { hasPermission } from '../access/permissions';
 import {
@@ -33,6 +35,7 @@ export class RecruitmentService {
   constructor(
     private prisma: PrismaService,
     private community: CommunityService,
+    @Optional() private gamification?: GamificationService,
   ) {}
 
   private async isCaptain(teamId: string, userId: string) {
@@ -366,6 +369,7 @@ export class RecruitmentService {
       link: `/teams/${rec.teamId}`,
       data: { who },
     });
+    void this.gamification?.checkSafe(user.id, ['recruitment']);
     return { ok: true };
   }
 
@@ -473,7 +477,17 @@ export class RecruitmentService {
     });
 
     await this.notifyStatusChange(app, target, dto.note);
+    if (target === 'accepted') void this.rewardAcceptance(app);
     return { ok: true, status: target, application: updated };
+  }
+
+  /** XP for the signed candidate and for the campaign creator (never throws). */
+  private async rewardAcceptance(app: { id: string; teamId: string; userId: string; recruitmentId: string }) {
+    if (!this.gamification) return;
+    const rec = await this.prisma.recruitment
+      .findUnique({ where: { id: app.recruitmentId }, select: { createdById: true } })
+      .catch(() => null);
+    await this.gamification.trackRecruitment(app, rec?.createdById);
   }
 
   /**

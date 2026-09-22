@@ -7,6 +7,8 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { GamificationService } from '../gamification/gamification.service';
+import { dayKey } from '../gamification/gamification.rules';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MlbbService } from '../mlbb/mlbb.service';
@@ -83,6 +85,7 @@ export class AiService {
     @Optional() @Inject(AI_CLIENT_RESOLVER) resolver?: AiClientResolver | null,
     @Optional() limiter?: RateLimiter,
     @Optional() cache?: TtlCache<unknown>,
+    @Optional() private readonly gamification?: GamificationService,
   ) {
     this.resolver = resolver ?? staticAiResolver(null);
     this.limiter = limiter ?? new RateLimiter(AI_RATE_LIMIT, AI_RATE_WINDOW_MS);
@@ -118,7 +121,10 @@ export class AiService {
    */
   private async cachedOrLimited<T>(userId: string, cacheKey: string, compute: () => Promise<T>): Promise<T> {
     const hit = this.cache.get(cacheKey) as T | undefined;
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) {
+      this.rewardCoach(userId);
+      return hit;
+    }
     const q = this.limiter.consume(userId);
     if (!q.allowed) {
       const retryAfter = Math.max(1, Math.ceil((q.resetAt - Date.now()) / 1000));
@@ -129,7 +135,13 @@ export class AiService {
     }
     const value = await compute();
     this.cache.set(cacheKey, value);
+    this.rewardCoach(userId);
     return value;
+  }
+
+  /** ai_coach_used: one per day (UTC key), five per week (engine caps). */
+  private rewardCoach(userId: string) {
+    void this.gamification?.trackSafe(userId, 'ai_coach_used', dayKey());
   }
 
   private key(kind: string, payload: unknown): string {
