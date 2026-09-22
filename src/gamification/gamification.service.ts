@@ -550,18 +550,30 @@ export class GamificationService {
     if (!(await this.insertEvent(userId, type, refId, 0, meta))) return 'duplicate';
 
     const day = dayKey(now);
-    const usage = { day: 0, week: 0, month: 0, socialToday: 0 };
-    if (limit?.perDay !== undefined) usage.day = (await this.bump(userId, `cap:${type}:${day}`, 1)) - 1;
-    if (limit?.perWeek !== undefined) usage.week = (await this.bump(userId, `cap:${type}:${weekKey(now)}`, 1)) - 1;
-    if (limit?.perMonth !== undefined) usage.month = (await this.bump(userId, `cap:${type}:${day.slice(0, 7)}`, 1)) - 1;
-    if (social) usage.socialToday = (await this.bump(userId, `social:${day}`, base)) - base;
-    const decision = applyXpCaps(type, base, usage);
-    if (!decision.allowed) {
-      await this.prisma.xpEvent
-        .delete({ where: { userId_type_refId: { userId, type, refId } } })
-        .catch(() => null);
-      return 'cap';
+    // Per-type caps first, one slot at a time: a refused event gives back the
+    // slots it took (so a day over its cap never eats a weekly slot) and never
+    // touches the daily social budget.
+    const slots: [number | undefined, string][] = [
+      [limit?.perDay, `cap:${type}:${day}`],
+      [limit?.perWeek, `cap:${type}:${weekKey(now)}`],
+      [limit?.perMonth, `cap:${type}:${day.slice(0, 7)}`],
+    ];
+    const taken: string[] = [];
+    for (const [max, key] of slots) {
+      if (max === undefined) continue;
+      taken.push(key);
+      if ((await this.bump(userId, key, 1)) > max) {
+        for (const k of taken) await this.bump(userId, k, -1);
+        await this.prisma.xpEvent
+          .delete({ where: { userId_type_refId: { userId, type, refId } } })
+          .catch(() => null);
+        return 'cap';
+      }
     }
+    const socialToday = social ? (await this.bump(userId, `social:${day}`, base)) - base : 0;
+    // Per-type caps already passed above: only the social budget is left to apply.
+    const decision = applyXpCaps(type, base, { day: 0, week: 0, month: 0, socialToday });
+    if (!decision.allowed) return 'cap';
     if (decision.amount > 0 || decision.capped) {
       await this.prisma.xpEvent.update({
         where: { userId_type_refId: { userId, type, refId } },

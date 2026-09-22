@@ -483,6 +483,18 @@ describe('GamificationService', () => {
       expect((await service.track(U, 'ai_coach_used', 'k7', { now: day(7) })).granted).toBe(true);
     });
 
+    it('does not let refused attempts eat a weekly slot or the social budget', async () => {
+      const day = (n: number) => new Date(Date.UTC(2026, 8, 21 + n, 12));
+      // Several AI coach calls on Monday: only one counts, the others must not use weekly slots.
+      for (let i = 0; i < 4; i++) await service.track(U, 'ai_coach_used', `mon${i}`, { now: day(0) });
+      for (let i = 1; i < 5; i++) {
+        expect((await service.track(U, 'ai_coach_used', `k${i}`, { now: day(i) })).granted).toBe(true);
+      }
+      // 20 posts in a day: 15 refused ones leave the social budget to the comments.
+      for (let i = 0; i < 20; i++) await service.track(U, 'forum_post', `sp${i}`, { now: day(6) });
+      expect(await service.track(U, 'comment_posted', 'sc1', { now: day(6) })).toMatchObject({ granted: true, amount: 2 });
+    });
+
     it('ignores self-likes, young accounts and low-level likers; counts a like once per member', async () => {
       addUser('author');
       addUser('fan');
@@ -509,6 +521,8 @@ describe('GamificationService', () => {
       prisma._state.progress.set('b', { userId: 'b', xp: 1000, level: 3 });
       for (let i = 0; i < 16; i++) await service.trackLike(`pa${i}`, 'a', 'b', NOW);
       for (let i = 0; i < 15; i++) await service.trackLike(`pb${i}`, 'b', 'a', NOW);
+      // The mock stamps rows with the wall clock: pin them to NOW so the test does not depend on today's date.
+      for (const e of prisma._state.xpEvents) e.createdAt = NOW;
       // 31 likes exchanged: the pair is paused.
       expect(prisma._state.xpEvents.filter((e) => e.type === 'like_pause')).toHaveLength(1);
       expect(await service.trackLike('pa99', 'a', 'b', NOW)).toBeNull();
