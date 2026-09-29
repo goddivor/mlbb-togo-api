@@ -13,6 +13,7 @@ import {
   serializeGames,
   stageFromType,
   typeFromStage,
+  carryOverPicks,
   normalizePicks,
   winsNeeded,
 } from './esport-match-details';
@@ -156,10 +157,13 @@ describe('calendar grouping', () => {
 });
 
 describe('per-game picks', () => {
+  const U1 = '111111111111111111111111';
+  const U2 = '222222222222222222222222';
+  const H1 = 'aaaaaaaaaaaaaaaaaaaaaaa1';
   const pick = (userId: string, teamId: string, extra: Record<string, unknown> = {}) => ({
     userId,
     teamId,
-    heroId: 'h1',
+    heroId: H1,
     hero: 'Fredrinn',
     isSub: false,
     ...extra,
@@ -167,13 +171,13 @@ describe('per-game picks', () => {
 
   it('keeps the draft through normalize -> serialize -> parse', () => {
     const games = normalizeGames(
-      [{ winnerTeamId: A, picks: [pick('u1', A), pick('u2', B, { isSub: true, heroId: null, hero: 'Chou' })] }],
+      [{ winnerTeamId: A, picks: [pick(U1, A), pick(U2, B, { isSub: true, heroId: null, hero: 'Chou' })] }],
       match,
       'bo1',
     );
     expect(games[0].picks).toEqual([
-      { userId: 'u1', teamId: A, heroId: 'h1', hero: 'Fredrinn', isSub: false },
-      { userId: 'u2', teamId: B, heroId: null, hero: 'Chou', isSub: true },
+      { userId: U1, teamId: A, heroId: H1, hero: 'Fredrinn', isSub: false },
+      { userId: U2, teamId: B, heroId: null, hero: 'Chou', isSub: true },
     ]);
     expect(parseGames(serializeGames(games))).toEqual(games);
   });
@@ -191,13 +195,59 @@ describe('per-game picks', () => {
   });
 
   it('rejects a pick outside the match or a player picking twice', () => {
-    expect(() => normalizeGames([{ picks: [pick('u1', 'zzz')] }], match, 'bo1')).toThrow(BadRequestException);
-    expect(() => normalizeGames([{ picks: [pick('u1', A), pick('u1', A)] }], match, 'bo1')).toThrow(
+    expect(() => normalizeGames([{ picks: [pick(U1, 'zzz')] }], match, 'bo1')).toThrow(BadRequestException);
+    expect(() => normalizeGames([{ picks: [pick(U1, A), pick(U1, A)] }], match, 'bo1')).toThrow(
       BadRequestException,
     );
     expect(() => normalizeGames([{ picks: [{ teamId: A }] }], match, 'bo1')).toThrow(BadRequestException);
     expect(() => normalizeGames([{ picks: 'nope' }], match, 'bo1')).toThrow(BadRequestException);
     expect(normalizePicks(undefined, match, 1)).toEqual([]);
+  });
+
+  it('rejects ids that are not object ids or that the scope does not know', () => {
+    // Anything free-form (a script tag, a name...) is refused before storage.
+    expect(() => normalizeGames([{ picks: [pick('<script>', A)] }], match, 'bo1')).toThrow(
+      BadRequestException,
+    );
+    expect(() => normalizeGames([{ picks: [pick(U1, A, { heroId: 'nope' })] }], match, 'bo1')).toThrow(
+      BadRequestException,
+    );
+    // Scope: the player must belong to the match, the hero to the catalog.
+    const scope = { userIds: new Set([U1]), heroIds: new Set([H1]) };
+    expect(normalizeGames([{ picks: [pick(U1, A)] }], match, 'bo1', scope)[0].picks).toHaveLength(1);
+    expect(() => normalizeGames([{ picks: [pick(U2, B)] }], match, 'bo1', scope)).toThrow(
+      BadRequestException,
+    );
+    expect(() =>
+      normalizeGames([{ picks: [pick(U1, A, { heroId: '999999999999999999999999' })] }], match, 'bo1', scope),
+    ).toThrow(BadRequestException);
+  });
+
+  it('carries the stored draft over to a payload that never mentions it', () => {
+    const stored = normalizeGames(
+      [
+        { winnerTeamId: A, picks: [pick(U1, A)] },
+        { winnerTeamId: B, picks: [pick(U2, B)] },
+      ],
+      match,
+      'bo3',
+    );
+    // What the admin match editor sends: the same games, without any pick key.
+    const sent = [{ winnerTeamId: A }, { winnerTeamId: B }];
+    const saved = carryOverPicks(sent, normalizeGames(sent, match, 'bo3'), stored);
+    expect(saved.map((g) => g.picks?.length ?? 0)).toEqual([1, 1]);
+    // An explicit empty list is the only way to clear a draft.
+    const cleared = carryOverPicks(
+      [{ winnerTeamId: A, picks: [] }, { winnerTeamId: B }],
+      normalizeGames([{ winnerTeamId: A, picks: [] }, { winnerTeamId: B }], match, 'bo3'),
+      stored,
+    );
+    expect(cleared.map((g) => g.picks?.length ?? 0)).toEqual([0, 1]);
+    // A game added after the stored ones keeps no draft.
+    const grown = [{ winnerTeamId: A }, { winnerTeamId: B }, { winnerTeamId: A }];
+    expect(
+      carryOverPicks(grown, normalizeGames(grown, match, 'bo3'), stored).map((g) => g.picks?.length ?? 0),
+    ).toEqual([1, 1, 0]);
   });
 
   it('drops unusable picks when reading corrupt storage', () => {

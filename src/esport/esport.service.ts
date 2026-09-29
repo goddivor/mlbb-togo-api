@@ -9,6 +9,7 @@ import {
 import { normalizeSponsorInput, serializeSponsor } from '../sponsors/sponsors.logic';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
+import { isLegacyMatch } from './legacy-import.logic';
 import { PlayerStatsService } from '../stats/player-stats.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { kdaOf } from '../stats/player-stats.util';
@@ -21,6 +22,8 @@ import {
   groupByDay,
   isFormat,
   isStage,
+  PickScope,
+  carryOverPicks,
   normalizeGames,
   normalizeScreenshots,
   normalizeUrl,
@@ -829,7 +832,11 @@ export class EsportService {
     }
     const format = out.format !== undefined ? out.format : m.format;
     if (data.games !== undefined) {
-      out.games = normalizeGames(data.games, m, format);
+      out.games = carryOverPicks(
+        data.games,
+        normalizeGames(data.games, m, format, await this.pickScope(m, data.games)),
+        parseGames(m.games),
+      );
       const mvpIds = out.games.map((g) => g.mvpUserId).filter(Boolean) as string[];
       if (mvpIds.length) await this.assertMatchMvpCandidates(m, mvpIds);
     } else if (out.format !== undefined) {
@@ -856,6 +863,45 @@ export class EsportService {
    * the two rosters, or someone already listed in the match player stats
    * (players who left the team since keep their record).
    */
+  /**
+   * Values a submitted draft may reference: the players of the two teams (roster
+   * or already recorded on the match) and the hero catalog. Only the ids that
+   * the payload actually names are looked up.
+   */
+  private async pickScope(m: any, games: unknown): Promise<PickScope> {
+    const rows = Array.isArray(games) ? games : [];
+    const picks = rows.flatMap((g: any) => (Array.isArray(g?.picks) ? g.picks : []));
+    if (!picks.length) return {};
+    const userIds = Array.from(
+      new Set(picks.map((p: any) => (typeof p?.userId === 'string' ? p.userId.trim() : '')).filter(Boolean)),
+    ) as string[];
+    const heroIds = Array.from(
+      new Set(picks.map((p: any) => (typeof p?.heroId === 'string' ? p.heroId.trim() : '')).filter(Boolean)),
+    ) as string[];
+    const valid = (ids: string[]) => ids.filter((id) => /^[0-9a-fA-F]{24}$/.test(id));
+    const [members, stats, heroes] = await Promise.all([
+      valid(userIds).length
+        ? this.prisma.esportTeamMember.findMany({
+            where: { teamId: { in: [m.teamAId, m.teamBId] }, userId: { in: valid(userIds) } },
+            select: { userId: true },
+          })
+        : [],
+      valid(userIds).length
+        ? this.prisma.esportMatchPlayer.findMany({
+            where: { matchId: m.id, userId: { in: valid(userIds) } },
+            select: { userId: true },
+          })
+        : [],
+      valid(heroIds).length
+        ? this.prisma.hero.findMany({ where: { id: { in: valid(heroIds) } }, select: { id: true } })
+        : [],
+    ]);
+    return {
+      userIds: new Set([...members, ...stats].map((r) => r.userId)),
+      heroIds: heroIds.length ? new Set(heroes.map((h) => h.id)) : null,
+    };
+  }
+
   private async assertMatchMvpCandidates(m: any, ids: string[]) {
     const uniq = Array.from(new Set(ids));
     await this.assertUsersExist(uniq);
@@ -913,6 +959,21 @@ export class EsportService {
   private async recomputeMatchParticipants(matchId: string) {
     const ids = await this.playerStats.participantIds(matchId);
     if (ids.length) await this.playerStats.recomputeUsers(ids);
+    await this.syncGamification(matchId);
+  }
+
+  /**
+   * Match XP, achievements, frames and notifications. Matches imported from
+   * the legacy site are skipped: they are archives, replayed years later, and
+   * granting their rewards on the first admin save would spam every imported
+   * profile. The marker lives in `notes` (no schema change, see #153).
+   */
+  private async syncGamification(matchId: string) {
+    const m = await this.prisma.esportMatch.findUnique({
+      where: { id: matchId },
+      select: { notes: true },
+    });
+    if (isLegacyMatch(m?.notes)) return;
     // XP grants are keyed by match id, so re-running is harmless.
     void this.gamification?.syncMatch(matchId);
   }
@@ -1020,7 +1081,7 @@ export class EsportService {
     if (mvp || (m.mvpUserId && !keep.has(m.mvpUserId)))
       await this.prisma.esportMatch.update({ where: { id: matchId }, data: { mvpUserId: mvp } });
     await this.playerStats.recomputeUsers([...previous, ...userIds]);
-    void this.gamification?.syncMatch(matchId);
+    await this.syncGamification(matchId);
     return this.getMatchPlayers(matchId);
   }
 

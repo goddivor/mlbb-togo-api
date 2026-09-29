@@ -191,14 +191,31 @@ export function parseGames(raw: string | null | undefined): MatchGame[] {
     });
 }
 
+/** MongoDB object id, the only shape an id field of a pick may take. */
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/;
+const MAX_HERO_NAME = 60;
+
 /**
- * Validate the picks of one game: both sides must be teams of the match and a
+ * Allowed values a draft may reference. Both are optional so the pure layer
+ * stays usable without a database; the service passes the real sets (match
+ * participants / rosters, hero catalog) so a pick can never name a user or a
+ * hero that does not exist.
+ */
+export type PickScope = {
+  userIds?: Set<string> | null;
+  heroIds?: Set<string> | null;
+};
+
+/**
+ * Validate the picks of one game: both sides must be teams of the match, ids
+ * must be real object ids (and, when a scope is given, known ones) and a
  * player can only pick once per game.
  */
 export function normalizePicks(
   input: unknown,
   match: Pick<MatchLikeRow, 'teamAId' | 'teamBId'>,
   gameNumber: number,
+  scope: PickScope = {},
 ): MatchPick[] {
   if (input === undefined || input === null) return [];
   if (!Array.isArray(input))
@@ -214,6 +231,12 @@ export function normalizePicks(
     const userId = str(p.userId);
     const teamId = str(p.teamId);
     if (!userId) throw new BadRequestException(`Game ${gameNumber} : pick sans joueur.`);
+    if (!OBJECT_ID.test(userId))
+      throw new BadRequestException(`Game ${gameNumber} : identifiant de joueur invalide.`);
+    if (scope.userIds && !scope.userIds.has(userId))
+      throw new BadRequestException(
+        `Game ${gameNumber} : ce joueur ne fait partie d’aucune des deux équipes.`,
+      );
     if (teamId !== match.teamAId && teamId !== match.teamBId)
       throw new BadRequestException(
         `Game ${gameNumber} : chaque pick doit appartenir à l’une des deux équipes.`,
@@ -223,7 +246,43 @@ export function normalizePicks(
         `Game ${gameNumber} : un joueur ne peut apparaître qu’une fois.`,
       );
     seen.add(userId);
-    return { userId, teamId, heroId: str(p.heroId), hero: str(p.hero), isSub: p.isSub === true };
+    const heroId = str(p.heroId);
+    if (heroId && !OBJECT_ID.test(heroId))
+      throw new BadRequestException(`Game ${gameNumber} : identifiant de héros invalide.`);
+    if (heroId && scope.heroIds && !scope.heroIds.has(heroId))
+      throw new BadRequestException(`Game ${gameNumber} : héros inconnu du catalogue.`);
+    const hero = str(p.hero);
+    if (hero && hero.length > MAX_HERO_NAME)
+      throw new BadRequestException(`Game ${gameNumber} : nom de héros invalide.`);
+    return { userId, teamId, heroId, hero, isSub: p.isSub === true };
+  });
+}
+
+/**
+ * Carry the stored draft over to a games payload that does not mention it.
+ *
+ * The admin match editor rebuilds the games from its own form, which has no
+ * pick field: without this, saving a result would wipe every pick of the
+ * match. A game is only cleared when the caller explicitly sends `picks: []`.
+ *
+ * Games are matched by their number, so removing a game from the middle of a
+ * series shifts the drafts of the ones after it; the editor only ever appends
+ * or truncates, and an explicit `picks` key always wins.
+ */
+export function carryOverPicks(
+  input: unknown,
+  games: MatchGame[],
+  stored: MatchGame[],
+): MatchGame[] {
+  const rows = Array.isArray(input) ? input : [];
+  const byNumber = new Map(stored.map((g) => [g.number, g]));
+  return games.map((g, i) => {
+    const sent = rows[i];
+    const mentionsPicks =
+      !!sent && typeof sent === 'object' && (sent as Record<string, unknown>).picks !== undefined;
+    if (mentionsPicks) return g;
+    const previous = byNumber.get(g.number)?.picks;
+    return previous?.length ? { ...g, picks: previous } : g;
   });
 }
 
@@ -236,6 +295,7 @@ export function normalizeGames(
   input: unknown,
   match: Pick<MatchLikeRow, 'teamAId' | 'teamBId'>,
   format: string | null | undefined,
+  scope: PickScope = {},
 ): MatchGame[] {
   if (input === undefined || input === null) return [];
   if (!Array.isArray(input)) throw new BadRequestException('Les games doivent être une liste.');
@@ -260,7 +320,7 @@ export function normalizeGames(
     const mvpUserId =
       typeof g.mvpUserId === 'string' && g.mvpUserId.trim() ? g.mvpUserId.trim() : null;
     const screenshot = normalizeUrl(g.screenshot, `capture de la game ${i + 1}`);
-    const picks = normalizePicks(g.picks, match, i + 1);
+    const picks = normalizePicks(g.picks, match, i + 1, scope);
     return {
       number: i + 1,
       winnerTeamId,
