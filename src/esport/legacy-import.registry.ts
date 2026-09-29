@@ -47,6 +47,10 @@ export type LegacyRegistry = {
   matches: Record<string, string>;
   sponsors: Record<string, string>;
   awards: Record<string, string>;
+  /** `<legacyTeamId>:<legacyPlayerId>` -> `EsportTeamMember` id. */
+  teamMembers: Record<string, string>;
+  /** `<legacyMatchId>:<legacyPlayerId>` -> `EsportMatchPlayer` id. */
+  matchPlayers: Record<string, string>;
   posts: Record<string, string>;
   events: Record<string, string>;
   streamVideos: Record<string, string>;
@@ -59,6 +63,8 @@ export const REGISTRY_MAPS = [
   'matches',
   'sponsors',
   'awards',
+  'teamMembers',
+  'matchPlayers',
   'posts',
   'events',
   'streamVideos',
@@ -76,6 +82,8 @@ export function emptyRegistry(): LegacyRegistry {
     matches: {},
     sponsors: {},
     awards: {},
+    teamMembers: {},
+    matchPlayers: {},
     posts: {},
     events: {},
     streamVideos: {},
@@ -94,8 +102,8 @@ function sanitizeMap(raw: unknown): Record<string, string> {
 
 /**
  * Read the stored registry. Anything unreadable (absent, corrupt, written by a
- * future version) yields an empty registry: the import then falls back to its
- * natural keys instead of crashing.
+ * future version) yields an empty registry: the import then treats every row as new
+ * (and refuses to run when imported profiles exist) instead of crashing.
  */
 export function parseRegistry(raw: string | null | undefined): LegacyRegistry {
   const registry = emptyRegistry();
@@ -128,7 +136,8 @@ export function legacyMatchIds(registry: LegacyRegistry): Set<string> {
 
 /**
  * Add `extra` on top of `base` without losing anything: a run that stops
- * halfway must never shrink the registry it started from.
+ * halfway must never shrink the registry it started from. On a conflicting
+ * legacy id the newer value wins.
  */
 export function mergeRegistry(base: LegacyRegistry, extra: LegacyRegistry): LegacyRegistry {
   const out = emptyRegistry();
