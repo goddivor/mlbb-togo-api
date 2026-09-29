@@ -44,6 +44,7 @@ import { GeoModule } from './geo/geo.module';
 import { GameModule } from './game/game.module';
 import { AccessModule } from './access/access.module';
 import { RewardsModule } from './rewards/rewards.module';
+import { ImportedModule } from './imported/imported.module';
 
 @Module({
   imports: [
@@ -90,6 +91,7 @@ import { RewardsModule } from './rewards/rewards.module';
     GeoModule,
     GameModule,
     RewardsModule,
+    ImportedModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: EncryptionKeyMissingFilter }],
 })

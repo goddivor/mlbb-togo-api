@@ -153,6 +153,19 @@ export const PERMISSIONS: readonly PermissionDef[] = [
     label: { fr: 'Supprimer des comptes', en: 'Delete accounts' },
   },
   {
+    // Deliberately NOT `admin.users`: that one is held by the moderator role,
+    // and merging is destructive (it moves a whole history onto another
+    // account and deletes the placeholder). It gets its own grant.
+    key: 'admin.imported',
+    group: 'community',
+    route: '/admin/imported',
+    label: { fr: 'Profils importés', en: 'Imported profiles' },
+    description: {
+      fr: 'Rattacher un profil importé du site historique à un compte réel et définir l’adresse attendue.',
+      en: 'Link a profile imported from the legacy site to a real account and set the expected email.',
+    },
+  },
+  {
     key: 'admin.requests',
     group: 'community',
     route: '/admin/requests',
