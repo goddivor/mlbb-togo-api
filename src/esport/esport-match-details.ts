@@ -259,15 +259,17 @@ export function normalizePicks(
 }
 
 /**
- * Carry the stored draft over to a games payload that does not mention it.
+ * Safety net for a games payload that says nothing about the draft.
  *
- * The admin match editor rebuilds the games from its own form, which has no
- * pick field: without this, saving a result would wipe every pick of the
- * match. A game is only cleared when the caller explicitly sends `picks: []`.
+ * A caller that knows about the picks sends them back, and an explicit `picks`
+ * key (including `picks: []`, which clears the draft) always wins. For an older
+ * caller that simply omits the field, the stored draft is brought back so
+ * saving a result does not silently wipe it.
  *
- * Games are matched by their number, so removing a game from the middle of a
- * series shifts the drafts of the ones after it; the editor only ever appends
- * or truncates, and an explicit `picks` key always wins.
+ * Games can only be matched by position, which is meaningless as soon as one is
+ * inserted or removed: the fallback therefore only applies when the payload has
+ * exactly as many games as the stored series. Any other shape drops the missing
+ * drafts rather than shifting them onto the wrong game.
  */
 export function carryOverPicks(
   input: unknown,
@@ -275,13 +277,16 @@ export function carryOverPicks(
   stored: MatchGame[],
 ): MatchGame[] {
   const rows = Array.isArray(input) ? input : [];
-  const byNumber = new Map(stored.map((g) => [g.number, g]));
-  return games.map((g, i) => {
+  const mentionsPicks = (i: number) => {
     const sent = rows[i];
-    const mentionsPicks =
-      !!sent && typeof sent === 'object' && (sent as Record<string, unknown>).picks !== undefined;
-    if (mentionsPicks) return g;
-    const previous = byNumber.get(g.number)?.picks;
+    return !!sent && typeof sent === 'object' && (sent as Record<string, unknown>).picks !== undefined;
+  };
+  // A different length means games were added or removed: positions no longer
+  // line up with the stored series, so nothing may be carried over.
+  const alignable = rows.length === stored.length && games.length === stored.length;
+  return games.map((g, i) => {
+    if (mentionsPicks(i) || !alignable) return g;
+    const previous = stored[i]?.picks;
     return previous?.length ? { ...g, picks: previous } : g;
   });
 }

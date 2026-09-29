@@ -243,11 +243,36 @@ describe('per-game picks', () => {
       stored,
     );
     expect(cleared.map((g) => g.picks?.length ?? 0)).toEqual([0, 1]);
-    // A game added after the stored ones keeps no draft.
-    const grown = [{ winnerTeamId: A }, { winnerTeamId: B }, { winnerTeamId: A }];
+  });
+
+  it('never shifts a draft when the series changed shape', () => {
+    // Three games with three different drafts.
+    const stored = normalizeGames(
+      [
+        { winnerTeamId: A, picks: [pick(U1, A)] },
+        { winnerTeamId: B, picks: [pick(U2, B)] },
+        { winnerTeamId: A, picks: [pick(U1, A), pick(U2, B)] },
+      ],
+      match,
+      'bo5',
+    );
+    const shape = (rows: any[]) =>
+      carryOverPicks(rows, normalizeGames(rows, match, 'bo5'), stored).map((g) => g.picks?.length ?? 0);
+    // Game 2 deleted (what the admin editor's row delete sends): the remaining
+    // games must NOT inherit their neighbours' drafts.
+    expect(shape([{ winnerTeamId: A }, { winnerTeamId: A }])).toEqual([0, 0]);
+    // A game inserted at the front: same rule.
     expect(
-      carryOverPicks(grown, normalizeGames(grown, match, 'bo3'), stored).map((g) => g.picks?.length ?? 0),
-    ).toEqual([1, 1, 0]);
+      shape([{ winnerTeamId: B }, { winnerTeamId: A }, { winnerTeamId: B }, { winnerTeamId: A }]),
+    ).toEqual([0, 0, 0, 0]);
+    // Same length: the fallback applies, positions are the only thing we have.
+    expect(shape([{ winnerTeamId: A }, { winnerTeamId: B }, { winnerTeamId: A }])).toEqual([1, 1, 2]);
+    // A caller that sends the drafts back always wins, reorder included.
+    const reordered = [
+      { winnerTeamId: A, picks: [pick(U1, A), pick(U2, B)] },
+      { winnerTeamId: A, picks: [pick(U1, A)] },
+    ];
+    expect(shape(reordered)).toEqual([2, 1]);
   });
 
   it('drops unusable picks when reading corrupt storage', () => {
