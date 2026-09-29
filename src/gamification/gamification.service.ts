@@ -42,12 +42,19 @@ import { AchievementFactsLoader } from './achievement-facts';
 import { PUBLIC_USER_WHERE, isHiddenAccount } from '../users/public-user.filter';
 import { RewardsService } from '../rewards/rewards.service';
 import { framesForAchievement } from '../rewards/frames.catalog';
+import {
+  LEGACY_REGISTRY_KEY,
+  legacyMatchIds,
+  parseRegistry,
+} from '../esport/legacy-import.registry';
 
 const DAY = 86_400_000;
 const RECENT_EVENTS = 20;
 const MAX_LEADERBOARD = 100;
 const ACHIEVEMENT_PASSES = 3;
 const STATS_TTL_MS = 5 * 60_000;
+/** The import registry changes only when the import runs. */
+const LEGACY_CACHE_TTL_MS = 60_000;
 
 export interface TrackResult {
   granted: boolean;
@@ -91,6 +98,8 @@ export class GamificationService {
   private readonly facts: AchievementFactsLoader;
   private readonly listeners: TrackListener[] = [];
   private statsCache: { at: number; value: AchievementStats } | null = null;
+  /** Ids of the matches imported from the legacy site (see `syncMatch`). */
+  private legacyCache: { at: number; ids: Set<string> } | null = null;
 
   constructor(
     private prisma: PrismaService,
@@ -148,13 +157,39 @@ export class GamificationService {
   }
 
   /**
+   * Matches imported from the legacy site (#153). Read from the import
+   * registry (`AppSetting` `legacy.import`), never from a user-visible field,
+   * and cached so replaying a whole season costs one query.
+   */
+  private async legacyMatches(): Promise<Set<string>> {
+    const now = Date.now();
+    if (this.legacyCache && now - this.legacyCache.at < LEGACY_CACHE_TTL_MS) return this.legacyCache.ids;
+    let ids = new Set<string>();
+    try {
+      const row = await this.prisma.appSetting.findUnique({ where: { key: LEGACY_REGISTRY_KEY } });
+      if (row) ids = legacyMatchIds(parseRegistry(row.value));
+    } catch {
+      // A missing or unreadable registry must never break a grant.
+      ids = new Set<string>();
+    }
+    this.legacyCache = { at: now, ids };
+    return ids;
+  }
+
+  /**
    * Grants match XP to every participant of a completed esport match. Safe to
    * call after each result/players update: grants are keyed by match id.
+   *
+   * Matches imported from the legacy site are archives replayed years later:
+   * they never grant anything. The check lives here, the single choke point
+   * every caller goes through (match result, match sheet, player rows, and the
+   * league admin "recompute" which replays a whole season).
    */
   async syncMatch(matchId: string) {
     try {
       const m = await this.prisma.esportMatch.findUnique({ where: { id: matchId } });
       if (!m || m.status !== 'completed') return;
+      if ((await this.legacyMatches()).has(matchId)) return;
       const players = await this.prisma.esportMatchPlayer.findMany({ where: { matchId } });
       for (const p of players) {
         await this.track(p.userId, 'match_played', matchId);

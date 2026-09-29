@@ -9,7 +9,6 @@ import {
 import { normalizeSponsorInput, serializeSponsor } from '../sponsors/sponsors.logic';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
-import { LEGACY_REGISTRY_KEY, isLegacyMatchId, parseRegistry } from './legacy-import.registry';
 import { PlayerStatsService } from '../stats/player-stats.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { kdaOf } from '../stats/player-stats.util';
@@ -832,10 +831,11 @@ export class EsportService {
     }
     const format = out.format !== undefined ? out.format : m.format;
     if (data.games !== undefined) {
+      const stored = parseGames(m.games);
       out.games = carryOverPicks(
         data.games,
-        normalizeGames(data.games, m, format, await this.pickScope(m, data.games)),
-        parseGames(m.games),
+        normalizeGames(data.games, m, format, await this.pickScope(m, data.games, stored, data.players)),
+        stored,
       );
       const mvpIds = out.games.map((g) => g.mvpUserId).filter(Boolean) as string[];
       if (mvpIds.length) await this.assertMatchMvpCandidates(m, mvpIds);
@@ -864,11 +864,21 @@ export class EsportService {
    * (players who left the team since keep their record).
    */
   /**
-   * Values a submitted draft may reference: the players of the two teams (roster
-   * or already recorded on the match) and the hero catalog. Only the ids that
-   * the payload actually names are looked up.
+   * Values a submitted draft may reference: the players of the two teams
+   * (roster, already recorded on the match, or sent in the same payload) plus
+   * the users the stored draft already names, and the hero catalog. Only the
+   * ids the payload actually mentions are looked up.
+   *
+   * The stored draft counts because it was validated when it was written: an
+   * admin who replaces the match players and then saves the result with the
+   * drafts the interface handed him must not be rejected.
    */
-  private async pickScope(m: any, games: unknown): Promise<PickScope> {
+  private async pickScope(
+    m: any,
+    games: unknown,
+    stored: MatchGame[] = [],
+    submittedPlayers?: unknown,
+  ): Promise<PickScope> {
     const rows = Array.isArray(games) ? games : [];
     const picks = rows.flatMap((g: any) => (Array.isArray(g?.picks) ? g.picks : []));
     if (!picks.length) return {};
@@ -896,8 +906,18 @@ export class EsportService {
         ? this.prisma.hero.findMany({ where: { id: { in: valid(heroIds) } }, select: { id: true } })
         : [],
     ]);
+    const fromStored = stored.flatMap((g) => (g.picks ?? []).map((p) => p.userId));
+    const fromPayload = Array.isArray(submittedPlayers)
+      ? submittedPlayers
+          .map((p: any) => (typeof p?.userId === 'string' ? p.userId.trim() : ''))
+          .filter(Boolean)
+      : [];
     return {
-      userIds: new Set([...members, ...stats].map((r) => r.userId)),
+      userIds: new Set([
+        ...[...members, ...stats].map((r) => r.userId),
+        ...fromStored,
+        ...fromPayload,
+      ]),
       heroIds: heroIds.length ? new Set(heroes.map((h) => h.id)) : null,
     };
   }
@@ -963,29 +983,13 @@ export class EsportService {
   }
 
   /**
-   * Match XP, achievements, frames and notifications. Matches imported from
-   * the legacy site are skipped: they are archives, replayed years later, and
-   * granting their rewards on the first admin save would spam every imported
-   * profile. Whether a match is one of them is read from the import registry
-   * (`AppSetting` `legacy.import`, see #153), never from a user-visible field
-   * such as `notes`, which an admin may retype at any time.
+   * Match XP, achievements, frames and notifications. Grants are keyed by match
+   * id, so re-running is harmless; matches imported from the legacy site are
+   * skipped inside `GamificationService.syncMatch`, the single choke point
+   * every caller shares (see #153).
    */
   private async syncGamification(matchId: string) {
-    if (await this.isLegacyMatch(matchId)) return;
-    // XP grants are keyed by match id, so re-running is harmless.
     void this.gamification?.syncMatch(matchId);
-  }
-
-  /** True when the match was created by the legacy import. */
-  private async isLegacyMatch(matchId: string): Promise<boolean> {
-    try {
-      const row = await this.prisma.appSetting.findUnique({ where: { key: LEGACY_REGISTRY_KEY } });
-      if (!row) return false;
-      return isLegacyMatchId(parseRegistry(row.value), matchId);
-    } catch {
-      // A missing or unreadable registry must never break a match save.
-      return false;
-    }
   }
 
   // ----- Match players (per-player stats) -----
