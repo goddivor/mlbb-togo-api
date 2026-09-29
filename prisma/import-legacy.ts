@@ -8,14 +8,9 @@
  * `src/esport/legacy-import.logic.ts` (pure, unit tested) — here we only read
  * the files, talk to Prisma and print the report.
  *
- * The import is idempotent. Every row it creates is remembered in its own
- * registry (a single `AppSetting` document, see
- * `src/esport/legacy-import.registry.ts`): a re-run resolves what it already
- * wrote through that mapping, whatever a member or an admin has since done to
- * the rows (rename, Google adoption, game-account link, retyped note). Natural
- * keys (season name, team name, match (season, teams, date), sponsor logo,
- * placeholder mailbox) are only the fallback for rows created before the
- * registry existed.
+ * The import is idempotent: a re-run resolves what it wrote through the
+ * registry alone, whatever a member or an admin has done to those rows since
+ * (rename, Google adoption, game-account link, retyped note).
  */
 
 import 'dotenv/config';
@@ -57,6 +52,7 @@ import {
   youtubeIdFrom,
 } from '../src/esport/legacy-import.logic';
 import { serializeGames } from '../src/esport/esport-match-details';
+import { resetLegacyCache } from '../src/esport/legacy-import.guard';
 import {
   LEGACY_LOCK_KEY,
   LEGACY_REGISTRY_BACKUP_KEY,
@@ -84,6 +80,7 @@ type Options = {
   dryRun: boolean;
   report: string | null;
   allowMissingRegistry: boolean;
+  forceUnlock: boolean;
 };
 
 function parseArgs(argv: string[]): Options {
@@ -92,6 +89,7 @@ function parseArgs(argv: string[]): Options {
     dryRun: false,
     report: null,
     allowMissingRegistry: false,
+    forceUnlock: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -99,10 +97,11 @@ function parseArgs(argv: string[]): Options {
     else if (arg === '--report') opts.report = path.resolve(argv[++i] ?? '');
     else if (arg === '--dry-run') opts.dryRun = true;
     else if (arg === '--allow-missing-registry') opts.allowMissingRegistry = true;
+    else if (arg === '--force-unlock') opts.forceUnlock = true;
     else if (arg === '--help' || arg === '-h') {
       console.log(
         'usage: npm run import:legacy -- [--dump <dir>] [--report <file.md>] [--dry-run]\n' +
-          '                               [--allow-missing-registry]',
+          '                               [--allow-missing-registry] [--force-unlock]',
       );
       process.exit(0);
     } else throw new Error(`Unknown option: ${arg}`);
@@ -179,7 +178,10 @@ class Report {
     lines.push(`- Date : ${new Date().toISOString()}`);
     lines.push(`- Dump : \`${opts.dump}\``);
     lines.push(`- Mode : ${opts.dryRun ? 'simulation (--dry-run, aucune écriture)' : 'écriture'}`);
-    lines.push('- Portée : strictement additive (aucune suppression, aucune ligne existante modifiée).');
+    lines.push(
+      '- Portée : l’import ne crée que des lignes neuves et ne modifie (ou ne supprime) que celles dont ' +
+        'il a lui-même l’identifiant dans son registre. Aucune ligne créée par l’équipe n’est touchée.',
+    );
     lines.push('');
     lines.push('## Comptages par entité');
     lines.push('');
@@ -239,16 +241,15 @@ class Report {
     else {
       const byEntity = new Map<string, number>();
       for (const c of this.created) byEntity.set(c.entity, (byEntity.get(c.entity) ?? 0) + 1);
-      lines.push('| Entité | Lignes créées | Exemples (id historique → id interne) |');
-      lines.push('| --- | ---: | --- |');
-      for (const [entity, n] of byEntity) {
-        const sample = this.created
-          .filter((c) => c.entity === entity)
-          .slice(0, 3)
-          .map((c) => `${c.legacyId} → \`${c.id}\``)
-          .join(', ');
-        lines.push(`| ${entity} | ${n} | ${sample}${n > 3 ? ', …' : ''} |`);
-      }
+      lines.push('| Entité | Lignes créées |');
+      lines.push('| --- | ---: |');
+      for (const [entity, n] of byEntity) lines.push(`| ${entity} | ${n} |`);
+      lines.push('');
+      lines.push('Liste complète, pour pouvoir fusionner les doublons à la main :');
+      lines.push('');
+      lines.push('| Entité | Id historique | Id interne |');
+      lines.push('| --- | --- | --- |');
+      for (const c of this.created) lines.push(`| ${c.entity} | ${c.legacyId} | \`${c.id}\` |`);
     }
     lines.push('');
     lines.push('## Lignes ignorées');
@@ -386,22 +387,32 @@ async function main() {
 
   // A second run started while the first is still writing would fight over the
   // same registry. One lock row, released at the end, stale after 15 minutes.
-  const lockRow = await prisma.appSetting.findUnique({ where: { key: LEGACY_LOCK_KEY } });
-  const heldSince = lockRow ? Number(lockRow.value) : 0;
-  if (Number.isFinite(heldSince) && heldSince && Date.now() - heldSince < LOCK_TTL_MS) {
-    console.error(
-      `✗ Un import est déjà en cours depuis ${new Date(heldSince).toISOString()} ` +
-        `(verrou \`${LEGACY_LOCK_KEY}\`). Réessayez plus tard, ou supprimez ce document si le processus est mort.`,
-    );
-    process.exit(1);
-  }
   if (!dry) {
-    const value = String(Date.now());
-    await prisma.appSetting.upsert({
-      where: { key: LEGACY_LOCK_KEY },
-      create: { key: LEGACY_LOCK_KEY, value },
-      update: { value },
-    });
+    // Taken atomically: `create` on the unique `key` is the only operation two
+    // processes cannot both win. A lock older than 15 minutes is stale (the
+    // holder died) and is cleared first; `--force-unlock` clears it whatever
+    // its age.
+    const existingLock = await prisma.appSetting.findUnique({ where: { key: LEGACY_LOCK_KEY } });
+    if (existingLock) {
+      const heldSince = Number(existingLock.value);
+      const stale = !Number.isFinite(heldSince) || Date.now() - heldSince >= LOCK_TTL_MS;
+      if (!stale && !opts.forceUnlock) {
+        console.error(
+          `✗ Un import est déjà en cours depuis ${new Date(heldSince).toISOString()} ` +
+            `(verrou \`${LEGACY_LOCK_KEY}\`). Réessayez plus tard, ou relancez avec --force-unlock si le processus est mort.`,
+        );
+        process.exit(1);
+      }
+      await prisma.appSetting.deleteMany({ where: { key: LEGACY_LOCK_KEY } });
+    }
+    try {
+      await prisma.appSetting.create({ data: { key: LEGACY_LOCK_KEY, value: String(Date.now()) } });
+    } catch {
+      console.error(
+        `✗ Un autre import vient de prendre le verrou \`${LEGACY_LOCK_KEY}\`. Réessayez plus tard.`,
+      );
+      process.exit(1);
+    }
   }
 
   // The new registry starts from the previous one: a run that stops halfway
@@ -428,7 +439,8 @@ async function main() {
   };
   // Copy the version we start from under a backup key, but only when it parses:
   // a corrupt value must never overwrite a good backup.
-  if (!dry && registryRow?.value && registrySize(previous) > 0) {
+  const registryLooksComplete = importedProfiles <= mappedProfiles;
+  if (!dry && registryRow?.value && registrySize(previous) > 0 && registryLooksComplete) {
     await prisma.appSetting.upsert({
       where: { key: LEGACY_REGISTRY_BACKUP_KEY },
       create: { key: LEGACY_REGISTRY_BACKUP_KEY, value: registryRow.value },
@@ -483,8 +495,13 @@ async function main() {
       name: s.name,
       slug,
       number: s.number,
-      status: s.status,
-      isActive: s.isActive,
+      // Always imported closed and inactive, whatever the source said. Two live
+      // seasons would lock the admin out: `POST /esport/seasons`,
+      // `/seasons/:id/playoffs` and `/seasons/:id/activate` all refuse a second
+      // one, and `current()` would become order-dependent. The owner activates
+      // the season he wants from the admin.
+      status: 'closed',
+      isActive: false,
     };
     if (!existing) {
       const created = dry ? { id: fakeId(`season-${s.sourceId}`) } : await prisma.esportSeason.create({ data });
@@ -495,7 +512,10 @@ async function main() {
     } else {
       seasonIdBySource.set(s.sourceId, existing.id);
       await remember('seasons', s.sourceId, existing.id);
-      const patch = diff(existing, data);
+      // Status and activity are written at creation only: the owner may have
+      // activated this season since, and a re-run must not close it again.
+      const { status: _status, isActive: _isActive, ...managed } = data;
+      const patch = diff(existing, managed);
       if (patch && !dry) await prisma.esportSeason.update({ where: { id: existing.id }, data: patch });
       report.bump('EsportSeason', patch ? 'updated' : 'unchanged');
     }
@@ -544,12 +564,6 @@ async function main() {
   const isAdopted = (u: { email: string; googleId?: string | null }) =>
     !!u.googleId || !u.email.toLowerCase().endsWith(IMPORTED_EMAIL_DOMAIN);
 
-  /**
-   * The profile of a legacy player: the registry first (the only key nothing in
-   * the app can rewrite), then the placeholder mailbox for the rows created
-   * before the registry existed. `gameNickname` is deliberately NOT a key: the
-   * game-link flow writes it and unlinking nulls it.
-   */
   /**
    * The profile of a legacy player: the registry, and nothing else. No lookup
    * by mailbox, pseudo or username: every one of them is rewritten by a normal
@@ -674,7 +688,10 @@ async function main() {
 
   // ---- Current rosters (season 3) + archived rosters ---------------------
   const lastSeason = seasons[seasons.length - 1];
-  const rosterBySeason = new Map<number, { teamId: string; userId: string; role: string | null }[]>();
+  const rosterBySeason = new Map<
+    number,
+    { teamId: string; userId: string; role: string | null; sourceTeamId: number; sourcePlayerId: number }[]
+  >();
   for (const row of playersSrc) {
     if (!row.team_id) continue;
     const team = teamsSrc.find((t) => t.id === row.team_id);
@@ -683,22 +700,41 @@ async function main() {
     if (!team || !teamId || !userId) continue;
     const list = rosterBySeason.get(team.season_id) ?? [];
     if (!list.some((m) => m.teamId === teamId && m.userId === userId)) {
-      list.push({ teamId, userId, role: laneOf(row.role) });
+      list.push({ teamId, userId, role: laneOf(row.role), sourceTeamId: row.team_id, sourcePlayerId: row.id });
     }
     rosterBySeason.set(team.season_id, list);
   }
   for (const m of rosterBySeason.get(lastSeason.sourceId) ?? []) {
-    const existing = await prisma.esportTeamMember.findFirst({
-      where: { teamId: m.teamId, userId: m.userId },
-    });
-    if (!existing) {
-      if (!dry) await prisma.esportTeamMember.create({ data: { teamId: m.teamId, userId: m.userId, role: m.role } });
-      report.bump('EsportTeamMember', 'created');
-    } else {
-      const patch = diff(existing, { role: m.role });
-      if (patch && !dry) await prisma.esportTeamMember.update({ where: { id: existing.id }, data: patch });
+    // Keyed on the registry, like everything else: a roster line an admin
+    // added by hand is never rewritten, and the unique (teamId, userId) index
+    // is respected by looking the pair up before creating.
+    const key = `${m.sourceTeamId}:${m.sourcePlayerId}`;
+    const mappedMember = previous.teamMembers[key];
+    const own = mappedMember
+      ? await prisma.esportTeamMember.findUnique({ where: { id: mappedMember } })
+      : null;
+    if (own) {
+      await remember('teamMembers', key, own.id);
+      const patch = diff(own, { role: m.role });
+      if (patch && !dry) await prisma.esportTeamMember.update({ where: { id: own.id }, data: patch });
       report.bump('EsportTeamMember', patch ? 'updated' : 'unchanged');
+      continue;
     }
+    const other = await prisma.esportTeamMember.findFirst({
+      where: { teamId: m.teamId, userId: m.userId },
+      select: { id: true },
+    });
+    if (other) {
+      // Somebody already put this player in this team: left untouched.
+      report.bump('EsportTeamMember', 'unchanged');
+      continue;
+    }
+    const created = dry
+      ? { id: fakeId(`member-${key}`) }
+      : await prisma.esportTeamMember.create({ data: { teamId: m.teamId, userId: m.userId, role: m.role } });
+    await remember('teamMembers', key, created.id);
+    report.created.push({ entity: 'EsportTeamMember', legacyId: key, id: created.id });
+    report.bump('EsportTeamMember', 'created');
   }
 
   // ---- Matches, games and picks ------------------------------------------
@@ -823,36 +859,62 @@ async function main() {
 
     // One row per player of the series: hero = his most used one, no KDA.
     const rows = buildMatchPlayers(games as any, laneOfUser);
-    // Rows left over from a previous run (a match whose games were dropped)
-    // must go, otherwise the sheet keeps players nothing references any more.
-    const stale = (await prisma.esportMatchPlayer.findMany({ where: { matchId }, select: { id: true, userId: true } }))
-      .filter((r) => !rows.some((row) => row.userId === r.userId))
-      .map((r) => r.id);
-    if (stale.length) {
-      if (!dry) await prisma.esportMatchPlayer.deleteMany({ where: { id: { in: stale } } });
-      report.bump('EsportMatchPlayer', 'deleted', stale.length);
+    const playerKey = (legacyPlayerId: number | string) => `${m.id}:${legacyPlayerId}`;
+    const legacyPlayerOf = new Map<string, number>();
+    for (const [legacyId, person] of personByPlayerId) {
+      const uid = userIdByPerson.get(person.key);
+      if (uid && !legacyPlayerOf.has(uid)) legacyPlayerOf.set(uid, legacyId);
     }
     for (const row of rows) {
-      const rowData = {
-        matchId,
-        userId: row.userId,
-        teamId: row.teamId,
+      const key = playerKey(legacyPlayerOf.get(row.userId) ?? row.userId);
+      const mappedRow = previous.matchPlayers[key];
+      const own = mappedRow
+        ? await prisma.esportMatchPlayer.findUnique({ where: { id: mappedRow } })
+        : null;
+      const common = {
         hero: row.hero,
         heroId: row.heroId,
         role: row.role,
-        isMvp: false,
+        teamId: row.teamId,
       };
-      const existingRow = await prisma.esportMatchPlayer.findFirst({
-        where: { matchId, userId: row.userId },
-      });
-      if (!existingRow) {
-        if (!dry) await prisma.esportMatchPlayer.create({ data: rowData });
-        report.bump('EsportMatchPlayer', 'created');
-      } else {
-        const patch = diff(existingRow, rowData);
-        if (patch && !dry) await prisma.esportMatchPlayer.update({ where: { id: existingRow.id }, data: patch });
+      if (own) {
+        await remember('matchPlayers', key, own.id);
+        // `isMvp` is deliberately absent: an admin may have named an MVP on an
+        // imported sheet and the import must not undo it.
+        const patch = diff(own, common);
+        if (patch && !dry) await prisma.esportMatchPlayer.update({ where: { id: own.id }, data: patch });
         report.bump('EsportMatchPlayer', patch ? 'updated' : 'unchanged');
+        continue;
       }
+      const other = await prisma.esportMatchPlayer.findFirst({
+        where: { matchId, userId: row.userId },
+        select: { id: true },
+      });
+      if (other) {
+        // The unique (matchId, userId) row already exists and is not ours.
+        report.bump('EsportMatchPlayer', 'unchanged');
+        continue;
+      }
+      const created = dry
+        ? { id: fakeId(`matchplayer-${key}`) }
+        : await prisma.esportMatchPlayer.create({
+            data: { matchId, userId: row.userId, ...common, isMvp: false },
+          });
+      await remember('matchPlayers', key, created.id);
+      report.created.push({ entity: 'EsportMatchPlayer', legacyId: key, id: created.id });
+      report.bump('EsportMatchPlayer', 'created');
+    }
+    // Rows this import created for a game that has since been dropped upstream
+    // are the ONLY ones it may remove: never a player an admin added.
+    const keep = new Set(rows.map((row) => playerKey(legacyPlayerOf.get(row.userId) ?? row.userId)));
+    const ours = Object.entries(registry.matchPlayers).filter(([k]) => k.startsWith(`${m.id}:`));
+    const stale = ours.filter(([k]) => !keep.has(k));
+    if (stale.length) {
+      if (!dry)
+        await prisma.esportMatchPlayer.deleteMany({ where: { id: { in: stale.map(([, id]) => id) } } });
+      for (const [k] of stale) delete registry.matchPlayers[k];
+      await saveRegistry();
+      report.bump('EsportMatchPlayer', 'deleted', stale.length);
     }
   }
   if (skippedMatches) report.skip('matches', skippedMatches, 'saison ou équipe introuvable');
@@ -899,15 +961,12 @@ async function main() {
   }
 
   // ---- Sponsors ----------------------------------------------------------
-  // The seeded sponsors carry the very same logo URLs as the legacy rows (they
-  // were copied from that site), so they are ADOPTED rather than deleted and
-  // recreated: the row keeps its id and the seasons an admin may already have
-  // attached to it. A sponsor is matched by the registry first, then by logo
-  // (whatever its name: renaming the row must not create a duplicate), then by
-  // name. `isActive` is never written back: hiding a partner is the owner's
-  // decision and must survive a re-run.
+  // Resolved through the registry only. A sponsor the team already created,
+  // even with the same logo, is a different row and is left alone; the report
+  // lists the duplicate so it can be merged by hand. `isActive` and `tier` are
+  // only written at creation: hiding a partner or giving him a tier is the
+  // team's decision and survives every re-run.
   const allSponsors = await prisma.sponsor.findMany();
-  let adoptedSponsors = 0;
   for (const s of [...sponsorsSrc].sort((a, b) => a.id - b.id)) {
     const seasonId = seasonIdBySource.get(s.season_id);
     const logo = String(s.logo_url ?? '').trim();
@@ -939,10 +998,6 @@ async function main() {
     }
     await remember('sponsors', s.id, sponsorId);
   }
-  if (adoptedSponsors)
-    report.note(
-      `${adoptedSponsors} sponsor(s) du seed adoptés par leur logo (identifiant, palier, visibilité et saisons conservés) plutôt que supprimés puis recréés.`,
-    );
   report.note(
     'Champs de `Sponsor` que l’import écrit à chaque exécution : `name`, `logo`, `url`, `description`, ' +
       '`sort` et `seasonIds` (nos saisons ajoutées aux existantes). Il ne touche jamais `isActive` ni ' +
@@ -1110,10 +1165,16 @@ async function main() {
       '`Cresus` / `It is Cresus`, `Atomic Weight` / `TheAtomicWeight`, `PIERRO SMK` / `Pierrosmoke`.',
   );
   report.note(
-    'Portée du script : strictement additive. Il ne supprime rien et ne met à jour que les lignes dont il ' +
-      'a l’identifiant dans son registre. Le ménage des données de démonstration (les cinq équipes ETERNUM ' +
+    'Portée du script : il n’insère que des lignes neuves et ne modifie ou ne supprime que celles dont il ' +
+      'a l’identifiant dans son registre (la seule suppression possible est une ligne `EsportMatchPlayer` qu’il a ' +
+      'lui-même créée pour une game disparue en amont). Le ménage des données de démonstration (les cinq équipes ETERNUM ' +
       'du seed, une éventuelle saison de test) est à faire à la main par le release manager, en regardant ' +
       'les données : certaines portent déjà des campagnes de recrutement, des membres ou des matchs.',
+  );
+  report.note(
+    'Les saisons sont importées **fermées et inactives**, quelle que soit leur valeur en amont : deux saisons ' +
+      'actives bloqueraient l’administration (création, passage en playoffs et activation refusent une seconde ' +
+      'saison en cours). L’équipe active ensuite la saison de son choix depuis l’administration.',
   );
   report.note('`matches.mvp_player_id` et `matches.bans` sont nuls/vides sur toutes les lignes en amont.');
   const nullHeroPicks = gamePlayersSrc.filter((gp) => !gp.hero_id).length;
@@ -1161,9 +1222,14 @@ async function main() {
   // ---- Registry ----------------------------------------------------------
   // Already saved after every created row; this is the final flush.
   await saveRegistry();
-  if (!dry && !registrySize(previous)) {
+  const existingBackup = dry
+    ? null
+    : await prisma.appSetting.findUnique({ where: { key: LEGACY_REGISTRY_BACKUP_KEY } });
+  if (!dry && !registrySize(previous) && !existingBackup) {
     // First run: seed the backup so the registry can be restored if it is ever
-    // deleted, which is the one loss the import cannot recover from.
+    // deleted, which is the one loss the import cannot recover from. Never
+    // replaces a backup that already exists (a forced run after the registry
+    // was lost must not overwrite the good copy).
     const value = serializeRegistry(registry);
     await prisma.appSetting.upsert({
       where: { key: LEGACY_REGISTRY_BACKUP_KEY },
@@ -1202,4 +1268,9 @@ main()
     await prisma.appSetting.deleteMany({ where: { key: LEGACY_LOCK_KEY } }).catch(() => null);
     process.exit(1);
   })
-  .finally(() => prisma.$disconnect());
+  .finally(() => {
+    // The guard caches the registry per process; forget it so nothing in this
+    // process (and any test importing the script) serves a pre-import answer.
+    resetLegacyCache();
+    return prisma.$disconnect();
+  });
