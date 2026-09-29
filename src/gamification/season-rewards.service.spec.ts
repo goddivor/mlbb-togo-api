@@ -1,3 +1,4 @@
+import { resetLegacyCache } from '../esport/legacy-import.guard';
 import {
   SeasonRewardsService,
   finalPodium,
@@ -54,6 +55,8 @@ describe('season rewards: pure helpers', () => {
 });
 
 describe('SeasonRewardsService', () => {
+  beforeEach(() => resetLegacyCache());
+
   const season = {
     id: 's2',
     name: 'Saison 2',
@@ -118,6 +121,54 @@ describe('SeasonRewardsService', () => {
     );
     return { service, gamification, rewards };
   }
+
+  it('grants nothing at all for a season made of imported matches (#153)', async () => {
+    const { service, gamification, rewards } = setup([
+      { userId: 'old-champion', frameId: 'champion_en_titre', variant: '', expiresAt: null, expiredAt: null },
+    ]);
+    // The registry lists the season itself: it is an archive for ever, even
+    // with a real match played in it (the third match below is not imported).
+    (service as any).prisma.appSetting = {
+      findUnique: jest.fn(async () => ({
+        value: JSON.stringify({
+          seasons: { '1': 'bbbbbbbbbbbbbbbbbbbbbbb2' },
+          matches: { '1': 'aaaaaaaaaaaaaaaaaaaaaaa1', '2': 'aaaaaaaaaaaaaaaaaaaaaaa2' },
+        }),
+      })),
+    };
+    (service as any).prisma.esportMatch.findMany = jest.fn(async () => [
+      { id: 'aaaaaaaaaaaaaaaaaaaaaaa1', seasonId: 's2', stage: 'league', type: 'official' },
+      { id: 'aaaaaaaaaaaaaaaaaaaaaaa2', seasonId: 's2', stage: 'league', type: 'official' },
+      { id: 'realmatch', seasonId: 's2', stage: 'league', type: 'official' },
+    ]);
+    (service as any).prisma.esportSeason.findUnique = jest.fn(async () => ({
+      ...season,
+      id: 'bbbbbbbbbbbbbbbbbbbbbbb2',
+    }));
+    resetLegacyCache();
+    expect(await service.apply('bbbbbbbbbbbbbbbbbbbbbbb2')).toBeNull();
+    expect(gamification.trackSafe).not.toHaveBeenCalled();
+    expect(rewards.grantFrameSafe).not.toHaveBeenCalled();
+    // And above all: the real holder keeps his reigning-champion frame.
+    expect(rewards.endFrame).not.toHaveBeenCalled();
+  });
+
+  it('never pays an award the import created, even in a season the team created (#153)', async () => {
+    const { service, gamification } = setup([]);
+    (service as any).prisma.appSetting = {
+      findUnique: jest.fn(async () => ({
+        value: JSON.stringify({ awards: { '1': 'cccccccccccccccccccccca1' } }),
+      })),
+    };
+    (service as any).prisma.seasonAward.findMany = jest.fn(async () => [
+      { id: 'cccccccccccccccccccccca1', category: 'mvp', userId: 'imported', title: null },
+      { id: 'real', category: 'best_roam', userId: 'runner', title: null },
+    ]);
+    resetLegacyCache();
+    await service.apply('s2');
+    const awarded = gamification.trackSafe.mock.calls.filter((c: any[]) => c[1] === 'season_award').map((c: any[]) => c[0]);
+    expect(awarded).toEqual(['runner']);
+  });
 
   it('grants participation, podium XP, awards and the season variant frames', async () => {
     const { service, gamification, rewards } = setup([]);

@@ -21,6 +21,7 @@ import {
   groupByDay,
   isFormat,
   isStage,
+  PickScope,
   normalizeGames,
   normalizeScreenshots,
   normalizeUrl,
@@ -829,7 +830,15 @@ export class EsportService {
     }
     const format = out.format !== undefined ? out.format : m.format;
     if (data.games !== undefined) {
-      out.games = normalizeGames(data.games, m, format);
+      const stored = parseGames(m.games);
+      // The payload is the whole truth: a game sent without `picks` keeps no
+      // draft (see `esport-match-details.ts`).
+      out.games = normalizeGames(
+        data.games,
+        m,
+        format,
+        await this.pickScope(m, data.games, stored, data.players),
+      );
       const mvpIds = out.games.map((g) => g.mvpUserId).filter(Boolean) as string[];
       if (mvpIds.length) await this.assertMatchMvpCandidates(m, mvpIds);
     } else if (out.format !== undefined) {
@@ -856,6 +865,74 @@ export class EsportService {
    * the two rosters, or someone already listed in the match player stats
    * (players who left the team since keep their record).
    */
+  /**
+   * Values a submitted draft may reference: the players of the two teams
+   * (roster, already recorded on the match, or sent in the same payload) plus
+   * the users the stored draft already names, and the hero catalog. Only the
+   * ids the payload actually mentions are looked up.
+   *
+   * The stored draft counts because it was validated when it was written: an
+   * admin who replaces the match players and then saves the result with the
+   * drafts the interface handed him must not be rejected.
+   */
+  private async pickScope(
+    m: any,
+    games: unknown,
+    stored: MatchGame[] = [],
+    submittedPlayers?: unknown,
+  ): Promise<PickScope> {
+    const rows = Array.isArray(games) ? games : [];
+    const picks = rows.flatMap((g: any) => (Array.isArray(g?.picks) ? g.picks : []));
+    if (!picks.length) return {};
+    const userIds = Array.from(
+      new Set(picks.map((p: any) => (typeof p?.userId === 'string' ? p.userId.trim() : '')).filter(Boolean)),
+    ) as string[];
+    const heroIds = Array.from(
+      new Set(picks.map((p: any) => (typeof p?.heroId === 'string' ? p.heroId.trim() : '')).filter(Boolean)),
+    ) as string[];
+    const valid = (ids: string[]) => ids.filter((id) => /^[0-9a-fA-F]{24}$/.test(id));
+    const [members, stats, heroes] = await Promise.all([
+      valid(userIds).length
+        ? this.prisma.esportTeamMember.findMany({
+            where: { teamId: { in: [m.teamAId, m.teamBId] }, userId: { in: valid(userIds) } },
+            select: { userId: true },
+          })
+        : [],
+      valid(userIds).length
+        ? this.prisma.esportMatchPlayer.findMany({
+            where: { matchId: m.id, userId: { in: valid(userIds) } },
+            select: { userId: true },
+          })
+        : [],
+      valid(heroIds).length
+        ? this.prisma.hero.findMany({ where: { id: { in: valid(heroIds) } }, select: { id: true } })
+        : [],
+    ]);
+    const fromStored = stored.flatMap((g) => (g.picks ?? []).map((p) => p.userId));
+    // Players submitted in the same request count, but only the ones that
+    // really belong to one of the two teams: the payload is not a licence to
+    // name anybody.
+    const rosterIds = new Set(
+      (
+        await this.prisma.esportTeamMember.findMany({
+          where: { teamId: { in: [m.teamAId, m.teamBId] } },
+          select: { userId: true },
+        })
+      ).map((r) => r.userId),
+    );
+    const fromPayload = (Array.isArray(submittedPlayers) ? submittedPlayers : [])
+      .map((p: any) => (typeof p?.userId === 'string' ? p.userId.trim() : ''))
+      .filter((id: string) => id && rosterIds.has(id));
+    return {
+      userIds: new Set([
+        ...[...members, ...stats].map((r) => r.userId),
+        ...fromStored,
+        ...fromPayload,
+      ]),
+      heroIds: heroIds.length ? new Set(heroes.map((h) => h.id)) : null,
+    };
+  }
+
   private async assertMatchMvpCandidates(m: any, ids: string[]) {
     const uniq = Array.from(new Set(ids));
     await this.assertUsersExist(uniq);
@@ -913,7 +990,16 @@ export class EsportService {
   private async recomputeMatchParticipants(matchId: string) {
     const ids = await this.playerStats.participantIds(matchId);
     if (ids.length) await this.playerStats.recomputeUsers(ids);
-    // XP grants are keyed by match id, so re-running is harmless.
+    await this.syncGamification(matchId);
+  }
+
+  /**
+   * Match XP, achievements, frames and notifications. Grants are keyed by match
+   * id, so re-running is harmless; matches imported from the legacy site are
+   * skipped inside `GamificationService.syncMatch`, the single choke point
+   * every caller shares (see #153).
+   */
+  private async syncGamification(matchId: string) {
     void this.gamification?.syncMatch(matchId);
   }
 
@@ -1020,7 +1106,7 @@ export class EsportService {
     if (mvp || (m.mvpUserId && !keep.has(m.mvpUserId)))
       await this.prisma.esportMatch.update({ where: { id: matchId }, data: { mvpUserId: mvp } });
     await this.playerStats.recomputeUsers([...previous, ...userIds]);
-    void this.gamification?.syncMatch(matchId);
+    await this.syncGamification(matchId);
     return this.getMatchPlayers(matchId);
   }
 

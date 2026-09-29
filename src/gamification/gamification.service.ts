@@ -42,6 +42,7 @@ import { AchievementFactsLoader } from './achievement-facts';
 import { PUBLIC_USER_WHERE, isHiddenAccount } from '../users/public-user.filter';
 import { RewardsService } from '../rewards/rewards.service';
 import { framesForAchievement } from '../rewards/frames.catalog';
+import { isLegacyMatch } from '../esport/legacy-import.guard';
 
 const DAY = 86_400_000;
 const RECENT_EVENTS = 20;
@@ -91,6 +92,7 @@ export class GamificationService {
   private readonly facts: AchievementFactsLoader;
   private readonly listeners: TrackListener[] = [];
   private statsCache: { at: number; value: AchievementStats } | null = null;
+
 
   constructor(
     private prisma: PrismaService,
@@ -150,11 +152,17 @@ export class GamificationService {
   /**
    * Grants match XP to every participant of a completed esport match. Safe to
    * call after each result/players update: grants are keyed by match id.
+   *
+   * Matches imported from the legacy site are archives replayed years later:
+   * they never grant anything. The check lives here, the single choke point
+   * every caller goes through (match result, match sheet, player rows, and the
+   * league admin "recompute" which replays a whole season).
    */
   async syncMatch(matchId: string) {
     try {
       const m = await this.prisma.esportMatch.findUnique({ where: { id: matchId } });
       if (!m || m.status !== 'completed') return;
+      if (await isLegacyMatch(this.prisma as any, matchId)) return;
       const players = await this.prisma.esportMatchPlayer.findMany({ where: { matchId } });
       for (const p of players) {
         await this.track(p.userId, 'match_played', matchId);
