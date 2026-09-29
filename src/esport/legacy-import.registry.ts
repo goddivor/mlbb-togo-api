@@ -40,6 +40,13 @@ export type LegacyRegistry = {
   version: 1;
   /** ISO date of the run that wrote it (informative). */
   updatedAt: string | null;
+  /**
+   * Epoch ms of the very first run that wrote this registry. Every id the
+   * import creates carries a creation time (the first four bytes of an
+   * ObjectId) at or after it, so a mapping that points at an older row was not
+   * created by the import (a hand-edited or foreign registry) and is refused.
+   */
+  firstRunAt: number | null;
   seasons: Record<string, string>;
   teams: Record<string, string>;
   /** One entry per legacy `players` row, so every spelling resolves. */
@@ -76,6 +83,7 @@ export function emptyRegistry(): LegacyRegistry {
   return {
     version: 1,
     updatedAt: null,
+    firstRunAt: null,
     seasons: {},
     teams: {},
     players: {},
@@ -116,6 +124,7 @@ export function parseRegistry(raw: string | null | undefined): LegacyRegistry {
   }
   if (!doc || typeof doc !== 'object') return registry;
   registry.updatedAt = typeof doc.updatedAt === 'string' ? doc.updatedAt : null;
+  registry.firstRunAt = Number.isFinite(doc.firstRunAt) ? Number(doc.firstRunAt) : null;
   for (const name of REGISTRY_MAPS) registry[name] = sanitizeMap(doc[name]);
   return registry;
 }
@@ -142,6 +151,7 @@ export function legacyMatchIds(registry: LegacyRegistry): Set<string> {
 export function mergeRegistry(base: LegacyRegistry, extra: LegacyRegistry): LegacyRegistry {
   const out = emptyRegistry();
   out.updatedAt = extra.updatedAt ?? base.updatedAt;
+  out.firstRunAt = base.firstRunAt ?? extra.firstRunAt;
   for (const name of REGISTRY_MAPS) out[name] = { ...base[name], ...extra[name] };
   return out;
 }
@@ -149,4 +159,25 @@ export function mergeRegistry(base: LegacyRegistry, extra: LegacyRegistry): Lega
 /** Total number of mappings, shown in the report. */
 export function registrySize(registry: LegacyRegistry): number {
   return REGISTRY_MAPS.reduce((n, name) => n + Object.keys(registry[name]).length, 0);
+}
+
+/** Creation time of a Mongo ObjectId, in epoch ms. */
+export function objectIdTime(id: string): number {
+  return parseInt(id.slice(0, 8), 16) * 1000;
+}
+
+/**
+ * Mappings that point at a row older than the registry itself: rows the import
+ * cannot have created. Empty when the registry carries no `firstRunAt` (written
+ * before the fingerprint existed).
+ */
+export function foreignMappings(registry: LegacyRegistry, toleranceMs = 60_000): string[] {
+  if (!registry.firstRunAt) return [];
+  const out: string[] = [];
+  for (const name of REGISTRY_MAPS) {
+    for (const [legacyId, id] of Object.entries(registry[name])) {
+      if (objectIdTime(id) < registry.firstRunAt - toleranceMs) out.push(`${name}[${legacyId}] -> ${id}`);
+    }
+  }
+  return out;
 }

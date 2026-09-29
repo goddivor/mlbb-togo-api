@@ -8,6 +8,8 @@ import {
   parseRegistry,
   registrySize,
   serializeRegistry,
+  foreignMappings,
+  objectIdTime,
 } from './legacy-import.registry';
 
 const OID = (n: number) => String(n).padStart(24, '0');
@@ -75,5 +77,33 @@ describe('legacy import registry', () => {
     expect(isLegacyMatchId(registry, OID(8))).toBe(false);
     expect(legacyMatchIds(registry)).toEqual(new Set([OID(7)]));
     expect(isLegacyMatchId(emptyRegistry(), OID(7))).toBe(false);
+  });
+});
+
+describe('registry fingerprint', () => {
+  const idAt = (ms: number) => Math.floor(ms / 1000).toString(16).padStart(8, '0') + 'a'.repeat(16);
+
+  it('reads the creation time of an object id', () => {
+    expect(objectIdTime(idAt(1_700_000_000_000))).toBe(1_700_000_000_000);
+  });
+
+  it('refuses mappings older than the first run, accepts newer ones', () => {
+    const registry = emptyRegistry();
+    registry.firstRunAt = 1_700_000_000_000;
+    registry.matches['4'] = idAt(1_600_000_000_000);
+    registry.matches['5'] = idAt(1_700_000_100_000);
+    expect(foreignMappings(registry)).toEqual([`matches[4] -> ${idAt(1_600_000_000_000)}`]);
+  });
+
+  it('checks nothing on a registry without fingerprint', () => {
+    const registry = emptyRegistry();
+    registry.matches['4'] = idAt(1_000_000_000_000);
+    expect(foreignMappings(registry)).toEqual([]);
+  });
+
+  it('round-trips the fingerprint', () => {
+    const registry = emptyRegistry();
+    registry.firstRunAt = 42;
+    expect(parseRegistry(serializeRegistry(registry)).firstRunAt).toBe(42);
   });
 });
