@@ -1,7 +1,9 @@
 import {
+  LEGACY_REGISTRY_BACKUP_KEY,
   LEGACY_REGISTRY_KEY,
   emptyRegistry,
   isLegacyMatchId,
+  mergeRegistry,
   legacyMatchIds,
   parseRegistry,
   registrySize,
@@ -44,6 +46,26 @@ describe('legacy import registry', () => {
     expect(parsed.players).toEqual({ '1': OID(1) });
     expect(parsed.matches).toEqual({});
     expect((parsed as any).unknownMap).toBeUndefined();
+  });
+
+  it('keeps its backup under its own key', () => {
+    expect(LEGACY_REGISTRY_BACKUP_KEY).toBe('legacy.import.backup');
+    expect(LEGACY_REGISTRY_BACKUP_KEY).not.toBe(LEGACY_REGISTRY_KEY);
+  });
+
+  it('merges without ever losing a mapping', () => {
+    const base = emptyRegistry();
+    base.players['1'] = OID(1);
+    base.matches['10'] = OID(10);
+    const extra = emptyRegistry();
+    extra.players['2'] = OID(2);
+    // The same legacy id pointing somewhere else: the newer value wins.
+    extra.matches['10'] = OID(11);
+    const merged = mergeRegistry(base, extra);
+    expect(merged.players).toEqual({ '1': OID(1), '2': OID(2) });
+    expect(merged.matches).toEqual({ '10': OID(11) });
+    // A run that recorded nothing must not shrink the registry it started from.
+    expect(mergeRegistry(base, emptyRegistry()).players).toEqual(base.players);
   });
 
   it('tells whether a match was created by the import', () => {

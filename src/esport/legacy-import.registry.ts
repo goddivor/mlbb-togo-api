@@ -20,6 +20,13 @@
 /** `AppSetting.key` holding the registry. Plain JSON, never encrypted. */
 export const LEGACY_REGISTRY_KEY = 'legacy.import';
 
+/**
+ * Copy of the registry as it was before the last run. Losing the live one is
+ * unrecoverable (the import can no longer tell an adopted profile from a new
+ * one), so every run backs it up before overwriting.
+ */
+export const LEGACY_REGISTRY_BACKUP_KEY = 'legacy.import.backup';
+
 /** Entities the registry tracks. Each map is `legacy id -> our object id`. */
 export type LegacyRegistry = {
   version: 1;
@@ -106,6 +113,17 @@ export function isLegacyMatchId(registry: LegacyRegistry, matchId: string): bool
 /** Ids of every match the import created, for a bulk check. */
 export function legacyMatchIds(registry: LegacyRegistry): Set<string> {
   return new Set(Object.values(registry.matches));
+}
+
+/**
+ * Add `extra` on top of `base` without losing anything: a run that stops
+ * halfway must never shrink the registry it started from.
+ */
+export function mergeRegistry(base: LegacyRegistry, extra: LegacyRegistry): LegacyRegistry {
+  const out = emptyRegistry();
+  out.updatedAt = extra.updatedAt ?? base.updatedAt;
+  for (const name of REGISTRY_MAPS) out[name] = { ...base[name], ...extra[name] };
+  return out;
 }
 
 /** Total number of mappings, shown in the report. */
