@@ -410,6 +410,16 @@ describe('ImportedService.merge', () => {
     await service.merge(SRC, DST, actor);
     await expect(service.merge(SRC, 'c'.repeat(24), actor)).rejects.toThrow(NotFoundException);
   });
+
+  it('never replays a source this operation never merged', async () => {
+    const { service, prisma, stats } = makeService();
+    const stranger = 'd'.repeat(24);
+    // Well-formed, non-existent source + a perfectly real target: without the
+    // admin-log proof this must be a 404, not a recompute of that account.
+    await expect(service.merge(stranger, DST, actor)).rejects.toThrow(NotFoundException);
+    expect(stats.recomputeUsers).not.toHaveBeenCalled();
+    expect(prisma.__store.adminLog).toHaveLength(0);
+  });
 });
 
 describe('ImportedService.setExpectedEmail', () => {
@@ -449,6 +459,10 @@ describe('ImportedService.setExpectedEmail', () => {
       makeService(withGoogleEmail).service.setExpectedEmail(SRC, 'other.person@gmail.com', actor),
     ).rejects.toThrow(ConflictException);
     await expect(service.setExpectedEmail(SRC, 'nope', actor)).rejects.toThrow(BadRequestException);
+    // Every refusal carries a code the bilingual UI translates.
+    await expect(service.setExpectedEmail(SRC, 'kyle@gmail.com', actor)).rejects.toMatchObject({
+      response: { code: 'email_taken' },
+    });
 
     const seed = baseSeed();
     seed.user[0].googleId = 'g-9';

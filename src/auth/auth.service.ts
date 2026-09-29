@@ -408,7 +408,11 @@ export class AuthService {
       );
     }
     const googleId: string = profile.sub;
-    const email: string = profile.email;
+    // Lowercased once, here: the account this profile adopts is looked up by
+    // `email` (and an admin may have typed the expected address by hand on an
+    // imported profile, see #154), and a mailbox differing only in case would
+    // silently miss it and create a second account instead.
+    const email: string = String(profile.email ?? '').trim().toLowerCase();
     if (!googleId || !email) {
       throw new UnauthorizedException('Profil Google incomplet.');
     }

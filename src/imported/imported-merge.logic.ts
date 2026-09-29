@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { IMPORTED_EMAIL_DOMAIN } from '../esport/legacy-import.logic';
 
 /**
  * Pure rules of the "link an imported profile to a real account" feature
@@ -21,25 +22,16 @@ import { BadRequestException } from '@nestjs/common';
 export const IMPORTED_PROVIDER = 'imported';
 
 /**
- * Domain of the placeholder mailboxes. Mirrors `IMPORTED_EMAIL_DOMAIN` of
- * `src/esport/legacy-import.logic.ts` (#153); the two must stay equal, and the
- * constant is duplicated only because this branch is written next to that one.
+ * The import owns these: the domain of the placeholder mailboxes, the key of
+ * its registry and the key of the backup it writes before every run. They are
+ * re-exported so callers of this module have one import to make, but there is
+ * a single definition, in `src/esport/legacy-import.*`.
  */
-export const IMPORTED_EMAIL_DOMAIN = '@imported.mlbbtogo.local';
-
-/**
- * `AppSetting.key` holding the import registry (`legacy id -> our id`).
- * Mirrors `LEGACY_REGISTRY_KEY` of `src/esport/legacy-import.registry.ts`.
- */
-export const LEGACY_REGISTRY_KEY = 'legacy.import';
-
-/**
- * Backup copy the import writes before every run. It holds the same
- * `legacy id -> our id` mapping, so it must follow the merge: restoring a
- * backup that still names the deleted placeholder would make the next run
- * recreate it and take the history back off the real account.
- */
-export const LEGACY_REGISTRY_BACKUP_KEY = 'legacy.import.backup';
+export { IMPORTED_EMAIL_DOMAIN } from '../esport/legacy-import.logic';
+export {
+  LEGACY_REGISTRY_BACKUP_KEY,
+  LEGACY_REGISTRY_KEY,
+} from '../esport/legacy-import.registry';
 
 // ---------------------------------------------------------------------------
 // Identity of an imported profile
@@ -90,19 +82,29 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
 const MAX_EMAIL_LENGTH = 254;
 
 /**
+ * Every refusal of this feature carries a machine-readable `code` next to its
+ * message: the admin interface is bilingual and translates the code, and the
+ * French message is only the fallback for a client that does not know it.
+ */
+export function refuse(code: string, message: string): BadRequestException {
+  return new BadRequestException({ statusCode: 400, error: 'Bad Request', code, message });
+}
+
+/**
  * Validate the address an admin expects the owner to sign in with. Returns the
  * lowercased address; `null`/`''` means "clear it".
  */
 export function normalizeExpectedEmail(raw: unknown): string | null {
   if (raw === null || raw === undefined) return null;
-  if (typeof raw !== 'string') throw new BadRequestException('Adresse e-mail invalide.');
+  if (typeof raw !== 'string') throw refuse('email_invalid', 'Adresse e-mail invalide.');
   const value = raw.trim().toLowerCase();
   if (!value) return null;
   if (value.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(value)) {
-    throw new BadRequestException('Adresse e-mail invalide.');
+    throw refuse('email_invalid', 'Adresse e-mail invalide.');
   }
   if (isPlaceholderEmail(value)) {
-    throw new BadRequestException(
+    throw refuse(
+      'email_reserved_domain',
       `Le domaine ${IMPORTED_EMAIL_DOMAIN} est réservé aux profils importés non réclamés.`,
     );
   }
@@ -520,4 +522,33 @@ export function mergeReasons(
   if (duplicatedGames.length) out.push({ code: 'game_duplicate', count: duplicatedGames.length });
   for (const b of blocking) out.push({ code: 'blocking', model: b.model, count: b.count });
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Replay of an already-applied merge
+// ---------------------------------------------------------------------------
+
+/**
+ * Did this exact pair already go through a merge?
+ *
+ * The placeholder and the registry are rewritten in one transaction, so once
+ * the profile is gone the registry no longer names it: the only lasting proof
+ * that it existed, and that it went into THIS target, is the `imported.merge`
+ * entry the operation wrote. Without that proof a retry must not be treated as
+ * a replay — any well-formed object id would otherwise recompute an arbitrary
+ * account and leave an admin log line behind it.
+ */
+export function wasMergedInto(
+  logs: readonly { action?: string | null; target?: string | null; details?: string | null }[],
+  sourceId: string,
+  targetId: string,
+): boolean {
+  if (!sourceId || !targetId) return false;
+  return logs.some(
+    (l) =>
+      l.action === 'imported.merge' &&
+      l.target === targetId &&
+      typeof l.details === 'string' &&
+      l.details.includes(sourceId),
+  );
 }

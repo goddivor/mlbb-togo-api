@@ -15,6 +15,7 @@ import {
   similarity,
   suggestTargets,
   mergeReasons,
+  wasMergedInto,
   MIN_SUGGESTION_SCORE,
 } from './imported-merge.logic';
 
@@ -316,5 +317,49 @@ describe('suggestion floor', () => {
     const rows = [{ id: 'far', username: 'zenithpro' }];
     expect(similarity('kyle', 'zenithpro')).toBeLessThan(MIN_SUGGESTION_SCORE);
     expect(suggestTargets({ username: 'kyle', gameNickname: null }, rows)).toEqual([]);
+  });
+});
+
+describe('wasMergedInto', () => {
+  const logs = [
+    { action: 'imported.merge', target: 'dst', details: 'Profil importé « k » (src) fusionné dans « d »' },
+    { action: 'imported.email', target: 'dst', details: 'src' },
+    { action: 'imported.merge', target: 'other', details: 'src' },
+  ];
+
+  it('recognises the pair this operation really merged', () => {
+    expect(wasMergedInto(logs, 'src', 'dst')).toBe(true);
+  });
+
+  it('refuses everything else', () => {
+    // Never merged into that target.
+    expect(wasMergedInto(logs, 'src', 'nobody')).toBe(false);
+    // An id the merge never saw: a well-formed stranger must not replay.
+    expect(wasMergedInto(logs, 'ghost', 'dst')).toBe(false);
+    // Another action mentioning the same id is not a merge.
+    expect(wasMergedInto([logs[1]], 'src', 'dst')).toBe(false);
+    expect(wasMergedInto([], 'src', 'dst')).toBe(false);
+    expect(wasMergedInto(logs, '', 'dst')).toBe(false);
+    expect(wasMergedInto([{ action: 'imported.merge', target: 'dst', details: null }], 'src', 'dst')).toBe(
+      false,
+    );
+  });
+});
+
+describe('coded refusals', () => {
+  it('carries a code next to the French fallback message', () => {
+    try {
+      normalizeExpectedEmail('nope');
+      throw new Error('should have thrown');
+    } catch (e: any) {
+      expect(e).toBeInstanceOf(BadRequestException);
+      expect(e.getResponse()).toMatchObject({ code: 'email_invalid', statusCode: 400 });
+    }
+    try {
+      normalizeExpectedEmail(`kyle${IMPORTED_EMAIL_DOMAIN}`);
+      throw new Error('should have thrown');
+    } catch (e: any) {
+      expect(e.getResponse()).toMatchObject({ code: 'email_reserved_domain' });
+    }
   });
 });
