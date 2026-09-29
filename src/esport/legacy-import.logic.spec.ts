@@ -9,9 +9,7 @@ import {
   dedupeTeams,
   formatOf,
   IMPORTED_EMAIL_DOMAIN,
-  LEGACY_MATCH_MARKER,
   importedEmail,
-  isLegacyMatch,
   laneOf,
   mapSeasons,
   normalizeKey,
@@ -274,16 +272,6 @@ describe('games and picks', () => {
     expect(buildMatchPlayers(games)).toEqual([
       { userId: 'u9', teamId: A, hero: null, heroId: null, role: null },
     ]);
-  });
-});
-
-describe('legacy match marker', () => {
-  it('recognizes an imported match, even with an admin note after the marker', () => {
-    expect(isLegacyMatch(LEGACY_MATCH_MARKER)).toBe(true);
-    expect(isLegacyMatch(`${LEGACY_MATCH_MARKER} score revu le 12/01`)).toBe(true);
-    expect(isLegacyMatch('note libre')).toBe(false);
-    expect(isLegacyMatch(null)).toBe(false);
-    expect(isLegacyMatch(undefined)).toBe(false);
   });
 });
 

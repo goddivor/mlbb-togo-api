@@ -345,20 +345,6 @@ export function typeOf(stage: MatchStage): string {
   return stage === 'scrim' ? 'friendly' : 'official';
 }
 
-/**
- * Marker written in `EsportMatch.notes` by the import. It tells the rest of the
- * app that the match is an archive of the legacy site: the gamification hooks
- * skip it so a later admin save never retro-awards XP, achievements, frames and
- * notifications to the imported profiles. A plain note keeps the Prisma schema
- * untouched, and an admin may append his own text after it.
- */
-export const LEGACY_MATCH_MARKER = '[import-legacy]';
-
-/** True when the match comes from the legacy site (see `LEGACY_MATCH_MARKER`). */
-export function isLegacyMatch(notes: string | null | undefined): boolean {
-  return typeof notes === 'string' && notes.includes(LEGACY_MATCH_MARKER);
-}
-
 const FORMATS: MatchFormat[] = ['bo1', 'bo3', 'bo5', 'bo7'];
 
 /**

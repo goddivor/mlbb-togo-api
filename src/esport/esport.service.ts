@@ -9,7 +9,7 @@ import {
 import { normalizeSponsorInput, serializeSponsor } from '../sponsors/sponsors.logic';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
-import { isLegacyMatch } from './legacy-import.logic';
+import { LEGACY_REGISTRY_KEY, isLegacyMatchId, parseRegistry } from './legacy-import.registry';
 import { PlayerStatsService } from '../stats/player-stats.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { kdaOf } from '../stats/player-stats.util';
@@ -966,16 +966,26 @@ export class EsportService {
    * Match XP, achievements, frames and notifications. Matches imported from
    * the legacy site are skipped: they are archives, replayed years later, and
    * granting their rewards on the first admin save would spam every imported
-   * profile. The marker lives in `notes` (no schema change, see #153).
+   * profile. Whether a match is one of them is read from the import registry
+   * (`AppSetting` `legacy.import`, see #153), never from a user-visible field
+   * such as `notes`, which an admin may retype at any time.
    */
   private async syncGamification(matchId: string) {
-    const m = await this.prisma.esportMatch.findUnique({
-      where: { id: matchId },
-      select: { notes: true },
-    });
-    if (isLegacyMatch(m?.notes)) return;
+    if (await this.isLegacyMatch(matchId)) return;
     // XP grants are keyed by match id, so re-running is harmless.
     void this.gamification?.syncMatch(matchId);
+  }
+
+  /** True when the match was created by the legacy import. */
+  private async isLegacyMatch(matchId: string): Promise<boolean> {
+    try {
+      const row = await this.prisma.appSetting.findUnique({ where: { key: LEGACY_REGISTRY_KEY } });
+      if (!row) return false;
+      return isLegacyMatchId(parseRegistry(row.value), matchId);
+    } catch {
+      // A missing or unreadable registry must never break a match save.
+      return false;
+    }
   }
 
   // ----- Match players (per-player stats) -----
