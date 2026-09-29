@@ -13,6 +13,7 @@ import {
   serializeGames,
   stageFromType,
   typeFromStage,
+  normalizePicks,
   winsNeeded,
 } from './esport-match-details';
 
@@ -151,5 +152,64 @@ describe('calendar grouping', () => {
     expect(days.map((d) => d.date)).toEqual(['2026-03-01', '2026-03-02']);
     expect(days[1].matches.map((m: any) => m.id)).toEqual([3, 1]);
     expect(undated.map((m: any) => m.id)).toEqual([4, 5]);
+  });
+});
+
+describe('per-game picks', () => {
+  const pick = (userId: string, teamId: string, extra: Record<string, unknown> = {}) => ({
+    userId,
+    teamId,
+    heroId: 'h1',
+    hero: 'Fredrinn',
+    isSub: false,
+    ...extra,
+  });
+
+  it('keeps the draft through normalize -> serialize -> parse', () => {
+    const games = normalizeGames(
+      [{ winnerTeamId: A, picks: [pick('u1', A), pick('u2', B, { isSub: true, heroId: null, hero: 'Chou' })] }],
+      match,
+      'bo1',
+    );
+    expect(games[0].picks).toEqual([
+      { userId: 'u1', teamId: A, heroId: 'h1', hero: 'Fredrinn', isSub: false },
+      { userId: 'u2', teamId: B, heroId: null, hero: 'Chou', isSub: true },
+    ]);
+    expect(parseGames(serializeGames(games))).toEqual(games);
+  });
+
+  it('leaves games without picks exactly as before', () => {
+    const games = normalizeGames([{ winnerTeamId: A }], match, 'bo1');
+    expect(games[0]).toEqual({
+      number: 1,
+      winnerTeamId: A,
+      duration: null,
+      mvpUserId: null,
+      screenshot: null,
+    });
+    expect(JSON.parse(serializeGames(games) as string)[0].picks).toBeUndefined();
+  });
+
+  it('rejects a pick outside the match or a player picking twice', () => {
+    expect(() => normalizeGames([{ picks: [pick('u1', 'zzz')] }], match, 'bo1')).toThrow(BadRequestException);
+    expect(() => normalizeGames([{ picks: [pick('u1', A), pick('u1', A)] }], match, 'bo1')).toThrow(
+      BadRequestException,
+    );
+    expect(() => normalizeGames([{ picks: [{ teamId: A }] }], match, 'bo1')).toThrow(BadRequestException);
+    expect(() => normalizeGames([{ picks: 'nope' }], match, 'bo1')).toThrow(BadRequestException);
+    expect(normalizePicks(undefined, match, 1)).toEqual([]);
+  });
+
+  it('drops unusable picks when reading corrupt storage', () => {
+    expect(parseGames('[{"picks": [null, {"userId": "u1"}, {"userId": "u1", "teamId": "t1"}]}]')).toEqual([
+      {
+        number: 1,
+        winnerTeamId: null,
+        duration: null,
+        mvpUserId: null,
+        screenshot: null,
+        picks: [{ userId: 'u1', teamId: 't1', heroId: null, hero: null, isSub: false }],
+      },
+    ]);
   });
 });
