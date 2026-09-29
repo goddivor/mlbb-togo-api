@@ -6,6 +6,7 @@ import { normalizeCity, OTHER_CITY_ID } from '../geo/geo.constants';
 import { MISSIONS, MIN_ACCOUNT_AGE_DAYS, dayKey } from './gamification.rules';
 import { AchievementFacts, FactKey, cappedDailyCount } from './achievements.catalog';
 import { parseJson } from '../common/utils/json.util';
+import { legacySeasons, withoutLegacyMatches } from '../esport/legacy-import.guard';
 
 const DAY = 86_400_000;
 const MAX_ROWS = 5000;
@@ -133,11 +134,16 @@ export class AchievementFactsLoader {
   }
 
   private async matches(userId: string): Promise<AchievementFacts['matches']> {
-    const rows = await this.prisma.esportMatchPlayer.findMany({
-      where: { userId },
-      select: { matchId: true, teamId: true, role: true, kills: true, deaths: true, assists: true },
-      take: MAX_ROWS,
-    });
+    // Matches imported from the legacy site are archives: they must not unlock
+    // anything, whoever recalculates what (#153).
+    const rows = await withoutLegacyMatches(
+      this.prisma as any,
+      await this.prisma.esportMatchPlayer.findMany({
+        where: { userId },
+        select: { matchId: true, teamId: true, role: true, kills: true, deaths: true, assists: true },
+        take: MAX_ROWS,
+      }),
+    );
     const empty = {
       flawless: false,
       maxKills: 0,
@@ -271,10 +277,15 @@ export class AchievementFactsLoader {
   }
 
   private async seasons(userId: string): Promise<AchievementFacts['seasons']> {
-    const [rows, awards] = await Promise.all([
+    const [allRows, awards] = await Promise.all([
       this.prisma.esportMatchPlayer.findMany({ where: { userId }, select: { matchId: true }, take: MAX_ROWS }),
-      this.prisma.seasonAward.findMany({ where: { userId }, select: { category: true } }),
+      this.prisma.seasonAward.findMany({ where: { userId }, select: { category: true, seasonId: true } }),
     ]);
+    const rows = await withoutLegacyMatches(this.prisma as any, allRows);
+    // Distinctions imported with a legacy season are history, not a trophy the
+    // member won on this platform.
+    const archived = await legacySeasons(this.prisma as any);
+    const own = awards.filter((a) => !archived.has(a.seasonId));
     let max = 0;
     if (rows.length) {
       const matches = await this.prisma.esportMatch.findMany({
@@ -288,7 +299,7 @@ export class AchievementFactsLoader {
       }
       max = Math.max(0, ...perSeason.values());
     }
-    return { maxLeagueMatchesInSeason: max, awards: [...new Set(awards.map((a) => a.category))] };
+    return { maxLeagueMatchesInSeason: max, awards: [...new Set(own.map((a) => a.category))] };
   }
 
   private async logins(userId: string): Promise<AchievementFacts['logins']> {

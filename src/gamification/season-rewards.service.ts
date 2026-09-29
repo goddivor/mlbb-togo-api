@@ -1,5 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isLegacySeason, legacyMatches } from '../esport/legacy-import.guard';
 import { RewardsService } from '../rewards/rewards.service';
 import { SEASON_VARIANT, framesForAward } from '../rewards/frames.catalog';
 import { isFrameRowActive } from '../rewards/rewards.logic';
@@ -92,6 +93,13 @@ export class SeasonRewardsService {
     const late = () => Date.now() >= deadline;
     const season = await this.prisma.esportSeason.findUnique({ where: { id: seasonId } });
     if (!season || season.status !== 'closed') return null;
+    // A season made only of matches imported from the legacy site is an
+    // archive: it grants no participation, no podium, no award, no frame and
+    // it never takes the reigning-champion title from its real holder (#153).
+    if (await isLegacySeason(this.prisma as any, seasonId)) {
+      this.logger.log(`season ${seasonId} comes from the legacy import: no reward granted.`);
+      return null;
+    }
     const variant = seasonVariant(season.number);
     const summary = parseJson<any>(season.summary ?? 'null', null);
     const facts = await this.facts(seasonId, summary);
@@ -220,7 +228,12 @@ export class SeasonRewardsService {
       where: { seasonId, status: 'completed' },
       select: { id: true, stage: true, type: true },
     });
-    const league = matches.filter((m) => ['league', 'playoff'].includes(stageOf(m)));
+    // A season an admin has started to play in really is live, but the matches
+    // imported from the legacy site inside it still grant nothing.
+    const imported = await legacyMatches(this.prisma as any);
+    const league = matches
+      .filter((m) => !imported.has(m.id))
+      .filter((m) => ['league', 'playoff'].includes(stageOf(m)));
     const rows = league.length
       ? await this.prisma.esportMatchPlayer.findMany({
           where: { matchId: { in: league.map((m) => m.id) } },

@@ -1,3 +1,4 @@
+import { resetLegacyCache } from '../esport/legacy-import.guard';
 import {
   SeasonRewardsService,
   finalPodium,
@@ -54,6 +55,8 @@ describe('season rewards: pure helpers', () => {
 });
 
 describe('SeasonRewardsService', () => {
+  beforeEach(() => resetLegacyCache());
+
   const season = {
     id: 's2',
     name: 'Saison 2',
@@ -118,6 +121,28 @@ describe('SeasonRewardsService', () => {
     );
     return { service, gamification, rewards };
   }
+
+  it('grants nothing at all for a season made of imported matches (#153)', async () => {
+    const { service, gamification, rewards } = setup([
+      { userId: 'old-champion', frameId: 'champion_en_titre', variant: '', expiresAt: null, expiredAt: null },
+    ]);
+    // The registry lists both matches of the season: it is an archive.
+    (service as any).prisma.appSetting = {
+      findUnique: jest.fn(async () => ({
+        value: JSON.stringify({ matches: { '1': 'aaaaaaaaaaaaaaaaaaaaaaa1', '2': 'aaaaaaaaaaaaaaaaaaaaaaa2' } }),
+      })),
+    };
+    (service as any).prisma.esportMatch.findMany = jest.fn(async () => [
+      { id: 'aaaaaaaaaaaaaaaaaaaaaaa1', seasonId: 's2', stage: 'league', type: 'official' },
+      { id: 'aaaaaaaaaaaaaaaaaaaaaaa2', seasonId: 's2', stage: 'league', type: 'official' },
+    ]);
+    resetLegacyCache();
+    expect(await service.apply('s2')).toBeNull();
+    expect(gamification.trackSafe).not.toHaveBeenCalled();
+    expect(rewards.grantFrameSafe).not.toHaveBeenCalled();
+    // And above all: the real holder keeps his reigning-champion frame.
+    expect(rewards.endFrame).not.toHaveBeenCalled();
+  });
 
   it('grants participation, podium XP, awards and the season variant frames', async () => {
     const { service, gamification, rewards } = setup([]);

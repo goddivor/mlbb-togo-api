@@ -1,4 +1,5 @@
 import { LEGACY_REGISTRY_KEY } from '../esport/legacy-import.registry';
+import { resetLegacyCache } from '../esport/legacy-import.guard';
 import { GamificationService } from './gamification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunityService } from '../community/community.service';
@@ -216,6 +217,8 @@ describe('GamificationService', () => {
   let service: GamificationService;
 
   beforeEach(() => {
+    // The legacy-import snapshot is cached process-wide.
+    resetLegacyCache();
     prisma = makePrisma();
     community = { notifyUser: jest.fn().mockResolvedValue(null) };
     service = new GamificationService(
@@ -366,6 +369,7 @@ describe('GamificationService', () => {
     const NORMAL_MATCH_ID = 'aaaaaaaaaaaaaaaaaaaaaaa2';
 
     it('never rewards a match imported from the legacy site (#153)', async () => {
+      resetLegacyCache();
       // The guard lives here, the single choke point every caller shares: the
       // match sheet, the result endpoint and the league admin "recompute",
       // which replays a whole season in a loop.
@@ -393,6 +397,7 @@ describe('GamificationService', () => {
     });
 
     it('still rewards when the registry is missing or unreadable', async () => {
+      resetLegacyCache();
       prisma.setMatch({ id: 'm1', status: 'completed', teamAId: 'A', teamBId: 'B', winnerTeamId: 'A' }, [
         { userId: U, teamId: 'A', isMvp: false },
       ]);
