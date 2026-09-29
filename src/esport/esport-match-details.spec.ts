@@ -13,7 +13,6 @@ import {
   serializeGames,
   stageFromType,
   typeFromStage,
-  carryOverPicks,
   normalizePicks,
   winsNeeded,
 } from './esport-match-details';
@@ -223,84 +222,40 @@ describe('per-game picks', () => {
     ).toThrow(BadRequestException);
   });
 
-  it('carries the stored draft over to a payload that never mentions it', () => {
+  it('keeps only the drafts the payload carries', () => {
+    // Three games, three distinct drafts, and two of them indistinguishable on
+    // every other field (same winner, duration / screenshot / MVP all null).
     const stored = normalizeGames(
       [
         { winnerTeamId: A, picks: [pick(U1, A)] },
-        { winnerTeamId: B, picks: [pick(U2, B)] },
-      ],
-      match,
-      'bo3',
-    );
-    // What the admin match editor sends: the same games, without any pick key.
-    const sent = [{ winnerTeamId: A }, { winnerTeamId: B }];
-    const saved = carryOverPicks(sent, normalizeGames(sent, match, 'bo3'), stored);
-    expect(saved.map((g) => g.picks?.length ?? 0)).toEqual([1, 1]);
-    // An explicit empty list is the only way to clear a draft.
-    const cleared = carryOverPicks(
-      [{ winnerTeamId: A, picks: [] }, { winnerTeamId: B }],
-      normalizeGames([{ winnerTeamId: A, picks: [] }, { winnerTeamId: B }], match, 'bo3'),
-      stored,
-    );
-    expect(cleared.map((g) => g.picks?.length ?? 0)).toEqual([0, 1]);
-  });
-
-  it('never shifts a draft, whatever the series became', () => {
-    // Three games, three different drafts, each with its own result.
-    const stored = normalizeGames(
-      [
-        { winnerTeamId: A, duration: 600, picks: [pick(U1, A)] },
-        { winnerTeamId: B, duration: 700, picks: [pick(U2, B)] },
-        { winnerTeamId: A, duration: 800, picks: [pick(U1, A), pick(U2, B)] },
+        { winnerTeamId: A, picks: [pick(U2, B)] },
+        { winnerTeamId: B, picks: [pick(U1, A), pick(U2, B)] },
       ],
       match,
       'bo5',
     );
-    const shape = (rows: any[]) =>
-      carryOverPicks(rows, normalizeGames(rows, match, 'bo5'), stored).map((g) => g.picks?.length ?? 0);
-    const bare = stored.map((g) => ({
-      winnerTeamId: g.winnerTeamId,
-      duration: g.duration,
-      screenshot: g.screenshot,
-      mvpUserId: g.mvpUserId,
-    }));
+    expect(stored.map((g) => g.picks?.length ?? 0)).toEqual([1, 1, 2]);
+    const bare = stored.map((g) => ({ winnerTeamId: g.winnerTeamId }));
+    const shape = (rows: any[]) => normalizeGames(rows, match, 'bo5').map((g) => g.picks?.length ?? 0);
+    const usersOf = (rows: any[]) =>
+      normalizeGames(rows, match, 'bo5').map((g) => (g.picks ?? []).map((p) => p.userId));
 
-    // Untouched series: every draft comes back on its own game.
-    expect(shape(bare)).toEqual([1, 1, 2]);
-    // Reversed: same length, but the games that moved no longer match their
-    // position, so they get nothing. Only the middle one, which a reversal
-    // leaves in place, keeps its own draft.
-    expect(shape([...bare].reverse())).toEqual([0, 1, 0]);
-    // The reported bug: game 1 must never end up with game 3's result and
-    // game 1's draft.
-    const reversed = carryOverPicks(
-      [...bare].reverse(),
-      normalizeGames([...bare].reverse(), match, 'bo5'),
-      stored,
-    );
-    expect(reversed[0]).toEqual({
-      number: 1,
-      winnerTeamId: A,
-      duration: 800,
-      mvpUserId: null,
-      screenshot: null,
-    });
-    // Two games swapped: only the untouched one keeps its draft.
-    expect(shape([bare[1], bare[0], bare[2]])).toEqual([0, 0, 2]);
-    // Middle game deleted (the admin editor's row delete).
-    expect(shape([bare[0], bare[2]])).toEqual([1, 0]);
-    // A game inserted at the front.
-    expect(shape([{ winnerTeamId: B, duration: 100 }, ...bare])).toEqual([0, 0, 0, 0]);
-    // Series truncated.
-    expect(shape([bare[0], bare[1]])).toEqual([1, 1]);
-    // A result corrected on game 2: that game is no longer the stored one.
-    expect(shape([bare[0], { ...bare[1], winnerTeamId: A }, bare[2]])).toEqual([1, 0, 2]);
-    // A caller that sends the drafts back always wins, reorder included.
-    const reordered = [
-      { ...bare[2], picks: [pick(U1, A), pick(U2, B)] },
-      { ...bare[0], picks: [pick(U1, A)] },
+    // No `picks` key: the draft is never invented back, whatever the shape.
+    expect(shape(bare)).toEqual([0, 0, 0]);
+    expect(shape([bare[1], bare[2]])).toEqual([0, 0]); // first game deleted
+    expect(shape([bare[0], bare[2]])).toEqual([0, 0]); // middle game deleted
+    expect(shape([...bare].reverse())).toEqual([0, 0, 0]); // reordered
+
+    // Two games that differ only by their draft can never swap it: the caller
+    // states which draft goes with which game.
+    const sent = [
+      { winnerTeamId: A, picks: stored[1].picks },
+      { winnerTeamId: A, picks: stored[0].picks },
+      { winnerTeamId: B, picks: stored[2].picks },
     ];
-    expect(shape(reordered)).toEqual([2, 1]);
+    expect(usersOf(sent)).toEqual([[U2], [U1], [U1, U2]]);
+    // An explicit empty list clears one game and leaves the others alone.
+    expect(shape([{ winnerTeamId: A, picks: [] }, sent[1], sent[2]])).toEqual([0, 1, 2]);
   });
 
   it('drops unusable picks when reading corrupt storage', () => {

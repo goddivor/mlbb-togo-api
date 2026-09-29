@@ -259,49 +259,16 @@ export function normalizePicks(
 }
 
 /**
- * Safety net for a games payload that says nothing about the draft.
+ * The draft of a game lives in the payload, and only there.
  *
- * A caller that knows about the picks sends them back, and an explicit `picks`
- * key (including `picks: []`, which clears the draft) always wins. For an older
- * caller that simply omits the field, the stored draft is brought back so
- * saving a result does not silently wipe it.
- *
- * Games can only be matched by position, which is meaningless as soon as one is
- * inserted or removed: the fallback therefore only applies when the payload has
- * exactly as many games as the stored series. Any other shape drops the missing
- * drafts rather than shifting them onto the wrong game.
+ * `normalizeGames` keeps the `picks` a caller sends and drops the draft of a
+ * game it does not send one for. There is deliberately no "guess the previous
+ * draft" fallback: games can only be matched by position, and a position means
+ * nothing as soon as one game is inserted, removed or moved, so any guess ends
+ * up attributing a draft to the wrong game. Every caller that knows about the
+ * drafts sends them back (the admin match editor does, see
+ * `frontend/src/app/admin/matches/page.tsx`).
  */
-export function carryOverPicks(
-  input: unknown,
-  games: MatchGame[],
-  stored: MatchGame[],
-): MatchGame[] {
-  const rows = Array.isArray(input) ? input : [];
-  const mentionsPicks = (i: number) => {
-    const sent = rows[i];
-    return !!sent && typeof sent === 'object' && (sent as Record<string, unknown>).picks !== undefined;
-  };
-  return games.map((g, i) => {
-    if (mentionsPicks(i)) return g;
-    const previous = stored[i];
-    // The position alone proves nothing: a reordered series has the same
-    // length and would hand game 1 the draft of game 3. The stored game must
-    // be identical on every field the caller did send, otherwise it is a
-    // different game and its draft stays where it was.
-    if (!previous?.picks?.length || !sameGame(g, previous)) return g;
-    return { ...g, picks: previous.picks };
-  });
-}
-
-/** Two games at the same position describing the same played game. */
-function sameGame(a: MatchGame, b: MatchGame): boolean {
-  return (
-    a.winnerTeamId === b.winnerTeamId &&
-    a.duration === b.duration &&
-    a.screenshot === b.screenshot &&
-    a.mvpUserId === b.mvpUserId
-  );
-}
 
 /**
  * Validate a games payload against the match. Each game must name one of the

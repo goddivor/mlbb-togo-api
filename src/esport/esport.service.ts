@@ -22,7 +22,6 @@ import {
   isFormat,
   isStage,
   PickScope,
-  carryOverPicks,
   normalizeGames,
   normalizeScreenshots,
   normalizeUrl,
@@ -832,10 +831,13 @@ export class EsportService {
     const format = out.format !== undefined ? out.format : m.format;
     if (data.games !== undefined) {
       const stored = parseGames(m.games);
-      out.games = carryOverPicks(
+      // The payload is the whole truth: a game sent without `picks` keeps no
+      // draft (see `esport-match-details.ts`).
+      out.games = normalizeGames(
         data.games,
-        normalizeGames(data.games, m, format, await this.pickScope(m, data.games, stored, data.players)),
-        stored,
+        m,
+        format,
+        await this.pickScope(m, data.games, stored, data.players),
       );
       const mvpIds = out.games.map((g) => g.mvpUserId).filter(Boolean) as string[];
       if (mvpIds.length) await this.assertMatchMvpCandidates(m, mvpIds);
@@ -907,11 +909,20 @@ export class EsportService {
         : [],
     ]);
     const fromStored = stored.flatMap((g) => (g.picks ?? []).map((p) => p.userId));
-    const fromPayload = Array.isArray(submittedPlayers)
-      ? submittedPlayers
-          .map((p: any) => (typeof p?.userId === 'string' ? p.userId.trim() : ''))
-          .filter(Boolean)
-      : [];
+    // Players submitted in the same request count, but only the ones that
+    // really belong to one of the two teams: the payload is not a licence to
+    // name anybody.
+    const rosterIds = new Set(
+      (
+        await this.prisma.esportTeamMember.findMany({
+          where: { teamId: { in: [m.teamAId, m.teamBId] } },
+          select: { userId: true },
+        })
+      ).map((r) => r.userId),
+    );
+    const fromPayload = (Array.isArray(submittedPlayers) ? submittedPlayers : [])
+      .map((p: any) => (typeof p?.userId === 'string' ? p.userId.trim() : ''))
+      .filter((id: string) => id && rosterIds.has(id));
     return {
       userIds: new Set([
         ...[...members, ...stats].map((r) => r.userId),
