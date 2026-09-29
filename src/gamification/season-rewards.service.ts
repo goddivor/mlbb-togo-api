@@ -1,5 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isLegacySeason, legacyAwards, legacyMatches } from '../esport/legacy-import.guard';
 import { RewardsService } from '../rewards/rewards.service';
 import { SEASON_VARIANT, framesForAward } from '../rewards/frames.catalog';
 import { isFrameRowActive } from '../rewards/rewards.logic';
@@ -92,6 +93,15 @@ export class SeasonRewardsService {
     const late = () => Date.now() >= deadline;
     const season = await this.prisma.esportSeason.findUnique({ where: { id: seasonId } });
     if (!season || season.status !== 'closed') return null;
+    // A season the legacy import created is an archive, for ever: whatever an
+    // admin plays or saves in it afterwards, its podium, its awards and its
+    // rosters were written by the import. It grants no participation, no
+    // podium, no award, no frame, and it never takes the reigning-champion
+    // title from its real holder (#153).
+    if (await isLegacySeason(this.prisma as any, seasonId)) {
+      this.logger.log(`season ${seasonId} comes from the legacy import: no reward granted.`);
+      return null;
+    }
     const variant = seasonVariant(season.number);
     const summary = parseJson<any>(season.summary ?? 'null', null);
     const facts = await this.facts(seasonId, summary);
@@ -137,8 +147,13 @@ export class SeasonRewardsService {
     }
     await this.transferReigningChampion(season, out.champions);
 
-    // Awards: XP by category, season variant frames, achievements.
-    const awards = await this.prisma.seasonAward.findMany({ where: { seasonId } });
+    // Awards: XP by category, season variant frames, achievements. The ones the
+    // legacy import created are archives and never pay, even in a season the
+    // team created itself.
+    const importedAwards = await legacyAwards(this.prisma as any);
+    const awards = (await this.prisma.seasonAward.findMany({ where: { seasonId } })).filter(
+      (a) => !importedAwards.has(a.id),
+    );
     for (const a of awards) {
       if (late()) return out;
       if (!a.userId) continue;
@@ -220,7 +235,12 @@ export class SeasonRewardsService {
       where: { seasonId, status: 'completed' },
       select: { id: true, stage: true, type: true },
     });
-    const league = matches.filter((m) => ['league', 'playoff'].includes(stageOf(m)));
+    // Matches imported from the legacy site never count, even inside a season
+    // the team created itself.
+    const imported = await legacyMatches(this.prisma as any);
+    const league = matches
+      .filter((m) => !imported.has(m.id))
+      .filter((m) => ['league', 'playoff'].includes(stageOf(m)));
     const rows = league.length
       ? await this.prisma.esportMatchPlayer.findMany({
           where: { matchId: { in: league.map((m) => m.id) } },

@@ -13,6 +13,7 @@ import {
   serializeGames,
   stageFromType,
   typeFromStage,
+  normalizePicks,
   winsNeeded,
 } from './esport-match-details';
 
@@ -151,5 +152,122 @@ describe('calendar grouping', () => {
     expect(days.map((d) => d.date)).toEqual(['2026-03-01', '2026-03-02']);
     expect(days[1].matches.map((m: any) => m.id)).toEqual([3, 1]);
     expect(undated.map((m: any) => m.id)).toEqual([4, 5]);
+  });
+});
+
+describe('per-game picks', () => {
+  const U1 = '111111111111111111111111';
+  const U2 = '222222222222222222222222';
+  const H1 = 'aaaaaaaaaaaaaaaaaaaaaaa1';
+  const pick = (userId: string, teamId: string, extra: Record<string, unknown> = {}) => ({
+    userId,
+    teamId,
+    heroId: H1,
+    hero: 'Fredrinn',
+    isSub: false,
+    ...extra,
+  });
+
+  it('keeps the draft through normalize -> serialize -> parse', () => {
+    const games = normalizeGames(
+      [{ winnerTeamId: A, picks: [pick(U1, A), pick(U2, B, { isSub: true, heroId: null, hero: 'Chou' })] }],
+      match,
+      'bo1',
+    );
+    expect(games[0].picks).toEqual([
+      { userId: U1, teamId: A, heroId: H1, hero: 'Fredrinn', isSub: false },
+      { userId: U2, teamId: B, heroId: null, hero: 'Chou', isSub: true },
+    ]);
+    expect(parseGames(serializeGames(games))).toEqual(games);
+  });
+
+  it('leaves games without picks exactly as before', () => {
+    const games = normalizeGames([{ winnerTeamId: A }], match, 'bo1');
+    expect(games[0]).toEqual({
+      number: 1,
+      winnerTeamId: A,
+      duration: null,
+      mvpUserId: null,
+      screenshot: null,
+    });
+    expect(JSON.parse(serializeGames(games) as string)[0].picks).toBeUndefined();
+  });
+
+  it('rejects a pick outside the match or a player picking twice', () => {
+    expect(() => normalizeGames([{ picks: [pick(U1, 'zzz')] }], match, 'bo1')).toThrow(BadRequestException);
+    expect(() => normalizeGames([{ picks: [pick(U1, A), pick(U1, A)] }], match, 'bo1')).toThrow(
+      BadRequestException,
+    );
+    expect(() => normalizeGames([{ picks: [{ teamId: A }] }], match, 'bo1')).toThrow(BadRequestException);
+    expect(() => normalizeGames([{ picks: 'nope' }], match, 'bo1')).toThrow(BadRequestException);
+    expect(normalizePicks(undefined, match, 1)).toEqual([]);
+  });
+
+  it('rejects ids that are not object ids or that the scope does not know', () => {
+    // Anything free-form (a script tag, a name...) is refused before storage.
+    expect(() => normalizeGames([{ picks: [pick('<script>', A)] }], match, 'bo1')).toThrow(
+      BadRequestException,
+    );
+    expect(() => normalizeGames([{ picks: [pick(U1, A, { heroId: 'nope' })] }], match, 'bo1')).toThrow(
+      BadRequestException,
+    );
+    // Scope: the player must belong to the match, the hero to the catalog.
+    const scope = { userIds: new Set([U1]), heroIds: new Set([H1]) };
+    expect(normalizeGames([{ picks: [pick(U1, A)] }], match, 'bo1', scope)[0].picks).toHaveLength(1);
+    expect(() => normalizeGames([{ picks: [pick(U2, B)] }], match, 'bo1', scope)).toThrow(
+      BadRequestException,
+    );
+    expect(() =>
+      normalizeGames([{ picks: [pick(U1, A, { heroId: '999999999999999999999999' })] }], match, 'bo1', scope),
+    ).toThrow(BadRequestException);
+  });
+
+  it('keeps only the drafts the payload carries', () => {
+    // Three games, three distinct drafts, and two of them indistinguishable on
+    // every other field (same winner, duration / screenshot / MVP all null).
+    const stored = normalizeGames(
+      [
+        { winnerTeamId: A, picks: [pick(U1, A)] },
+        { winnerTeamId: A, picks: [pick(U2, B)] },
+        { winnerTeamId: B, picks: [pick(U1, A), pick(U2, B)] },
+      ],
+      match,
+      'bo5',
+    );
+    expect(stored.map((g) => g.picks?.length ?? 0)).toEqual([1, 1, 2]);
+    const bare = stored.map((g) => ({ winnerTeamId: g.winnerTeamId }));
+    const shape = (rows: any[]) => normalizeGames(rows, match, 'bo5').map((g) => g.picks?.length ?? 0);
+    const usersOf = (rows: any[]) =>
+      normalizeGames(rows, match, 'bo5').map((g) => (g.picks ?? []).map((p) => p.userId));
+
+    // No `picks` key: the draft is never invented back, whatever the shape.
+    expect(shape(bare)).toEqual([0, 0, 0]);
+    expect(shape([bare[1], bare[2]])).toEqual([0, 0]); // first game deleted
+    expect(shape([bare[0], bare[2]])).toEqual([0, 0]); // middle game deleted
+    expect(shape([...bare].reverse())).toEqual([0, 0, 0]); // reordered
+
+    // Two games that differ only by their draft can never swap it: the caller
+    // states which draft goes with which game.
+    const sent = [
+      { winnerTeamId: A, picks: stored[1].picks },
+      { winnerTeamId: A, picks: stored[0].picks },
+      { winnerTeamId: B, picks: stored[2].picks },
+    ];
+    expect(usersOf(sent)).toEqual([[U2], [U1], [U1, U2]]);
+    // An explicit empty list clears one game and leaves the others alone.
+    expect(shape([{ winnerTeamId: A, picks: [] }, sent[1], sent[2]])).toEqual([0, 1, 2]);
+  });
+
+  it('drops unusable picks when reading corrupt storage', () => {
+    expect(parseGames('[{"picks": [null, {"userId": "u1"}, {"userId": "u1", "teamId": "t1"}]}]')).toEqual([
+      {
+        number: 1,
+        winnerTeamId: null,
+        duration: null,
+        mvpUserId: null,
+        screenshot: null,
+        picks: [{ userId: 'u1', teamId: 't1', heroId: null, hero: null, isSub: false }],
+      },
+    ]);
   });
 });

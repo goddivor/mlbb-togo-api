@@ -1,3 +1,5 @@
+import { LEGACY_REGISTRY_KEY } from '../esport/legacy-import.registry';
+import { resetLegacyCache } from '../esport/legacy-import.guard';
 import { GamificationService } from './gamification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunityService } from '../community/community.service';
@@ -215,6 +217,8 @@ describe('GamificationService', () => {
   let service: GamificationService;
 
   beforeEach(() => {
+    // The legacy-import snapshot is cached process-wide.
+    resetLegacyCache();
     prisma = makePrisma();
     community = { notifyUser: jest.fn().mockResolvedValue(null) };
     service = new GamificationService(
@@ -359,6 +363,48 @@ describe('GamificationService', () => {
       expect(mine.map((e) => e.type).sort()).toEqual(['match_mvp', 'match_played', 'match_win']);
       const theirs = prisma._state.xpEvents.filter((e) => e.userId === 'user-2' && !['achievement', 'mission'].includes(e.type));
       expect(theirs.map((e) => e.type)).toEqual(['match_played']);
+    });
+
+    const LEGACY_MATCH_ID = 'aaaaaaaaaaaaaaaaaaaaaaa1';
+    const NORMAL_MATCH_ID = 'aaaaaaaaaaaaaaaaaaaaaaa2';
+
+    it('never rewards a match imported from the legacy site (#153)', async () => {
+      resetLegacyCache();
+      // The guard lives here, the single choke point every caller shares: the
+      // match sheet, the result endpoint and the league admin "recompute",
+      // which replays a whole season in a loop.
+      prisma.setMatch({ id: LEGACY_MATCH_ID, status: 'completed', teamAId: 'A', teamBId: 'B', winnerTeamId: 'A' }, [
+        { userId: U, teamId: 'A', isMvp: true },
+      ]);
+      (prisma as any).appSetting.findUnique = jest.fn(async ({ where }: any) =>
+        where.key === LEGACY_REGISTRY_KEY
+          ? { value: JSON.stringify({ matches: { '25': LEGACY_MATCH_ID } }) }
+          : null,
+      );
+      const svc = new GamificationService(prisma as unknown as PrismaService, community as unknown as CommunityService);
+      await svc.syncMatch(LEGACY_MATCH_ID);
+      await svc.syncMatch(LEGACY_MATCH_ID);
+      expect(prisma._state.xpEvents).toHaveLength(0);
+      // The registry is read once and cached for the whole replay.
+      expect((prisma as any).appSetting.findUnique).toHaveBeenCalledTimes(1);
+
+      // A match the registry does not list is rewarded as usual.
+      prisma.setMatch({ id: NORMAL_MATCH_ID, status: 'completed', teamAId: 'A', teamBId: 'B', winnerTeamId: 'A' }, [
+        { userId: U, teamId: 'A', isMvp: false },
+      ]);
+      await svc.syncMatch(NORMAL_MATCH_ID);
+      expect(prisma._state.xpEvents.length).toBeGreaterThan(0);
+    });
+
+    it('still rewards when the registry is missing or unreadable', async () => {
+      resetLegacyCache();
+      prisma.setMatch({ id: 'm1', status: 'completed', teamAId: 'A', teamBId: 'B', winnerTeamId: 'A' }, [
+        { userId: U, teamId: 'A', isMvp: false },
+      ]);
+      (prisma as any).appSetting.findUnique = jest.fn(async () => ({ value: '{bad json' }));
+      const svc = new GamificationService(prisma as unknown as PrismaService, community as unknown as CommunityService);
+      await svc.syncMatch('m1');
+      expect(prisma._state.xpEvents.length).toBeGreaterThan(0);
     });
   });
 

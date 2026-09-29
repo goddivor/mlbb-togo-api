@@ -10,6 +10,7 @@ import {
   resultFor,
 } from './player-stats.util';
 import { isHiddenAccount } from '../users/public-user.filter';
+import { withoutLegacyMatches } from '../esport/legacy-import.guard';
 
 const MAX_PAGE_SIZE = 50;
 
@@ -184,7 +185,13 @@ export class PlayerStatsService {
       if (!user) continue;
       const { rows, matches } = await this.loadParticipations(userId);
       const stats = computePlayerStats(this.toParticipations(rows, matches));
-      const badges = mergeBadges(parseJson<string[]>(user.badges, []), computeBadges(stats));
+      // Counters keep the whole history, imported matches included: that is
+      // what a profile shows. Badges do not: they feed the achievements, and a
+      // league played years ago on another site must never unlock one (#153).
+      const own = await withoutLegacyMatches(this.prisma as any, rows);
+      const ownStats =
+        own.length === rows.length ? stats : computePlayerStats(this.toParticipations(own, matches));
+      const badges = mergeBadges(parseJson<string[]>(user.badges, []), computeBadges(ownStats));
       await this.prisma.user.update({
         where: { id: userId },
         data: {
