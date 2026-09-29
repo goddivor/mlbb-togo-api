@@ -27,6 +27,14 @@ export const LEGACY_REGISTRY_KEY = 'legacy.import';
  */
 export const LEGACY_REGISTRY_BACKUP_KEY = 'legacy.import.backup';
 
+/**
+ * Lock held while an import is running: two runs writing the same registry at
+ * the same time would fight over it. The value is the epoch ms of the start;
+ * a lock older than `LOCK_TTL_MS` is considered stale (the process died).
+ */
+export const LEGACY_LOCK_KEY = 'legacy.import.lock';
+export const LOCK_TTL_MS = 15 * 60_000;
+
 /** Entities the registry tracks. Each map is `legacy id -> our object id`. */
 export type LegacyRegistry = {
   version: 1;
@@ -38,6 +46,7 @@ export type LegacyRegistry = {
   players: Record<string, string>;
   matches: Record<string, string>;
   sponsors: Record<string, string>;
+  awards: Record<string, string>;
   posts: Record<string, string>;
   events: Record<string, string>;
   streamVideos: Record<string, string>;
@@ -49,6 +58,7 @@ export const REGISTRY_MAPS = [
   'players',
   'matches',
   'sponsors',
+  'awards',
   'posts',
   'events',
   'streamVideos',
@@ -65,6 +75,7 @@ export function emptyRegistry(): LegacyRegistry {
     players: {},
     matches: {},
     sponsors: {},
+    awards: {},
     posts: {},
     events: {},
     streamVideos: {},
