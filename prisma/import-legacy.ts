@@ -15,6 +15,7 @@
 
 import 'dotenv/config';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
@@ -62,6 +63,8 @@ import {
   RegistryMap,
   emptyRegistry,
   mergeRegistry,
+  foreignMappings,
+  REGISTRY_MAPS,
   parseRegistry,
   registrySize,
   serializeRegistry,
@@ -140,7 +143,24 @@ function readTable<T>(dir: string, name: string): T[] {
 
 type Counter = { created: number; updated: number; unchanged: number; deleted: number };
 
+/** Table-cell safe text. */
+const cell = (v: string | null | undefined): string =>
+  String(v ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim() || '(sans libellé)';
+
+const norm = (v: string | null | undefined): string =>
+  String(v ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
 class Report {
+  readonly duplicates: {
+    entity: string;
+    created: { label: string; id: string };
+    existing: { label: string; id: string };
+    reason: string;
+  }[] = [];
   readonly counts = new Map<string, Counter>();
   readonly notes: string[] = [];
   readonly merges: { key: string; variants: string[]; username: string }[] = [];
@@ -152,7 +172,7 @@ class Report {
     duplicate: boolean;
   }[] = [];
   readonly skipped: { table: string; reason: string; rows: number }[] = [];
-  readonly created: { entity: string; legacyId: string | number; id: string }[] = [];
+  readonly created: { entity: string; legacyId: string | number; id: string; label: string }[] = [];
   unmatchedHeroes: string[] = [];
 
   bump(entity: string, kind: keyof Counter, n = 1) {
@@ -247,9 +267,27 @@ class Report {
       lines.push('');
       lines.push('Liste complète, pour pouvoir fusionner les doublons à la main :');
       lines.push('');
-      lines.push('| Entité | Id historique | Id interne |');
-      lines.push('| --- | --- | --- |');
-      for (const c of this.created) lines.push(`| ${c.entity} | ${c.legacyId} | \`${c.id}\` |`);
+      lines.push('| Entité | Libellé | Id historique | Id interne |');
+      lines.push('| --- | --- | --- | --- |');
+      for (const c of this.created)
+        lines.push(`| ${c.entity} | ${cell(c.label)} | ${c.legacyId} | \`${c.id}\` |`);
+    }
+    lines.push('');
+    lines.push('## Doublons probables');
+    lines.push('');
+    lines.push(
+      'Lignes créées par l’import qui ressemblent (même nom ou même logo) à une ligne qui existait déjà et que ' +
+        'l’import n’a pas créée. Il ne les rapproche jamais tout seul : à fusionner ou supprimer à la main.',
+    );
+    lines.push('');
+    if (!this.duplicates.length) lines.push('Aucun.');
+    else {
+      lines.push('| Entité | Ligne créée | Id | Ligne existante | Id | Critère |');
+      lines.push('| --- | --- | --- | --- | --- | --- |');
+      for (const d of this.duplicates)
+        lines.push(
+          `| ${d.entity} | ${cell(d.created.label)} | \`${d.created.id}\` | ${cell(d.existing.label)} | \`${d.existing.id}\` | ${d.reason} |`,
+        );
     }
     lines.push('');
     lines.push('## Lignes ignorées');
@@ -349,39 +387,85 @@ async function main() {
   }
 
   const dry = opts.dryRun;
+  const runStartedAt = Date.now();
+  /** Readable names of the rows the run touches, for the report labels. */
+  const names = new Map<string, string>();
   const log = (s: string) => console.log(s);
 
   // ---- Registry (legacy id -> our id) ------------------------------------
   const registryRow = await prisma.appSetting.findUnique({ where: { key: LEGACY_REGISTRY_KEY } });
   const previous: LegacyRegistry = parseRegistry(registryRow?.value);
-  const importedProfiles = await prisma.user.count({ where: { provider: 'imported', isSystemAccount: false } });
-
-  /**
-   * Losing the registry while imported profiles exist is the worst case:
-   * without the mapping the import cannot recognise them, so it would create a
-   * duplicate of every one and leave the real members' history behind. The
-   * `players` map is the one that matters, and it is compared with the number
-   * of imported profiles actually in the database, not with the registry as a
-   * whole (a registry holding only seasons would otherwise look healthy).
-   */
-  const mappedProfiles = new Set(Object.values(previous.players)).size;
-  if (importedProfiles > mappedProfiles && !opts.allowMissingRegistry) {
+  const foreign = foreignMappings(previous);
+  if (foreign.length) {
     console.error(
       [
-        `✗ ${importedProfiles} profil(s) importé(s) en base, mais seulement ${mappedProfiles} dans le registre`,
-        `  \`${LEGACY_REGISTRY_KEY}\` (absent, tronqué ou illisible).`,
-        '  Continuer créerait des doublons et laisserait leur historique sur les anciens comptes.',
-        '',
-        `  • Restaurez le registre depuis \`${LEGACY_REGISTRY_BACKUP_KEY}\`,`,
-        '  • ou relancez avec --allow-missing-registry si vous savez ce que vous faites.',
+        `✗ Le registre \`${LEGACY_REGISTRY_KEY}\` pointe sur ${foreign.length} ligne(s) plus anciennes que l’import lui-même :`,
+        ...foreign.slice(0, 10).map((f) => `    ${f}`),
+        '  Ce ne sont pas des lignes créées par l’import (registre édité à la main ou copié d’une autre base).',
+        '  Rien n’a été écrit. Corrigez ou supprimez ces entrées du registre avant de relancer.',
       ].join('\n'),
     );
     process.exit(1);
   }
-  if (importedProfiles > mappedProfiles) {
+  const importedUsers = await prisma.user.findMany({
+    where: { provider: 'imported', isSystemAccount: false },
+    select: { id: true, email: true, googleId: true, username: true },
+  });
+  const importedProfiles = importedUsers.length;
+  const registeredPlayerIds = new Set(Object.values(previous.players));
+  const mappedProfiles = registeredPlayerIds.size;
+  const claimedByOwner = (u: { email: string; googleId?: string | null }) =>
+    !!u.googleId || !u.email.toLowerCase().endsWith(IMPORTED_EMAIL_DOMAIN);
+
+  /**
+   * Two kinds of imported profile are missing from the registry:
+   *  - one nobody has claimed yet (placeholder mailbox, no Google): the import
+   *    created it and was killed before writing the mapping. It is recovered on
+   *    the next run by its placeholder mailbox, which is derived from the slug
+   *    and cannot be rewritten while the profile is unclaimed;
+   *  - one an owner has adopted (Gmail address or Google id, possibly renamed):
+   *    nothing identifies it any more. Continuing would create a duplicate of
+   *    it and leave the member's history on the old account, so the run stops
+   *    unless the operator forces it.
+   */
+  const unregistered = importedUsers.filter((u) => !registeredPlayerIds.has(u.id));
+  const unrecoverable = unregistered.filter((u) => claimedByOwner(u));
+  const recoverable = unregistered.length - unrecoverable.length;
+  // An empty registry next to imported profiles is a lost registry, not an
+  // interrupted run: seasons and teams are registered before the first profile
+  // is created, so a killed run always leaves a registry behind.
+  const registryLost = registrySize(previous) === 0 && importedProfiles > 0;
+  if ((unrecoverable.length || registryLost) && !opts.allowMissingRegistry) {
+    console.error(
+      [
+        registryLost
+          ? `✗ ${importedProfiles} profil(s) importé(s) en base mais le registre \`${LEGACY_REGISTRY_KEY}\` est vide (absent ou illisible).`
+          : `✗ ${unrecoverable.length} profil(s) importé(s) déjà adopté(s) ne figurent pas dans le registre \`${LEGACY_REGISTRY_KEY}\` (tronqué) : ${unrecoverable
+              .map((u) => u.username)
+              .join(', ')}.`,
+        '  Continuer créerait des doublons (équipes, matchs, sponsors…) et laisserait l’historique sur les anciens comptes.',
+        '',
+        `  • Restaurez le registre depuis \`${LEGACY_REGISTRY_BACKUP_KEY}\` s’il existe,`,
+        '  • ou relancez avec --allow-missing-registry : les profils non réclamés (adresse',
+        '    @imported.mlbbtogo.local) sont retrouvés par leur adresse ; tout le reste (profils adoptés,',
+        '    équipes, matchs, sponsors, publications) sera recréé en doublon.',
+        '',
+        '  Un import simplement interrompu (kill, coupure) ne déclenche pas ce message : les profils créés',
+        '  mais pas encore inscrits au registre sont retrouvés tout seuls.',
+      ].join('\n'),
+    );
+    process.exit(1);
+  }
+  if (unrecoverable.length) {
     report.note(
-      `⚠️ ${importedProfiles} profil(s) importé(s) en base pour ${mappedProfiles} entrée(s) de registre : ` +
-        'exécution forcée par `--allow-missing-registry`, des doublons sont possibles.',
+      `⚠️ ${unrecoverable.length} profil(s) importé(s) adopté(s) absents du registre : exécution forcée par ` +
+        '`--allow-missing-registry`, des doublons sont possibles.',
+    );
+  }
+  if (recoverable) {
+    report.note(
+      `${recoverable} profil(s) importé(s) non réclamés absents du registre (import interrompu ou registre perdu) : ` +
+        'retrouvés par leur adresse de substitution et réinscrits dans le registre, sans doublon.',
     );
   }
 
@@ -394,8 +478,21 @@ async function main() {
     // its age.
     const existingLock = await prisma.appSetting.findUnique({ where: { key: LEGACY_LOCK_KEY } });
     if (existingLock) {
-      const heldSince = Number(existingLock.value);
-      const stale = !Number.isFinite(heldSince) || Date.now() - heldSince >= LOCK_TTL_MS;
+      // The value is `<epoch ms>:<host>:<pid>`. On the same host, a holder whose
+      // process no longer exists was killed: its lock is stale at once instead
+      // of blocking every run for 15 minutes.
+      const [sinceRaw, holderHost, holderPidRaw] = existingLock.value.split(':');
+      const heldSince = Number(sinceRaw);
+      const holderPid = Number(holderPidRaw);
+      let holderDead = false;
+      if (holderHost === os.hostname() && Number.isInteger(holderPid) && holderPid > 0) {
+        try {
+          process.kill(holderPid, 0);
+        } catch (e: any) {
+          holderDead = e?.code === 'ESRCH';
+        }
+      }
+      const stale = holderDead || !Number.isFinite(heldSince) || Date.now() - heldSince >= LOCK_TTL_MS;
       if (!stale && !opts.forceUnlock) {
         console.error(
           `✗ Un import est déjà en cours depuis ${new Date(heldSince).toISOString()} ` +
@@ -406,7 +503,9 @@ async function main() {
       await prisma.appSetting.deleteMany({ where: { key: LEGACY_LOCK_KEY } });
     }
     try {
-      await prisma.appSetting.create({ data: { key: LEGACY_LOCK_KEY, value: String(Date.now()) } });
+      await prisma.appSetting.create({
+        data: { key: LEGACY_LOCK_KEY, value: `${Date.now()}:${os.hostname()}:${process.pid}` },
+      });
     } catch {
       console.error(
         `✗ Un autre import vient de prendre le verrou \`${LEGACY_LOCK_KEY}\`. Réessayez plus tard.`,
@@ -420,11 +519,15 @@ async function main() {
   const registry: LegacyRegistry = mergeRegistry(emptyRegistry(), previous);
   /**
    * Persist the registry. Called after every single row the import creates:
-   * 51 profiles and 74 matches are nothing to write, and a process killed
-   * mid-loop must not leave a single row unregistered.
+   * 51 profiles and 74 matches are nothing to write. A process killed between
+   * a row's creation and its mapping still leaves that one row unregistered:
+   * profiles are recovered on the next run by their placeholder mailbox, and
+   * the other entities by the checks of their own section.
    */
   const saveRegistry = async () => {
     if (dry) return;
+    // Fingerprint: stamped once, before the first row of the first run exists.
+    registry.firstRunAt = registry.firstRunAt ?? runStartedAt;
     const value = serializeRegistry(registry);
     await prisma.appSetting.upsert({
       where: { key: LEGACY_REGISTRY_KEY },
@@ -439,7 +542,7 @@ async function main() {
   };
   // Copy the version we start from under a backup key, but only when it parses:
   // a corrupt value must never overwrite a good backup.
-  const registryLooksComplete = importedProfiles <= mappedProfiles;
+  const registryLooksComplete = unregistered.length === 0;
   if (!dry && registryRow?.value && registrySize(previous) > 0 && registryLooksComplete) {
     await prisma.appSetting.upsert({
       where: { key: LEGACY_REGISTRY_BACKUP_KEY },
@@ -506,7 +609,8 @@ async function main() {
     if (!existing) {
       const created = dry ? { id: fakeId(`season-${s.sourceId}`) } : await prisma.esportSeason.create({ data });
       seasonIdBySource.set(s.sourceId, created.id);
-      report.created.push({ entity: 'EsportSeason', legacyId: s.sourceId, id: created.id });
+      names.set(created.id, s.name);
+      report.created.push({ entity: 'EsportSeason', legacyId: s.sourceId, id: created.id, label: s.name });
       await remember('seasons', s.sourceId, created.id);
       report.bump('EsportSeason', 'created');
     } else {
@@ -532,7 +636,8 @@ async function main() {
     if (!existing) {
       const created = dry ? { id: fakeId(`team-${t.key}`) } : await prisma.esportTeam.create({ data });
       id = created.id;
-      report.created.push({ entity: 'EsportTeam', legacyId: t.sourceIds.join('/'), id });
+      names.set(id, t.name);
+      report.created.push({ entity: 'EsportTeam', legacyId: t.sourceIds.join('/'), id, label: t.name });
       report.bump('EsportTeam', 'created');
     } else {
       id = existing.id;
@@ -591,6 +696,7 @@ async function main() {
   );
   const assignments = new Map(assignUsernames(people, takenUsernames).map((a) => [a.key, a]));
 
+  const recoveredIds = new Set<string>();
   const userIdByPerson = new Map<string, string>();
   const adopted: string[] = [];
   for (const person of people) {
@@ -598,7 +704,22 @@ async function main() {
     if (person.variants.length > 1) {
       report.merges.push({ key: person.key, variants: person.variants, username: a.username });
     }
-    const found = findProfile(person);
+    let found = findProfile(person);
+    if (!found) {
+      // A profile the import created before being killed, never registered.
+      const orphan = existingUsers.find(
+        (u) =>
+          u.provider === 'imported' &&
+          !isAdopted(u) &&
+          !registeredPlayerIds.has(u.id) &&
+          !recoveredIds.has(u.id) &&
+          u.email.toLowerCase() === a.email.toLowerCase(),
+      );
+      if (orphan) {
+        recoveredIds.add(orphan.id);
+        found = { user: orphan };
+      }
+    }
     if (a.collidedWith) {
       // A slug held by an adopted account is very probably the same person.
       // It is never merged automatically, and it keeps being reported run
@@ -647,7 +768,13 @@ async function main() {
             },
           });
       userIdByPerson.set(person.key, created.id);
-      report.created.push({ entity: 'User', legacyId: person.sourceIds.join('/'), id: created.id });
+      names.set(created.id, a.username);
+      report.created.push({
+        entity: 'User',
+        legacyId: person.sourceIds.join('/'),
+        id: created.id,
+        label: `${a.username} (${person.displayName})`,
+      });
       report.bump('User (profils importés)', 'created');
     } else {
       const existing = found.user;
@@ -733,7 +860,12 @@ async function main() {
       ? { id: fakeId(`member-${key}`) }
       : await prisma.esportTeamMember.create({ data: { teamId: m.teamId, userId: m.userId, role: m.role } });
     await remember('teamMembers', key, created.id);
-    report.created.push({ entity: 'EsportTeamMember', legacyId: key, id: created.id });
+    report.created.push({
+      entity: 'EsportTeamMember',
+      legacyId: key,
+      id: created.id,
+      label: `${names.get(m.userId) ?? m.userId} dans ${names.get(m.teamId) ?? m.teamId}`,
+    });
     report.bump('EsportTeamMember', 'created');
   }
 
@@ -846,7 +978,13 @@ async function main() {
     if (!existing) {
       const created = dry ? { id: fakeId(`match-${m.id}`) } : await prisma.esportMatch.create({ data });
       matchId = created.id;
-      report.created.push({ entity: 'EsportMatch', legacyId: m.id, id: matchId });
+      names.set(matchId, `${names.get(teamAId) ?? teamAId} vs ${names.get(teamBId) ?? teamBId}`);
+      report.created.push({
+        entity: 'EsportMatch',
+        legacyId: m.id,
+        id: matchId,
+        label: `${names.get(matchId)} (${scheduledAt ? scheduledAt.toISOString().slice(0, 10) : 'sans date'})`,
+      });
       report.bump('EsportMatch', 'created');
     } else {
       matchId = existing.id;
@@ -901,7 +1039,12 @@ async function main() {
             data: { matchId, userId: row.userId, ...common, isMvp: false },
           });
       await remember('matchPlayers', key, created.id);
-      report.created.push({ entity: 'EsportMatchPlayer', legacyId: key, id: created.id });
+      report.created.push({
+        entity: 'EsportMatchPlayer',
+        legacyId: key,
+        id: created.id,
+        label: `${names.get(row.userId) ?? row.userId} (${row.hero ?? 'sans héros'}) dans ${names.get(matchId) ?? matchId}`,
+      });
       report.bump('EsportMatchPlayer', 'created');
     }
     // Rows this import created for a game that has since been dropped upstream
@@ -950,7 +1093,12 @@ async function main() {
     if (!existing) {
       const created = dry ? { id: fakeId(`award-${a.id}`) } : await prisma.seasonAward.create({ data });
       await remember('awards', a.id, created.id);
-      report.created.push({ entity: 'SeasonAward', legacyId: a.id, id: created.id });
+      report.created.push({
+        entity: 'SeasonAward',
+        legacyId: a.id,
+        id: created.id,
+        label: `${title ?? category}${userId ? ` : ${names.get(userId) ?? userId}` : ''}`,
+      });
       report.bump('SeasonAward', 'created');
     } else {
       await remember('awards', a.id, existing.id);
@@ -988,7 +1136,7 @@ async function main() {
         ? { id: fakeId(`sponsor-${s.id}`) }
         : await prisma.sponsor.create({ data: { ...data, isActive: true } });
       sponsorId = created.id;
-      report.created.push({ entity: 'Sponsor', legacyId: s.id, id: sponsorId });
+      report.created.push({ entity: 'Sponsor', legacyId: s.id, id: sponsorId, label: name ?? logo });
       report.bump('Sponsor', 'created');
     } else {
       sponsorId = existing.id;
@@ -1046,7 +1194,7 @@ async function main() {
       if (!existing) {
         const created = dry ? { id: fakeId(`event-${c.id}`) } : await prisma.event.create({ data });
         await remember('events', c.id, created.id);
-        report.created.push({ entity: 'Event', legacyId: c.id, id: created.id });
+        report.created.push({ entity: 'Event', legacyId: c.id, id: created.id, label: title });
         report.bump('Event', 'created');
       } else {
         await remember('events', c.id, existing.id);
@@ -1072,7 +1220,7 @@ async function main() {
     if (!existing) {
       const created = dry ? { id: fakeId(`post-${c.id}`) } : await prisma.post.create({ data });
       await remember('posts', c.id, created.id);
-      report.created.push({ entity: 'Post', legacyId: c.id, id: created.id });
+      report.created.push({ entity: 'Post', legacyId: c.id, id: created.id, label: title });
       report.bump('Post', 'created');
     } else {
       await remember('posts', c.id, existing.id);
@@ -1090,12 +1238,27 @@ async function main() {
           : null;
         const videoData = { seasonId, videoId, title, date: (c.event_date || '').trim() };
         if (!existingVideo) {
-          const created = dry
-            ? { id: fakeId(`video-${c.id}`) }
-            : await prisma.streamSeasonVideo.create({ data: videoData });
-          await remember('streamVideos', c.id, created.id);
-          report.created.push({ entity: 'StreamSeasonVideo', legacyId: c.id, id: created.id });
-          report.bump('StreamSeasonVideo', 'created');
+          let createdId: string | null = null;
+          try {
+            createdId = dry
+              ? fakeId(`video-${c.id}`)
+              : (await prisma.streamSeasonVideo.create({ data: videoData })).id;
+          } catch (e: any) {
+            // `@@unique([seasonId, videoId])`: somebody already listed this
+            // video in this season. It is not ours and stays untouched.
+            if (e?.code !== 'P2002') throw e;
+          }
+          if (createdId) {
+            await remember('streamVideos', c.id, createdId);
+            report.created.push({ entity: 'StreamSeasonVideo', legacyId: c.id, id: createdId, label: `${title} (${videoId})` });
+            report.bump('StreamSeasonVideo', 'created');
+          } else {
+            report.skip(
+              'communications (stream)',
+              1,
+              `la vidéo ${videoId} est déjà listée sur cette saison (ajoutée à la main ou en double dans le dump)`,
+            );
+          }
         } else {
           registry.streamVideos[String(c.id)] = existingVideo.id;
           const patch = diff(existingVideo, videoData);
@@ -1244,6 +1407,90 @@ async function main() {
       'clé que rien dans l’application ne peut réécrire : elle permet de relancer l’import après une adoption ' +
       'Google, une liaison de compte de jeu, un renommage ou une note retapée.',
   );
+
+  // ---- Probable duplicates (report only, nothing is written) --------------
+  {
+    const ours = new Set<string>();
+    for (const map of REGISTRY_MAPS) for (const id of Object.values(registry[map])) ours.add(id);
+    type Row = { id: string; label: string; keys: Record<string, string> };
+    const sources: Record<string, Row[]> = {
+      EsportSeason: (await prisma.esportSeason.findMany({ select: { id: true, name: true, slug: true } })).map(
+        (r) => ({ id: r.id, label: r.name, keys: { nom: norm(r.name), slug: norm(r.slug) } }),
+      ),
+      EsportTeam: (await prisma.esportTeam.findMany({ select: { id: true, name: true, image: true } })).map(
+        (r) => ({ id: r.id, label: r.name, keys: { nom: norm(r.name), logo: r.image ?? '' } }),
+      ),
+      Sponsor: (await prisma.sponsor.findMany({ select: { id: true, name: true, logo: true } })).map((r) => ({
+        id: r.id,
+        label: r.name ?? r.logo,
+        keys: { nom: norm(r.name), logo: r.logo ?? '' },
+      })),
+      Event: (await prisma.event.findMany({ select: { id: true, title: true } })).map((r) => ({
+        id: r.id,
+        label: r.title,
+        keys: { titre: norm(r.title) },
+      })),
+      Post: (await prisma.post.findMany({ select: { id: true, title: true } })).map((r) => ({
+        id: r.id,
+        label: r.title,
+        keys: { titre: norm(r.title) },
+      })),
+      User: (await prisma.user.findMany({ select: { id: true, username: true, gameNickname: true } })).map(
+        (r) => ({
+          id: r.id,
+          label: `${r.username}${r.gameNickname ? ` (${r.gameNickname})` : ''}`,
+          keys: { pseudo: norm(r.gameNickname), 'nom d’utilisateur': norm(r.username) },
+        }),
+      ),
+    };
+    // Every row the registry owns, not only those created by this very run: a
+    // resumed run must still report what the interrupted one created.
+    const registryOf: Record<string, Record<string, string>> = {
+      EsportSeason: registry.seasons,
+      EsportTeam: registry.teams,
+      Sponsor: registry.sponsors,
+      Event: registry.events,
+      Post: registry.posts,
+      User: registry.players,
+    };
+    const candidates: { entity: string; id: string; label: string }[] = [];
+    for (const [entity, map] of Object.entries(registryOf)) {
+      const rows = sources[entity];
+      for (const id of new Set(Object.values(map))) {
+        const row = rows.find((r) => r.id === id);
+        if (row) candidates.push({ entity, id, label: row.label });
+      }
+    }
+    // A dry run has no row yet: only the report knows them.
+    for (const c of report.created) {
+      if (sources[c.entity] && !candidates.some((k) => k.id === c.id)) {
+        candidates.push({ entity: c.entity, id: c.id, label: c.label });
+      }
+    }
+    for (const c of candidates) {
+      const rows = sources[c.entity];
+      const mine: Row = rows.find((r) => r.id === c.id) ?? {
+        id: c.id,
+        label: c.label,
+        keys: Object.fromEntries(
+          Object.keys(rows[0]?.keys ?? {})
+            .filter((k) => k !== 'logo' && k !== 'slug')
+            .map((k) => [k, norm(c.label)]),
+        ),
+      };
+      for (const other of rows) {
+        if (other.id === c.id || ours.has(other.id)) continue;
+        const hit = Object.keys(mine.keys).find((k) => mine.keys[k] && mine.keys[k] === other.keys[k]);
+        if (hit)
+          report.duplicates.push({
+            entity: c.entity,
+            created: { label: mine.label, id: c.id },
+            existing: { label: other.label, id: other.id },
+            reason: hit,
+          });
+      }
+    }
+  }
 
   // ---- Release the lock --------------------------------------------------
   if (!dry) await prisma.appSetting.deleteMany({ where: { key: LEGACY_LOCK_KEY } });
