@@ -8,9 +8,14 @@
  * `src/esport/legacy-import.logic.ts` (pure, unit tested) — here we only read
  * the files, talk to Prisma and print the report.
  *
- * The import is idempotent: everything is upserted on a natural key (season
- * name, team name, match (season, teams, date), award (season, category)), so
- * running it twice changes nothing.
+ * The import is idempotent. Every row it creates is remembered in its own
+ * registry (a single `AppSetting` document, see
+ * `src/esport/legacy-import.registry.ts`): a re-run resolves what it already
+ * wrote through that mapping, whatever a member or an admin has since done to
+ * the rows (rename, Google adoption, game-account link, retyped note). Natural
+ * keys (season name, team name, match (season, teams, date), sponsor logo,
+ * placeholder mailbox) are only the fallback for rows created before the
+ * registry existed.
  */
 
 import 'dotenv/config';
@@ -33,9 +38,6 @@ import {
   LegacySeason,
   LegacyTeam,
   IMPORTED_EMAIL_DOMAIN,
-  LEGACY_MATCH_MARKER,
-  isLegacyMatch,
-  normalizeKey,
   assignUsernames,
   awardCategoryOf,
   buildGames,
@@ -55,6 +57,14 @@ import {
   youtubeIdFrom,
 } from '../src/esport/legacy-import.logic';
 import { serializeGames } from '../src/esport/esport-match-details';
+import {
+  LEGACY_REGISTRY_KEY,
+  LegacyRegistry,
+  emptyRegistry,
+  parseRegistry,
+  registrySize,
+  serializeRegistry,
+} from '../src/esport/legacy-import.registry';
 
 const prisma = new PrismaClient();
 
@@ -67,6 +77,33 @@ const prisma = new PrismaClient();
  * is still only deleted by `--wipe-seed` when nothing references it.
  */
 const SEED_SEASON_NAMES = ['MTL Saison 1'];
+
+/** Teams the seed creates (prisma/seed.ts). */
+const SEED_TEAM_NAMES = [
+  'ETERNUM ALPHA',
+  'ETERNUM BETA',
+  'ETERNUM GAMMA',
+  'ETERNUM DELTA',
+  'ETERNUM EPSILON',
+];
+
+/**
+ * Season fields only a human fills in. One of them set means the season was
+ * written by the team, so `--wipe-seed` keeps it whatever its name.
+ */
+const OWNER_SEASON_FIELDS = [
+  'description',
+  'slogan',
+  'theme',
+  'banner',
+  'color',
+  'podiums',
+  'summary',
+  'startDate',
+  'endDate',
+  'playoffsStartDate',
+  'closedAt',
+] as const;
 
 type Options = {
   dump: string;
@@ -133,8 +170,9 @@ class Report {
   readonly counts = new Map<string, Counter>();
   readonly notes: string[] = [];
   readonly merges: { key: string; variants: string[]; username: string }[] = [];
-  readonly collisions: { pseudo: string; username: string; taken: string }[] = [];
+  readonly collisions: { pseudo: string; username: string; taken: string; adopted: boolean }[] = [];
   readonly skipped: { table: string; reason: string; rows: number }[] = [];
+  readonly wipe: { entity: string; name: string; action: string; reason: string }[] = [];
   unmatchedHeroes: string[] = [];
 
   bump(entity: string, kind: keyof Counter, n = 1) {
@@ -185,10 +223,16 @@ class Report {
     lines.push('');
     if (!this.collisions.length) lines.push('Aucune collision avec un membre existant.');
     else {
-      lines.push('| Pseudo importé | Identifiant attribué | Identifiant déjà pris |');
-      lines.push('| --- | --- | --- |');
+      lines.push('| Pseudo importé | Identifiant attribué | Identifiant déjà pris | À arbitrer |');
+      lines.push('| --- | --- | --- | --- |');
       for (const c of this.collisions) {
-        lines.push(`| ${c.pseudo} | \`${c.username}\` | \`${c.taken}\` |`);
+        lines.push(
+          `| ${c.pseudo} | \`${c.username}\` | \`${c.taken}\` | ${
+            c.adopted
+              ? 'oui : l’identifiant appartient à un compte déjà adopté, il s’agit probablement de la même personne'
+              : 'non'
+          } |`,
+        );
       }
     }
     lines.push('');
@@ -200,6 +244,16 @@ class Report {
         : 'Aucun : les 120 héros de leur catalogue sont résolus dans le nôtre.',
     );
     lines.push('');
+    if (this.wipe.length) {
+      lines.push('## Nettoyage (`--wipe-seed`)');
+      lines.push('');
+      lines.push('| Entité | Nom | Action | Raison |');
+      lines.push('| --- | --- | --- | --- |');
+      for (const w of this.wipe) {
+        lines.push(`| ${w.entity} | « ${w.name} » | ${w.action} | ${w.reason} |`);
+      }
+      lines.push('');
+    }
     lines.push('## Lignes ignorées');
     lines.push('');
     lines.push('| Table | Lignes | Raison |');
@@ -299,6 +353,16 @@ async function main() {
   const dry = opts.dryRun;
   const log = (s: string) => console.log(s);
 
+  // ---- Registry (legacy id -> our id) ------------------------------------
+  const registryRow = await prisma.appSetting.findUnique({ where: { key: LEGACY_REGISTRY_KEY } });
+  const previous: LegacyRegistry = parseRegistry(registryRow?.value);
+  const registry: LegacyRegistry = emptyRegistry();
+  report.note(
+    registrySize(previous)
+      ? `Registre d’import précédent trouvé (${registrySize(previous)} correspondances, écrit le ${previous.updatedAt ?? 'inconnu'}) : il sert à retrouver les lignes déjà créées.`
+      : 'Aucun registre d’import précédent : les lignes existantes sont retrouvées par leurs clés naturelles (nom, logo, adresse de substitution).',
+  );
+
   // ---- Optional cleanup of the seeded demo data --------------------------
   // Rows the cleanup removes. In `--dry-run` nothing is deleted, but the set is
   // still filled so the rest of the simulation behaves exactly like the real
@@ -306,7 +370,7 @@ async function main() {
   const wiped = new Set<string>();
   if (opts.wipeSeed) {
     const seededTeams = await prisma.esportTeam.findMany({
-      where: { name: { in: ['ETERNUM ALPHA', 'ETERNUM BETA', 'ETERNUM GAMMA', 'ETERNUM DELTA', 'ETERNUM EPSILON'] } },
+      where: { name: { in: SEED_TEAM_NAMES } },
       select: { id: true, name: true },
     });
     const empty: string[] = [];
@@ -316,32 +380,57 @@ async function main() {
         prisma.esportMatch.count({ where: { OR: [{ teamAId: t.id }, { teamBId: t.id }] } }),
       ]);
       if (!members && !matches) empty.push(t.id);
+      else report.wipe.push({ entity: 'EsportTeam', name: t.name, action: 'conservée', reason: 'des membres ou des matchs y sont rattachés' });
     }
-    // A season is only removed when nothing references it: a season carrying a
-    // match, an award, a stream video or a sponsor is real data, whatever its
-    // name, and deleting it would leave orphans behind.
+    for (const t of seededTeams.filter((t) => empty.includes(t.id)))
+      report.wipe.push({ entity: 'EsportTeam', name: t.name, action: 'supprimée', reason: 'aucun membre, aucun match' });
+
+    // A season is only removed when it is genuinely empty: nothing may
+    // reference it AND it must carry no content the owner typed himself. A
+    // season with a description, a banner, a podium or dates is real data,
+    // whatever its name. Every candidate is named in the report, kept or not.
     const candidateSeasons = await prisma.esportSeason.findMany({
       where: { name: { in: SEED_SEASON_NAMES } },
-      select: { id: true, name: true },
     });
     const emptySeasons: string[] = [];
-    const keptSeasons: string[] = [];
-    for (const s of candidateSeasons) {
+    for (const season of candidateSeasons) {
       const [matches, awards, videos, sponsors] = await Promise.all([
-        prisma.esportMatch.count({ where: { seasonId: s.id } }),
-        prisma.seasonAward.count({ where: { seasonId: s.id } }),
-        prisma.streamSeasonVideo.count({ where: { seasonId: s.id } }),
-        prisma.sponsor.count({ where: { seasonIds: { has: s.id } } }),
+        prisma.esportMatch.count({ where: { seasonId: season.id } }),
+        prisma.seasonAward.count({ where: { seasonId: season.id } }),
+        prisma.streamSeasonVideo.count({ where: { seasonId: season.id } }),
+        prisma.sponsor.count({ where: { seasonIds: { has: season.id } } }),
       ]);
-      if (!matches && !awards && !videos && !sponsors) emptySeasons.push(s.id);
-      else keptSeasons.push(s.name);
+      const references: string[] = [];
+      if (matches) references.push(`${matches} match(s)`);
+      if (awards) references.push(`${awards} distinction(s)`);
+      if (videos) references.push(`${videos} vidéo(s)`);
+      if (sponsors) references.push(`${sponsors} sponsor(s)`);
+      const authored = OWNER_SEASON_FIELDS.filter((f) => {
+        const v = (season as any)[f];
+        return v !== null && v !== undefined && v !== '';
+      });
+      if (references.length || authored.length) {
+        report.wipe.push({
+          entity: 'EsportSeason',
+          name: season.name,
+          action: 'conservée',
+          reason: [
+            references.length ? `données rattachées : ${references.join(', ')}` : '',
+            authored.length ? `champs renseignés par l’équipe : ${authored.join(', ')}` : '',
+          ]
+            .filter(Boolean)
+            .join(' ; '),
+        });
+        continue;
+      }
+      emptySeasons.push(season.id);
+      report.wipe.push({
+        entity: 'EsportSeason',
+        name: season.name,
+        action: 'supprimée',
+        reason: 'aucune donnée rattachée, aucun champ renseigné',
+      });
     }
-    if (keptSeasons.length)
-      report.note(
-        `Saison(s) conservée(s) malgré \`--wipe-seed\` car des données y sont rattachées : ${keptSeasons
-          .map((n) => `« ${n} »`)
-          .join(', ')}.`,
-      );
     for (const id of [...empty, ...emptySeasons]) wiped.add(id);
     if (!dry) {
       if (empty.length) await prisma.esportTeam.deleteMany({ where: { id: { in: empty } } });
@@ -349,7 +438,7 @@ async function main() {
         await prisma.esportSeason.deleteMany({ where: { id: { in: emptySeasons } } });
     }
     report.note(
-      `Nettoyage \`--wipe-seed\` : ${empty.length} équipe(s) ETERNUM sans membre ni match et ${emptySeasons.length} saison(s) de démonstration supprimées. Les sponsors du seed ne sont pas supprimés : ils sont adoptés (voir ci-dessous).`,
+      `Nettoyage \`--wipe-seed\` : ${empty.length} équipe(s) et ${emptySeasons.length} saison(s) de démonstration supprimées (détail dans « Nettoyage »). Les sponsors ne sont jamais supprimés : ceux du seed sont adoptés.`,
     );
   }
 
@@ -370,7 +459,10 @@ async function main() {
   const seasons = mapSeasons(seasonsSrc);
   const seasonIdBySource = new Map<number, string>();
   for (const s of seasons) {
-    const found = await prisma.esportSeason.findFirst({ where: { name: s.name } });
+    const mapped = previous.seasons[String(s.sourceId)];
+    const found =
+      (mapped ? await prisma.esportSeason.findUnique({ where: { id: mapped } }) : null) ??
+      (await prisma.esportSeason.findFirst({ where: { name: s.name } }));
     const existing = found && wiped.has(found.id) ? null : found;
     const data = {
       name: s.name,
@@ -382,9 +474,11 @@ async function main() {
     if (!existing) {
       const created = dry ? { id: fakeId(`season-${s.sourceId}`) } : await prisma.esportSeason.create({ data });
       seasonIdBySource.set(s.sourceId, created.id);
+      registry.seasons[String(s.sourceId)] = created.id;
       report.bump('EsportSeason', 'created');
     } else {
       seasonIdBySource.set(s.sourceId, existing.id);
+      registry.seasons[String(s.sourceId)] = existing.id;
       const patch = diff(existing, data);
       if (patch && !dry) await prisma.esportSeason.update({ where: { id: existing.id }, data: patch });
       report.bump('EsportSeason', patch ? 'updated' : 'unchanged');
@@ -395,7 +489,10 @@ async function main() {
   const teams = dedupeTeams(teamsSrc);
   const teamIdBySource = new Map<number, string>();
   for (const t of teams) {
-    const found = await prisma.esportTeam.findFirst({ where: { name: t.name } });
+    const mapped = previous.teams[String(t.sourceIds[0])];
+    const found =
+      (mapped ? await prisma.esportTeam.findUnique({ where: { id: mapped } }) : null) ??
+      (await prisma.esportTeam.findFirst({ where: { name: t.name } }));
     const existing = found && wiped.has(found.id) ? null : found;
     const data = { name: t.name, image: t.image, type: 'esport', esportId: esport?.id ?? null };
     let id: string;
@@ -409,7 +506,10 @@ async function main() {
       if (patch && !dry) await prisma.esportTeam.update({ where: { id }, data: patch });
       report.bump('EsportTeam', patch ? 'updated' : 'unchanged');
     }
-    for (const src of t.sourceIds) teamIdBySource.set(src, id);
+    for (const src of t.sourceIds) {
+      teamIdBySource.set(src, id);
+      registry.teams[String(src)] = id;
+    }
   }
 
   // ---- People ------------------------------------------------------------
@@ -418,6 +518,8 @@ async function main() {
   for (const p of people) for (const id of p.sourceIds) personByPlayerId.set(id, p);
 
   const existingUsers = await prisma.user.findMany();
+  const byId = new Map(existingUsers.map((u) => [u.id, u]));
+  const byEmail = new Map(existingUsers.map((u) => [u.email.toLowerCase(), u]));
 
   /**
    * An imported profile a real person has since claimed: an admin replaced the
@@ -428,16 +530,21 @@ async function main() {
   const isAdopted = (u: { email: string; googleId?: string | null }) =>
     !!u.googleId || !u.email.toLowerCase().endsWith(IMPORTED_EMAIL_DOMAIN);
 
-  // An imported profile is keyed on its pseudo (`gameNickname`), not on the
-  // placeholder mailbox: the mailbox changes the day the profile is adopted,
-  // and a run keyed on it would try to recreate all 51 accounts and crash on
-  // the unique username.
-  const importedByNickname = new Map(
-    existingUsers
-      .filter((u) => u.provider === 'imported' && u.gameNickname)
-      .map((u) => [normalizeKey(u.gameNickname), u]),
-  );
-  const byEmail = new Map(existingUsers.map((u) => [u.email.toLowerCase(), u]));
+  /**
+   * The profile of a legacy player: the registry first (the only key nothing in
+   * the app can rewrite), then the placeholder mailbox for the rows created
+   * before the registry existed. `gameNickname` is deliberately NOT a key: the
+   * game-link flow writes it and unlinking nulls it.
+   */
+  const findProfile = (person: ImportedPerson, email: string) => {
+    for (const legacyId of person.sourceIds) {
+      const mapped = previous.players[String(legacyId)];
+      const user = mapped ? byId.get(mapped) : undefined;
+      if (user) return { user, via: 'registre' as const };
+    }
+    const byMailbox = byEmail.get(email);
+    return byMailbox ? { user: byMailbox, via: 'adresse de substitution' as const } : null;
+  };
 
   // Usernames an imported profile must not steal: every real member, plus the
   // imported profiles that have been adopted (their owner may have renamed
@@ -446,6 +553,9 @@ async function main() {
   const takenUsernames = existingUsers
     .filter((u) => u.provider !== 'imported' || isAdopted(u))
     .map((u) => u.username);
+  const adoptedByUsername = new Map(
+    existingUsers.filter((u) => isAdopted(u)).map((u) => [u.username.toLowerCase(), u]),
+  );
   const assignments = new Map(assignUsernames(people, takenUsernames).map((a) => [a.key, a]));
 
   const userIdByPerson = new Map<string, string>();
@@ -455,10 +565,19 @@ async function main() {
     if (person.variants.length > 1) {
       report.merges.push({ key: person.key, variants: person.variants, username: a.username });
     }
+    const found = findProfile(person, a.email);
     if (a.collidedWith) {
-      report.collisions.push({ pseudo: person.displayName, username: a.username, taken: a.collidedWith });
+      const owner = adoptedByUsername.get(a.collidedWith);
+      report.collisions.push({
+        pseudo: person.displayName,
+        username: a.username,
+        taken: a.collidedWith,
+        // A slug taken by an adopted account, with no registry entry pointing
+        // at it, is very probably the same person: it is never merged
+        // automatically, but the owner must arbitrate it.
+        adopted: !!owner && !found,
+      });
     }
-    const existing = importedByNickname.get(person.key) ?? byEmail.get(a.email);
     // Fields that identify the account: only written while nobody owns it.
     const identity = {
       username: a.username,
@@ -466,7 +585,9 @@ async function main() {
       avatar: person.avatar,
       provider: 'imported',
     };
-    // Fields that describe the legacy player: always safe to refresh.
+    // Fields that describe the legacy player. Written when the import created
+    // the profile and nobody has claimed it; an adopted profile belongs to its
+    // owner and the import never writes anything on it again.
     const legacy = {
       // Our `User` has no `displayName` column: it is derived from
       // `gameNickname`, which is where the original pseudo goes so the player
@@ -477,7 +598,7 @@ async function main() {
       role: person.lane ?? 'fighter',
       country: 'Togo',
     };
-    if (!existing) {
+    if (!found) {
       const created = dry
         ? { id: fakeId(`user-${person.key}`) }
         : await prisma.user.create({
@@ -493,24 +614,29 @@ async function main() {
       userIdByPerson.set(person.key, created.id);
       report.bump('User (profils importés)', 'created');
     } else {
+      const existing = found.user;
       userIdByPerson.set(person.key, existing.id);
-      // An adopted profile belongs to its owner: its mailbox, username and
-      // avatar are never reset to the legacy values.
       const claimed = isAdopted(existing);
-      if (claimed) adopted.push(existing.username);
-      const patch = diff(existing, claimed ? legacy : { ...identity, ...legacy });
-      if (patch && !dry) await prisma.user.update({ where: { id: existing.id }, data: patch });
-      report.bump(
-        claimed ? 'User (profils déjà adoptés, identité préservée)' : 'User (profils importés)',
-        patch ? 'updated' : 'unchanged',
-      );
+      if (claimed) {
+        // Read-only from here on: username, mailbox, avatar, pseudo, biography,
+        // lane and country all belong to the member now.
+        adopted.push(existing.username);
+        report.bump('User (profils déjà adoptés, laissés intacts)', 'unchanged');
+      } else {
+        const patch = diff(existing, { ...identity, ...legacy });
+        if (patch && !dry) await prisma.user.update({ where: { id: existing.id }, data: patch });
+        report.bump('User (profils importés)', patch ? 'updated' : 'unchanged');
+      }
+    }
+    for (const legacyId of person.sourceIds) {
+      registry.players[String(legacyId)] = userIdByPerson.get(person.key)!;
     }
   }
   if (adopted.length)
     report.note(
       `${adopted.length} profil(s) importé(s) ont déjà été adoptés par leur propriétaire (${adopted
         .map((u) => `\`${u}\``)
-        .join(', ')}) : identifiant, adresse et avatar laissés intacts.`,
+        .join(', ')}) : l’import ne réécrit plus rien dessus (identifiant, adresse, avatar, pseudo, biographie, lane, pays).`,
     );
 
   const userIdOf = (playerId: number): string | null => {
@@ -652,13 +778,14 @@ async function main() {
       winnerTeamId: winnerOf(scoreA, scoreB, teamAId, teamBId),
       games: serializeGames(games as any),
       screenshots: shots.length ? JSON.stringify(shots) : null,
-      // Marks the match as a legacy archive: the gamification hooks skip it, so
-      // a later admin save never retro-awards XP and notifications.
-      notes: LEGACY_MATCH_MARKER,
+      // `notes` is the admin's own text box, shown to every member on the match
+      // sheet: the import never writes in it. Being a legacy match is recorded
+      // in the registry instead.
     };
-    const existing = await prisma.esportMatch.findFirst({
-      where: { seasonId, teamAId, teamBId, scheduledAt },
-    });
+    const mapped = previous.matches[String(m.id)];
+    const existing =
+      (mapped ? await prisma.esportMatch.findUnique({ where: { id: mapped } }) : null) ??
+      (await prisma.esportMatch.findFirst({ where: { seasonId, teamAId, teamBId, scheduledAt } }));
     let matchId: string;
     if (!existing) {
       const created = dry ? { id: fakeId(`match-${m.id}`) } : await prisma.esportMatch.create({ data });
@@ -666,13 +793,12 @@ async function main() {
       report.bump('EsportMatch', 'created');
     } else {
       matchId = existing.id;
-      // An admin may have appended his own text after the marker: keep it.
-      const notes = isLegacyMatch(existing.notes) ? existing.notes : data.notes;
-      const patch = diff(existing, { ...data, notes });
+      const patch = diff(existing, data);
       if (patch && !dry) await prisma.esportMatch.update({ where: { id: matchId }, data: patch });
       report.bump('EsportMatch', patch ? 'updated' : 'unchanged');
     }
     matchIdBySource.set(m.id, matchId);
+    registry.matches[String(m.id)] = matchId;
 
     // One row per player of the series: hero = his most used one, no KDA.
     const rows = buildMatchPlayers(games as any, laneOfUser);
@@ -748,21 +874,25 @@ async function main() {
   }
 
   // ---- Sponsors ----------------------------------------------------------
-  // The three seeded sponsors carry the very same logo URLs as the legacy rows
-  // (they were copied from that site), so they are ADOPTED rather than deleted
-  // and recreated: the row keeps its id, its tier and the seasons an admin may
-  // already have attached to it. A logo-only partner created by the owner that
-  // matches no legacy logo is never touched.
+  // The seeded sponsors carry the very same logo URLs as the legacy rows (they
+  // were copied from that site), so they are ADOPTED rather than deleted and
+  // recreated: the row keeps its id and the seasons an admin may already have
+  // attached to it. A sponsor is matched by the registry first, then by logo
+  // (whatever its name: renaming the row must not create a duplicate), then by
+  // name. `isActive` is never written back: hiding a partner is the owner's
+  // decision and must survive a re-run.
   const allSponsors = await prisma.sponsor.findMany();
   let adoptedSponsors = 0;
   for (const s of [...sponsorsSrc].sort((a, b) => a.id - b.id)) {
     const seasonId = seasonIdBySource.get(s.season_id);
     const logo = String(s.logo_url ?? '').trim();
     const name = s.name?.trim() || null;
-    const byName = allSponsors.find((row) => row.name && row.name.trim() === name);
-    const byLogo = allSponsors.find((row) => !row.name && row.logo.trim() === logo);
-    const existing = byName ?? byLogo;
-    if (byLogo && !byName) adoptedSponsors++;
+    const mapped = previous.sponsors[String(s.id)];
+    const existing =
+      (mapped ? allSponsors.find((row) => row.id === mapped) : undefined) ??
+      allSponsors.find((row) => row.logo.trim() === logo) ??
+      (name ? allSponsors.find((row) => row.name && row.name.trim() === name) : undefined);
+    if (existing && !mapped && !existing.name) adoptedSponsors++;
     const data = {
       name,
       logo,
@@ -771,21 +901,31 @@ async function main() {
       sort: Number(s.weight) || 0,
       // Add our season to the ones already attached instead of replacing them.
       seasonIds: Array.from(new Set([...(existing?.seasonIds ?? []), ...(seasonId ? [seasonId] : [])])),
-      isActive: true,
     };
+    let sponsorId: string;
     if (!existing) {
-      if (!dry) await prisma.sponsor.create({ data });
+      const created = dry
+        ? { id: fakeId(`sponsor-${s.id}`) }
+        : await prisma.sponsor.create({ data: { ...data, isActive: true } });
+      sponsorId = created.id;
       report.bump('Sponsor', 'created');
     } else {
+      sponsorId = existing.id;
       const patch = diff(existing, data);
-      if (patch && !dry) await prisma.sponsor.update({ where: { id: existing.id }, data: patch });
+      if (patch && !dry) await prisma.sponsor.update({ where: { id: sponsorId }, data: patch });
       report.bump('Sponsor', patch ? 'updated' : 'unchanged');
     }
+    registry.sponsors[String(s.id)] = sponsorId;
   }
   if (adoptedSponsors)
     report.note(
-      `${adoptedSponsors} sponsor(s) sans nom du seed adoptés par leur logo (identifiant, palier et saisons conservés) plutôt que supprimés puis recréés.`,
+      `${adoptedSponsors} sponsor(s) du seed adoptés par leur logo (identifiant, palier, visibilité et saisons conservés) plutôt que supprimés puis recréés.`,
     );
+  report.note(
+    'Champs de `Sponsor` que l’import écrit à chaque exécution : `name`, `logo`, `url`, `description`, ' +
+      '`sort` et `seasonIds` (nos saisons ajoutées aux existantes). Il ne touche jamais `isActive` ni ' +
+      '`tier` : masquer un partenaire ou lui donner un palier reste une décision de l’équipe.',
+  );
 
   // ---- Communications: posts, stream videos, offline events --------------
   // Their communications were published by the site itself (`author_name` is
@@ -816,7 +956,10 @@ async function main() {
     const createdAt = date(c.created_at) ?? new Date();
     const title = (c.title || '').trim() || 'Sans titre';
     if (c.kind === 'offline') {
-      const existing = await prisma.event.findFirst({ where: { title, date: c.event_date || null } });
+      const mappedEvent = previous.events[String(c.id)];
+      const existing =
+        (mappedEvent ? await prisma.event.findUnique({ where: { id: mappedEvent } }) : null) ??
+        (await prisma.event.findFirst({ where: { title, date: c.event_date || null } }));
       const data = {
         title,
         type: 'offline',
@@ -826,9 +969,11 @@ async function main() {
         isPublic: true,
       };
       if (!existing) {
-        if (!dry) await prisma.event.create({ data });
+        const created = dry ? { id: fakeId(`event-${c.id}`) } : await prisma.event.create({ data });
+        registry.events[String(c.id)] = created.id;
         report.bump('Event', 'created');
       } else {
+        registry.events[String(c.id)] = existing.id;
         const patch = diff(existing, data);
         if (patch && !dry) await prisma.event.update({ where: { id: existing.id }, data: patch });
         report.bump('Event', patch ? 'updated' : 'unchanged');
@@ -846,11 +991,16 @@ async function main() {
       isSponsored: c.is_sponsored === true,
       createdAt,
     };
-    const existing = await prisma.post.findFirst({ where: { title, category: data.category } });
+    const mappedPost = previous.posts[String(c.id)];
+    const existing =
+      (mappedPost ? await prisma.post.findUnique({ where: { id: mappedPost } }) : null) ??
+      (await prisma.post.findFirst({ where: { title, category: data.category } }));
     if (!existing) {
-      if (!dry) await prisma.post.create({ data });
+      const created = dry ? { id: fakeId(`post-${c.id}`) } : await prisma.post.create({ data });
+      registry.posts[String(c.id)] = created.id;
       report.bump('Post', 'created');
     } else {
+      registry.posts[String(c.id)] = existing.id;
       const patch = diff(existing, data);
       if (patch && !dry) await prisma.post.update({ where: { id: existing.id }, data: patch });
       report.bump('Post', patch ? 'updated' : 'unchanged');
@@ -859,12 +1009,19 @@ async function main() {
       const videoId = youtubeIdFrom(c.embed_url);
       const seasonId = seasonIdBySource.get(c.season_id);
       if (videoId && seasonId) {
-        const existingVideo = await prisma.streamSeasonVideo.findFirst({ where: { seasonId, videoId } });
+        const mappedVideo = previous.streamVideos[String(c.id)];
+        const existingVideo =
+          (mappedVideo ? await prisma.streamSeasonVideo.findUnique({ where: { id: mappedVideo } }) : null) ??
+          (await prisma.streamSeasonVideo.findFirst({ where: { seasonId, videoId } }));
         const videoData = { seasonId, videoId, title, date: (c.event_date || '').trim() };
         if (!existingVideo) {
-          if (!dry) await prisma.streamSeasonVideo.create({ data: videoData });
+          const created = dry
+            ? { id: fakeId(`video-${c.id}`) }
+            : await prisma.streamSeasonVideo.create({ data: videoData });
+          registry.streamVideos[String(c.id)] = created.id;
           report.bump('StreamSeasonVideo', 'created');
         } else {
+          registry.streamVideos[String(c.id)] = existingVideo.id;
           const patch = diff(existingVideo, videoData);
           if (patch && !dry)
             await prisma.streamSeasonVideo.update({ where: { id: existingVideo.id }, data: patch });
@@ -938,18 +1095,19 @@ async function main() {
       `${nullHeroPicks} pick(s) sans héros en amont : ils sont importés avec \`heroId\` et \`hero\` à null.`,
     );
   report.note(
-    'Les matchs importés portent le marqueur `' +
-      LEGACY_MATCH_MARKER +
-      '` dans leur champ `notes` : les crochets de gamification (XP de match, succès, cadres, notifications) ' +
-      'les ignorent, pour qu’un enregistrement ultérieur par un administrateur ne distribue pas ' +
-      'rétroactivement les récompenses aux profils importés. Un administrateur peut écrire son propre ' +
-      'texte à la suite du marqueur, il est conservé.',
+    'Les identifiants des matchs importés sont conservés dans le registre `' +
+      LEGACY_REGISTRY_KEY +
+      '` : les crochets de gamification (XP de match, succès, cadres, notifications) les ignorent, pour ' +
+      'qu’un enregistrement ultérieur par un administrateur ne distribue pas rétroactivement les ' +
+      'récompenses aux profils importés. Le champ `notes` du match, visible par tous et modifiable par ' +
+      'l’administration, n’est jamais écrit par l’import.',
   );
   report.note(
-    'Relancer l’import écrase les champs qu’il gère : titre, contenu et images des posts, logo et ordre ' +
-      'des sponsors, podiums et archives de saison, score et games des matchs. Les retouches faites par un ' +
-      'administrateur sur ces champs sont donc perdues à la relance. Les identités déjà adoptées, les ' +
-      'saisons référencées et les sponsors nommés ne sont jamais écrasés.',
+    'Relancer l’import écrase les champs qu’il gère : titre, contenu et images des posts, nom, logo, lien, ' +
+      'description et ordre des sponsors, podiums et archives de saison, score, format et games des matchs, ' +
+      'nom et logo des équipes. Les retouches faites par un administrateur sur ces champs sont donc perdues ' +
+      'à la relance. Ne sont jamais écrasés : les profils déjà adoptés, la visibilité (`isActive`) et le ' +
+      'palier (`tier`) des sponsors, le champ `notes` des matchs, et les saisons que le nettoyage conserve.',
   );
   report.note(
     'Adoption d’un profil importé : aucune route de l’API ne modifie `email` (voir `UsersService.update`), ' +
@@ -971,11 +1129,30 @@ async function main() {
     report.note(`Compteurs (victoires, défaites, série, badges) recalculés pour ${ids.length} profils.`);
   }
 
+  // ---- Registry ----------------------------------------------------------
+  // Written last, once every id is known. A dry run never writes it.
+  if (!dry) {
+    const value = serializeRegistry(registry);
+    await prisma.appSetting.upsert({
+      where: { key: LEGACY_REGISTRY_KEY },
+      create: { key: LEGACY_REGISTRY_KEY, value },
+      update: { value },
+    });
+  }
+  report.note(
+    `Registre d’import ${dry ? 'qui serait écrit' : 'écrit'} dans \`AppSetting\` (clé \`${LEGACY_REGISTRY_KEY}\`) : ` +
+      `${registrySize(registry)} correspondances « identifiant historique → identifiant interne ». C’est la seule ` +
+      'clé que rien dans l’application ne peut réécrire : elle permet de relancer l’import après une adoption ' +
+      'Google, une liaison de compte de jeu, un renommage ou une note retapée.',
+  );
+
   // ---- Report ------------------------------------------------------------
   const md = report.render(opts);
   log('\n' + md);
-  const target = opts.report ?? path.join(opts.dump, '..', 'IMPORT_REPORT.md');
-  if (!dry) {
+  // A dry run only writes a file when one is asked for, so the release manager
+  // can diff the simulation against the report of the real run.
+  const target = opts.report ?? (dry ? null : path.join(opts.dump, '..', 'IMPORT_REPORT.md'));
+  if (target) {
     fs.writeFileSync(target, md, 'utf8');
     log(`\n📝 Rapport écrit dans ${target}`);
   }
