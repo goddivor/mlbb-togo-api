@@ -105,9 +105,12 @@ export function slugifyUsername(input: unknown): string {
   return slugify(input, 28) || 'joueur';
 }
 
+/** Domain of the placeholder mailboxes: an address here means "not claimed". */
+export const IMPORTED_EMAIL_DOMAIN = '@imported.mlbbtogo.local';
+
 /** Placeholder mailbox of an imported profile (never a real address). */
 export function importedEmail(slug: string): string {
-  return `${slug}@imported.mlbbtogo.local`;
+  return `${slug}${IMPORTED_EMAIL_DOMAIN}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +345,20 @@ export function typeOf(stage: MatchStage): string {
   return stage === 'scrim' ? 'friendly' : 'official';
 }
 
+/**
+ * Marker written in `EsportMatch.notes` by the import. It tells the rest of the
+ * app that the match is an archive of the legacy site: the gamification hooks
+ * skip it so a later admin save never retro-awards XP, achievements, frames and
+ * notifications to the imported profiles. A plain note keeps the Prisma schema
+ * untouched, and an admin may append his own text after it.
+ */
+export const LEGACY_MATCH_MARKER = '[import-legacy]';
+
+/** True when the match comes from the legacy site (see `LEGACY_MATCH_MARKER`). */
+export function isLegacyMatch(notes: string | null | undefined): boolean {
+  return typeof notes === 'string' && notes.includes(LEGACY_MATCH_MARKER);
+}
+
 const FORMATS: MatchFormat[] = ['bo1', 'bo3', 'bo5', 'bo7'];
 
 /**
@@ -371,11 +388,6 @@ export function winnerOf(
   if (scoreA > scoreB) return teamAId;
   if (scoreB > scoreA) return teamBId;
   return null;
-}
-
-/** Natural key of a match: nothing upstream is stable enough on its own. */
-export function matchKey(seasonId: string, teamAId: string, teamBId: string, playedAt: Date | null): string {
-  return [seasonId, teamAId, teamBId, playedAt ? playedAt.toISOString() : 'undated'].join('|');
 }
 
 // ---------------------------------------------------------------------------
@@ -503,11 +515,6 @@ const AWARD_CATEGORY_BY_TITLE: Record<string, string> = {
 /** Their free-text award titles mapped onto our fixed categories. */
 export function awardCategoryOf(title: string | null | undefined): string {
   return AWARD_CATEGORY_BY_TITLE[normalizeKey(title)] ?? 'custom';
-}
-
-/** Natural key of an award (the fixed categories are unique per season). */
-export function awardKey(seasonId: string, category: string, title: string | null): string {
-  return category === 'custom' ? `${seasonId}|custom|${normalizeKey(title)}` : `${seasonId}|${category}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -2,17 +2,18 @@ import {
   HERO_FIX_TABLE,
   assignUsernames,
   awardCategoryOf,
-  awardKey,
   buildGames,
   buildHeroIndex,
   buildMatchPlayers,
   dedupePlayers,
   dedupeTeams,
   formatOf,
+  IMPORTED_EMAIL_DOMAIN,
+  LEGACY_MATCH_MARKER,
   importedEmail,
+  isLegacyMatch,
   laneOf,
   mapSeasons,
-  matchKey,
   normalizeKey,
   podiumFromBracket,
   postImages,
@@ -81,6 +82,7 @@ describe('usernames of imported profiles', () => {
     expect(slugifyUsername('M A L I K')).toBe('m-a-l-i-k');
     expect(slugifyUsername('???')).toBe('joueur');
     expect(importedEmail('maroel')).toBe('maroel@imported.mlbbtogo.local');
+    expect(importedEmail('maroel').endsWith(IMPORTED_EMAIL_DOMAIN)).toBe(true);
   });
 
   it('suffixes and reports a collision with an existing member', () => {
@@ -207,11 +209,6 @@ describe('match mapping', () => {
     expect(winnerOf(1, 1, A, B)).toBeNull();
   });
 
-  it('builds a stable natural key', () => {
-    const d = new Date('2025-12-13T15:02:51.730Z');
-    expect(matchKey('s', A, B, d)).toBe(matchKey('s', A, B, new Date(d)));
-    expect(matchKey('s', A, B, null)).toContain('undated');
-  });
 });
 
 describe('games and picks', () => {
@@ -280,6 +277,16 @@ describe('games and picks', () => {
   });
 });
 
+describe('legacy match marker', () => {
+  it('recognizes an imported match, even with an admin note after the marker', () => {
+    expect(isLegacyMatch(LEGACY_MATCH_MARKER)).toBe(true);
+    expect(isLegacyMatch(`${LEGACY_MATCH_MARKER} score revu le 12/01`)).toBe(true);
+    expect(isLegacyMatch('note libre')).toBe(false);
+    expect(isLegacyMatch(null)).toBe(false);
+    expect(isLegacyMatch(undefined)).toBe(false);
+  });
+});
+
 describe('awards', () => {
   it('maps their free-text titles onto our categories', () => {
     expect(awardCategoryOf('MVP')).toBe('mvp');
@@ -291,10 +298,6 @@ describe('awards', () => {
     expect(awardCategoryOf('Shōri no Hasha')).toBe('custom');
   });
 
-  it('keys a fixed award by category and a custom one by title', () => {
-    expect(awardKey('s1', 'mvp', 'MVP')).toBe('s1|mvp');
-    expect(awardKey('s1', 'custom', 'Sky Fury')).toBe('s1|custom|skyfury');
-  });
 });
 
 describe('playoffs bracket', () => {
