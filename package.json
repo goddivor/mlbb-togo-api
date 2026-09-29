@@ -17,6 +17,7 @@
     "db:setup": "node scripts/db-setup.js",
     "rbac:migrate": "ts-node prisma/migrate-rbac.ts",
     "seed": "ts-node prisma/seed.ts",
+    "import:legacy": "ts-node prisma/import-legacy.ts",
     "db:reset": "prisma migrate reset --force",
     "test": "jest",
     "test:watch": "jest --watch",
