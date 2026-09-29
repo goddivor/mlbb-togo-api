@@ -20,6 +20,26 @@ const MAX_URL_LENGTH = 2048;
 /** Longest realistic MLBB game (seconds). */
 const MAX_GAME_DURATION = 3 * 60 * 60;
 
+/**
+ * Hero picked by a player during one game of the series. Stored inside the
+ * `EsportMatch.games` JSON (no dedicated table): a game is a full 5v5 draft,
+ * so the picks belong to the game, not to the match.
+ */
+export interface MatchPick {
+  /** Platform account of the player. */
+  userId: string;
+  /** Side he played for (one of the two teams of the match). */
+  teamId: string;
+  /** Catalog `Hero` id when resolved. */
+  heroId: string | null;
+  /** Catalog hero name (kept next to the id so the UI never needs a join). */
+  hero: string | null;
+  /** Substitute brought in for this game. */
+  isSub: boolean;
+}
+
+export const MAX_PICKS_PER_GAME = 12;
+
 export interface MatchGame {
   /** 1-based game number. */
   number: number;
@@ -30,6 +50,11 @@ export interface MatchGame {
   mvpUserId: string | null;
   /** Screenshot of the end-of-game scoreboard. */
   screenshot: string | null;
+  /**
+   * Per-game draft. Absent (rather than empty) when the game has no recorded
+   * picks, so games saved before this feature round-trip unchanged.
+   */
+  picks?: MatchPick[];
 }
 
 export interface MatchLikeRow {
@@ -124,18 +149,126 @@ export function normalizeScreenshots(input: unknown): string | null {
   return uniq.length ? JSON.stringify(uniq) : null;
 }
 
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+/** Parse the picks of a stored game (never throws, unusable rows dropped). */
+function parsePicks(raw: unknown): MatchPick[] {
+  if (!Array.isArray(raw)) return [];
+  const picks: MatchPick[] = [];
+  for (const p of raw) {
+    if (!p || typeof p !== 'object') continue;
+    const row = p as Record<string, unknown>;
+    const userId = str(row.userId);
+    const teamId = str(row.teamId);
+    if (!userId || !teamId) continue;
+    picks.push({
+      userId,
+      teamId,
+      heroId: str(row.heroId),
+      hero: str(row.hero),
+      isSub: row.isSub === true,
+    });
+  }
+  return picks.slice(0, MAX_PICKS_PER_GAME);
+}
+
 /** Parse the stored games JSON (never throws, unknown rows dropped). */
 export function parseGames(raw: string | null | undefined): MatchGame[] {
   return parseJsonArray(raw)
     .filter((g): g is Record<string, unknown> => !!g && typeof g === 'object')
-    .map((g, i) => ({
-      number: i + 1,
-      winnerTeamId: typeof g.winnerTeamId === 'string' ? g.winnerTeamId : null,
-      duration: Number.isFinite(Number(g.duration)) && g.duration !== null ? Number(g.duration) : null,
-      mvpUserId: typeof g.mvpUserId === 'string' ? g.mvpUserId : null,
-      screenshot: isHttpUrl(g.screenshot) ? g.screenshot : null,
-    }));
+    .map((g, i) => {
+      const picks = parsePicks(g.picks);
+      return {
+        number: i + 1,
+        winnerTeamId: typeof g.winnerTeamId === 'string' ? g.winnerTeamId : null,
+        duration: Number.isFinite(Number(g.duration)) && g.duration !== null ? Number(g.duration) : null,
+        mvpUserId: typeof g.mvpUserId === 'string' ? g.mvpUserId : null,
+        screenshot: isHttpUrl(g.screenshot) ? g.screenshot : null,
+        // Omitted (not `[]`) when empty: games recorded before the draft was
+        // stored must round-trip byte for byte.
+        ...(picks.length ? { picks } : {}),
+      };
+    });
 }
+
+/** MongoDB object id, the only shape an id field of a pick may take. */
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/;
+const MAX_HERO_NAME = 60;
+
+/**
+ * Allowed values a draft may reference. Both are optional so the pure layer
+ * stays usable without a database; the service passes the real sets (match
+ * participants / rosters, hero catalog) so a pick can never name a user or a
+ * hero that does not exist.
+ */
+export type PickScope = {
+  userIds?: Set<string> | null;
+  heroIds?: Set<string> | null;
+};
+
+/**
+ * Validate the picks of one game: both sides must be teams of the match, ids
+ * must be real object ids (and, when a scope is given, known ones) and a
+ * player can only pick once per game.
+ */
+export function normalizePicks(
+  input: unknown,
+  match: Pick<MatchLikeRow, 'teamAId' | 'teamBId'>,
+  gameNumber: number,
+  scope: PickScope = {},
+): MatchPick[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input))
+    throw new BadRequestException(`Game ${gameNumber} : les picks doivent être une liste.`);
+  if (input.length > MAX_PICKS_PER_GAME)
+    throw new BadRequestException(
+      `Game ${gameNumber} : au maximum ${MAX_PICKS_PER_GAME} picks.`,
+    );
+  const seen = new Set<string>();
+  return input.map((p: any) => {
+    if (!p || typeof p !== 'object')
+      throw new BadRequestException(`Game ${gameNumber} : pick invalide.`);
+    const userId = str(p.userId);
+    const teamId = str(p.teamId);
+    if (!userId) throw new BadRequestException(`Game ${gameNumber} : pick sans joueur.`);
+    if (!OBJECT_ID.test(userId))
+      throw new BadRequestException(`Game ${gameNumber} : identifiant de joueur invalide.`);
+    if (scope.userIds && !scope.userIds.has(userId))
+      throw new BadRequestException(
+        `Game ${gameNumber} : ce joueur ne fait partie d’aucune des deux équipes.`,
+      );
+    if (teamId !== match.teamAId && teamId !== match.teamBId)
+      throw new BadRequestException(
+        `Game ${gameNumber} : chaque pick doit appartenir à l’une des deux équipes.`,
+      );
+    if (seen.has(userId))
+      throw new BadRequestException(
+        `Game ${gameNumber} : un joueur ne peut apparaître qu’une fois.`,
+      );
+    seen.add(userId);
+    const heroId = str(p.heroId);
+    if (heroId && !OBJECT_ID.test(heroId))
+      throw new BadRequestException(`Game ${gameNumber} : identifiant de héros invalide.`);
+    if (heroId && scope.heroIds && !scope.heroIds.has(heroId))
+      throw new BadRequestException(`Game ${gameNumber} : héros inconnu du catalogue.`);
+    const hero = str(p.hero);
+    if (hero && hero.length > MAX_HERO_NAME)
+      throw new BadRequestException(`Game ${gameNumber} : nom de héros invalide.`);
+    return { userId, teamId, heroId, hero, isSub: p.isSub === true };
+  });
+}
+
+/**
+ * The draft of a game lives in the payload, and only there.
+ *
+ * `normalizeGames` keeps the `picks` a caller sends and drops the draft of a
+ * game it does not send one for. There is deliberately no "guess the previous
+ * draft" fallback: games can only be matched by position, and a position means
+ * nothing as soon as one game is inserted, removed or moved, so any guess ends
+ * up attributing a draft to the wrong game. Every caller that knows about the
+ * drafts sends them back (the admin match editor does, see
+ * `frontend/src/app/admin/matches/page.tsx`).
+ */
 
 /**
  * Validate a games payload against the match. Each game must name one of the
@@ -146,6 +279,7 @@ export function normalizeGames(
   input: unknown,
   match: Pick<MatchLikeRow, 'teamAId' | 'teamBId'>,
   format: string | null | undefined,
+  scope: PickScope = {},
 ): MatchGame[] {
   if (input === undefined || input === null) return [];
   if (!Array.isArray(input)) throw new BadRequestException('Les games doivent être une liste.');
@@ -170,7 +304,15 @@ export function normalizeGames(
     const mvpUserId =
       typeof g.mvpUserId === 'string' && g.mvpUserId.trim() ? g.mvpUserId.trim() : null;
     const screenshot = normalizeUrl(g.screenshot, `capture de la game ${i + 1}`);
-    return { number: i + 1, winnerTeamId, duration, mvpUserId, screenshot };
+    const picks = normalizePicks(g.picks, match, i + 1, scope);
+    return {
+      number: i + 1,
+      winnerTeamId,
+      duration,
+      mvpUserId,
+      screenshot,
+      ...(picks.length ? { picks } : {}),
+    };
   });
   const needed = winsNeeded(format);
   const { scoreA, scoreB } = scoreFromGames(games, match);
@@ -230,6 +372,9 @@ export function serializeGames(games: MatchGame[]): string | null {
       duration: g.duration,
       mvpUserId: g.mvpUserId,
       screenshot: g.screenshot,
+      // Only written when the draft is known, so a game without picks keeps
+      // exactly the shape it had before this field existed.
+      ...(g.picks?.length ? { picks: g.picks } : {}),
     })),
   );
 }
