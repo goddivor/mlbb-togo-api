@@ -11,18 +11,22 @@ import {
   BLOCKING_COLLECTIONS,
   DROPPED_COLLECTIONS,
   IMPORTED_PROVIDER,
+  LEGACY_REGISTRY_BACKUP_KEY,
   LEGACY_REGISTRY_KEY,
+  MIN_SUGGESTION_SCORE,
   ProfileLike,
   gamesWouldDuplicate,
   isAdoptedProfile,
   isImportedProfile,
   isPlaceholderEmail,
   matchPlayerConflicts,
+  mergeReasons,
   normalizeExpectedEmail,
   placeholderEmailFor,
   planTeamMemberships,
   retargetGames,
-  retargetRegistryPlayers,
+  retargetRegistry,
+  retargetSeasonSummary,
   suggestTargets,
 } from './imported-merge.logic';
 
@@ -122,44 +126,70 @@ export class ImportedService {
     });
   }
 
-  /** Real member accounts a profile may be merged into (search by text). */
+  /**
+   * Real member accounts a profile may be merged into.
+   *
+   * With no query this is the suggestion list, and it is scored against EVERY
+   * real account, not a first page: the right person is very often not in the
+   * first 200 usernames alphabetically. Only the id and the two name columns
+   * are read for that pass, and the full payload is fetched for the handful of
+   * accounts actually offered.
+   *
+   * With a query the database does the filtering and the score only orders the
+   * rows the admin asked for, so a deliberate search is never hidden by the
+   * suggestion floor.
+   */
   async candidates(profileId: string, q = '', limit = 20) {
     const profile = await this.loadImported(profileId);
     const query = String(q ?? '').trim();
+    const take = Math.min(Math.max(1, limit), 50);
+    const real = {
+      isSystemAccount: false,
+      isBanned: false,
+      provider: { not: IMPORTED_PROVIDER },
+    };
+
+    if (!query) {
+      const all = await this.prisma.user.findMany({
+        where: real,
+        select: { id: true, username: true, gameNickname: true },
+      });
+      const best = suggestTargets(profile, all, take, MIN_SUGGESTION_SCORE);
+      if (!best.length) return [];
+      const rows = await this.prisma.user.findMany({
+        where: { id: { in: best.map((b) => b.id) } },
+        select: PROFILE_SELECT,
+      });
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      return best
+        .map((b) => {
+          const row = byId.get(b.id);
+          return row ? { ...this.publicProfile(row), score: b.score, matchedOn: b.matchedOn } : null;
+        })
+        .filter(Boolean);
+    }
+
     const rows = await this.prisma.user.findMany({
       where: {
-        isSystemAccount: false,
-        provider: { not: IMPORTED_PROVIDER },
-        ...(query
-          ? {
-              OR: [
-                { username: { contains: query, mode: 'insensitive' as const } },
-                { gameNickname: { contains: query, mode: 'insensitive' as const } },
-                { email: { contains: query, mode: 'insensitive' as const } },
-              ],
-            }
-          : {}),
+        ...real,
+        OR: [
+          { username: { contains: query, mode: 'insensitive' as const } },
+          { gameNickname: { contains: query, mode: 'insensitive' as const } },
+          { email: { contains: query, mode: 'insensitive' as const } },
+        ],
       },
       select: PROFILE_SELECT,
       orderBy: { username: 'asc' },
-      take: query ? Math.min(Math.max(1, limit), 50) : 200,
+      take,
     });
-    const scores = new Map(
-      suggestTargets(profile, rows, rows.length, 0).map((s) => [s.id, s]),
-    );
-    const items = rows.map((r) => ({
-      ...this.publicProfile(r),
-      score: scores.get(r.id)?.score ?? 0,
-      matchedOn: scores.get(r.id)?.matchedOn ?? null,
-    }));
-    // Without a query the list is the suggestion list: best matches first.
-    if (!query) {
-      return items
-        .filter((i) => i.score > 0)
-        .sort((a, b) => b.score - a.score || a.username.localeCompare(b.username))
-        .slice(0, Math.min(Math.max(1, limit), 50));
-    }
-    return items.sort((a, b) => b.score - a.score || a.username.localeCompare(b.username));
+    const scores = new Map(suggestTargets(profile, rows, rows.length, 0).map((x) => [x.id, x]));
+    return rows
+      .map((r) => ({
+        ...this.publicProfile(r),
+        score: scores.get(r.id)?.score ?? 0,
+        matchedOn: scores.get(r.id)?.matchedOn ?? null,
+      }))
+      .sort((a, b) => b.score - a.score || a.username.localeCompare(b.username));
   }
 
   // -------------------------------------------------------------------------
@@ -232,27 +262,10 @@ export class ImportedService {
       ...(Array.from(conflictSeasons.values()).filter(Boolean) as string[]),
     ]);
 
-    const registryRow = await this.prisma.appSetting.findUnique({
-      where: { key: LEGACY_REGISTRY_KEY },
-    });
-    const registry = retargetRegistryPlayers(registryRow?.value, source.id, target.id);
+    const registry = await this.registryPlan(source.id, target.id, memberships.drop);
+    const summaries = await this.seasonSummaryPlan(source.id, target.id);
 
-    const reasons: string[] = [];
-    if (conflicts.length) {
-      reasons.push(
-        `Le compte cible possède déjà une feuille de match sur ${conflicts.length} match(s) du profil importé.`,
-      );
-    }
-    if (duplicatedGames.length) {
-      reasons.push(
-        `${duplicatedGames.length} manche(s) listent déjà les deux profils : la fusion créerait un doublon.`,
-      );
-    }
-    for (const b of blocking) {
-      reasons.push(
-        `Le profil importé possède ${b.count} ${b.label} : à traiter à la main avant la fusion.`,
-      );
-    }
+    const reasons = mergeReasons(conflicts, duplicatedGames, blocking);
 
     return {
       source: this.publicProfile(source),
@@ -281,6 +294,8 @@ export class ImportedService {
         tournamentMvp: mvpTournaments,
         rewardElections: elections,
         registryEntries: registry.legacyIds,
+        registryPruned: registry.pruned,
+        seasonArchives: summaries.reduce((n, x) => n + x.changed, 0),
       },
       drops: dropped,
       blocking,
@@ -297,7 +312,7 @@ export class ImportedService {
 
   /**
    * Move everything the imported profile holds onto `targetId`, delete the
-   * placeholder and repoint the import registry.
+   * placeholder, repoint the import registry and the season archives.
    *
    * The reads and the plan happen first, then a single `$transaction` applies
    * every write (MongoDB replica set): either the whole history moves, or
@@ -305,12 +320,28 @@ export class ImportedService {
    * the shared helper, outside of the transaction, because it is derived data
    * that any later match edit recomputes anyway.
    *
-   * Idempotent: every write is a `updateMany` / `deleteMany` filtered on the
-   * source id, so replaying a half-applied merge converges to the same state.
+   * Idempotent in both directions: every write is a `updateMany` /
+   * `deleteMany` filtered on the source id, and replaying the same pair once
+   * the placeholder is gone recomputes the target instead of failing, so a
+   * process killed between the transaction and the recompute is repaired by
+   * simply pressing the button again.
    */
   async merge(profileId: string, targetId: string, actor: Actor) {
+    const replay = await this.replayIfAlreadyMerged(profileId, targetId, actor);
+    if (replay) return replay;
+
     const plan = await this.preview(profileId, targetId);
-    if (!plan.canMerge) throw new ConflictException(plan.reasons.join(' '));
+    if (!plan.canMerge) {
+      // `reasons` travels with the error so the UI translates it the same way
+      // it translates the preview; `message` is only the fallback.
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: 'merge_refused',
+        reasons: plan.reasons,
+        message: 'La fusion est refusée : rechargez l’aperçu.',
+      });
+    }
 
     const source = plan.source;
     const target = plan.target;
@@ -321,14 +352,13 @@ export class ImportedService {
       .map((m) => ({ id: m.id, ...retargetGames(m.games, source.id, target.id) }))
       .filter((m) => m.changed > 0);
 
-    const registryRow = await p.appSetting.findUnique({ where: { key: LEGACY_REGISTRY_KEY } });
-    const registry = retargetRegistryPlayers(registryRow?.value, source.id, target.id);
+    const droppedMemberIds = plan.moves.droppedTeamMemberships.map((m) => m.id);
+    const registry = await this.registryPlan(source.id, target.id, droppedMemberIds);
+    const summaries = await this.seasonSummaryPlan(source.id, target.id);
 
     const ops: any[] = [
       // Team memberships: the rows the target already has win.
-      ...plan.moves.droppedTeamMemberships.map((m) =>
-        p.esportTeamMember.delete({ where: { id: m.id } }),
-      ),
+      ...droppedMemberIds.map((id) => p.esportTeamMember.delete({ where: { id } })),
       ...plan.moves.teamMemberships.map((m) =>
         p.esportTeamMember.update({ where: { id: m.id }, data: { userId: target.id } }),
       ),
@@ -342,6 +372,9 @@ export class ImportedService {
       p.tournament.updateMany({ where: { mvpUserId: source.id }, data: { mvpUserId: target.id } }),
       p.rewardElection.updateMany({ where: { userId: source.id }, data: { userId: target.id } }),
       ...gameWrites.map((g) => p.esportMatch.update({ where: { id: g.id }, data: { games: g.value } })),
+      // Archived rosters of the closed seasons (`summary.legacy`, written by
+      // the import): no foreign key protects them.
+      ...summaries.map((x) => p.esportSeason.update({ where: { id: x.id }, data: { summary: x.value } })),
       // Residue of the placeholder: never moved, it describes nothing.
       ...DROPPED_COLLECTIONS.map((c) =>
         (p as any)[c.model].deleteMany({ where: { [c.field]: source.id } }),
@@ -349,18 +382,38 @@ export class ImportedService {
       p.friendship.deleteMany({
         where: { OR: [{ requesterId: source.id }, { addresseeId: source.id }] },
       }),
+      ...registry.writes.map((w) =>
+        p.appSetting.update({ where: { key: w.key }, data: { value: w.value } }),
+      ),
+      p.user.delete({ where: { id: source.id } }),
     ];
-    if (registry.value) {
-      ops.push(
-        p.appSetting.update({
-          where: { key: LEGACY_REGISTRY_KEY },
-          data: { value: registry.value },
-        }),
-      );
-    }
-    ops.push(p.user.delete({ where: { id: source.id } }));
 
-    await p.$transaction(ops);
+    try {
+      await p.$transaction(ops);
+    } catch (err: any) {
+      // Another admin merged (or deleted) one of these rows while this plan was
+      // being built. Nothing was written: the transaction rolled back.
+      const code = err?.code;
+      if (code === 'P2025' || code === 'P2034') {
+        const still = await this.prisma.user.findUnique({ where: { id: source.id } });
+        if (!still) {
+          throw new NotFoundException({
+            statusCode: 404,
+            error: 'Not Found',
+            code: 'source_gone',
+            message: 'Ce profil importé vient d’être fusionné ou supprimé par quelqu’un d’autre.',
+          });
+        }
+        throw new ConflictException({
+          statusCode: 409,
+          error: 'Conflict',
+          code: 'merge_raced',
+          message:
+            'La fusion a été interrompue : les données ont changé pendant l’opération. Rechargez la page et réessayez.',
+        });
+      }
+      throw err;
+    }
 
     await this.playerStats.recomputeUsers([target.id]);
 
@@ -371,7 +424,7 @@ export class ImportedService {
       `Profil importé « ${source.username} » (${source.id}) fusionné dans « ${target.username} » : ` +
         `${plan.moves.teamMemberships.length} appartenance(s), ${plan.moves.matchPlayers} feuille(s) de match, ` +
         `${plan.moves.awards.length} distinction(s), ${plan.moves.gamePicks} pick(s), ` +
-        `${registry.legacyIds.length} entrée(s) de registre.`,
+        `${summaries.length} archive(s) de saison, ${registry.legacyIds.length} entrée(s) de registre.`,
     );
 
     const merged = await this.prisma.user.findUnique({
@@ -380,10 +433,54 @@ export class ImportedService {
     });
     return {
       success: true,
+      alreadyMerged: false,
       source,
       target: merged ? this.publicProfile(merged) : target,
       moved: plan.moves,
       dropped: plan.drops,
+    };
+  }
+
+  /**
+   * Retrying a merge whose placeholder is already gone.
+   *
+   * The transaction and the counter recompute cannot be atomic together (the
+   * recompute reads what the transaction just wrote), so a process killed in
+   * between leaves a correct database with stale counters on the target. The
+   * admin's natural reaction is to press the button again; answering 404 would
+   * leave the counters wrong forever. So when the source no longer exists and
+   * the target is a usable account, the retry recomputes the target and says
+   * the merge had already happened.
+   */
+  private async replayIfAlreadyMerged(profileId: string, targetId: string, actor: Actor) {
+    this.assertObjectId(profileId);
+    if (!targetId) throw new BadRequestException('Compte cible manquant.');
+    this.assertObjectId(targetId);
+    const source = await this.prisma.user.findUnique({ where: { id: profileId } });
+    if (source) return null;
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetId },
+      select: PROFILE_SELECT,
+    });
+    if (!target) throw new NotFoundException('Profil introuvable.');
+    await this.playerStats.recomputeUsers([target.id]);
+    await this.log(
+      'imported.merge.replay',
+      actor,
+      target.id,
+      `Fusion rejouée : le profil importé ${profileId} n’existe plus, compteurs de « ${target.username} » recalculés.`,
+    );
+    const fresh = await this.prisma.user.findUnique({
+      where: { id: target.id },
+      select: PROFILE_SELECT,
+    });
+    return {
+      success: true,
+      alreadyMerged: true,
+      source: null,
+      target: this.publicProfile(fresh ?? target),
+      moved: null,
+      dropped: [],
     };
   }
 
@@ -409,8 +506,15 @@ export class ImportedService {
     if (next === profile.email.toLowerCase()) {
       return { success: true, unchanged: true, profile: this.publicProfile(profile) };
     }
-    const taken = await this.prisma.user.findUnique({ where: { email: next } });
-    if (taken && taken.id !== profile.id) {
+    // `email` is the unique column, but the Google sign-in resolves an account
+    // by `googleId` FIRST and only then by `email`: an address already sitting
+    // in somebody's `googleEmail` would land its owner on his own account, and
+    // this profile would never be adopted. Both columns are checked.
+    const taken = await this.prisma.user.findFirst({
+      where: { OR: [{ email: next }, { googleEmail: next }], NOT: { id: profile.id } },
+      select: { id: true, username: true },
+    });
+    if (taken) {
       throw new ConflictException('Cette adresse e-mail est déjà utilisée par un autre compte.');
     }
     const updated = await this.prisma.user.update({
@@ -513,12 +617,52 @@ export class ImportedService {
   }
 
   private async blockingRows(userId: string) {
-    const out: { model: string; label: string; count: number }[] = [];
+    const out: { model: string; count: number }[] = [];
     for (const c of BLOCKING_COLLECTIONS) {
       const count = await (this.prisma as any)[c.model].count({ where: { [c.field]: userId } });
-      if (count > 0) out.push({ model: c.model, label: c.label, count });
+      if (count > 0) out.push({ model: c.model, count });
     }
     return out;
+  }
+
+  /**
+   * Registry writes of a merge: the live mapping and the backup the import
+   * keeps next to it. Both are rewritten, otherwise restoring the backup would
+   * resurrect the placeholder and take the history back off the real account.
+   */
+  private async registryPlan(sourceId: string, targetId: string, deletedIds: string[]) {
+    const rows = await this.prisma.appSetting.findMany({
+      where: { key: { in: [LEGACY_REGISTRY_KEY, LEGACY_REGISTRY_BACKUP_KEY] } },
+      select: { key: true, value: true },
+    });
+    const writes: { key: string; value: string }[] = [];
+    const legacyIds = new Set<string>();
+    let pruned = 0;
+    for (const row of rows) {
+      const out = retargetRegistry(row.value, sourceId, targetId, deletedIds);
+      if (!out.value) continue;
+      writes.push({ key: row.key, value: out.value });
+      if (row.key === LEGACY_REGISTRY_KEY) {
+        for (const id of out.legacyIds) legacyIds.add(id);
+        pruned = out.pruned;
+      }
+    }
+    return { writes, legacyIds: Array.from(legacyIds), pruned };
+  }
+
+  /**
+   * Season archives mentioning the profile. The import writes the historical
+   * roster of every season into `EsportSeason.summary.legacy.rosters` as plain
+   * JSON, which no foreign key protects.
+   */
+  private async seasonSummaryPlan(sourceId: string, targetId: string) {
+    const rows = await this.prisma.esportSeason.findMany({
+      where: { summary: { contains: sourceId } },
+      select: { id: true, name: true, summary: true },
+    });
+    return rows
+      .map((r) => ({ id: r.id, name: r.name, ...retargetSeasonSummary(r.summary, sourceId, targetId) }))
+      .filter((r): r is typeof r & { value: string } => !!r.value);
   }
 
   private async droppedRows(userId: string) {

@@ -10,9 +10,12 @@ import {
   placeholderEmailFor,
   planTeamMemberships,
   retargetGames,
-  retargetRegistryPlayers,
+  retargetRegistry,
+  retargetSeasonSummary,
   similarity,
   suggestTargets,
+  mergeReasons,
+  MIN_SUGGESTION_SCORE,
 } from './imported-merge.logic';
 
 describe('imported profile identity', () => {
@@ -192,17 +195,18 @@ describe('retargetGames', () => {
   });
 });
 
-describe('retargetRegistryPlayers', () => {
+describe('retargetRegistry', () => {
   const registry = JSON.stringify({
     version: 1,
     updatedAt: '2026-01-01T00:00:00.000Z',
     players: { '11': 'src', '12': 'src', '13': 'other' },
+    teamMembers: { '1:11': 'mem-gone', '1:12': 'mem-kept' },
     matches: { '1': 'm1' },
     seasons: {},
   });
 
   it('repoints every legacy id of the profile and keeps the rest', () => {
-    const out = retargetRegistryPlayers(registry, 'src', 'dst');
+    const out = retargetRegistry(registry, 'src', 'dst');
     expect(out.legacyIds).toEqual(['11', '12']);
     const parsed = JSON.parse(out.value!);
     expect(parsed.players).toEqual({ '11': 'dst', '12': 'dst', '13': 'other' });
@@ -211,25 +215,106 @@ describe('retargetRegistryPlayers', () => {
     expect(parsed.version).toBe(1);
   });
 
+  it('prunes the entries of the rows the merge deletes, in any map', () => {
+    const out = retargetRegistry(registry, 'src', 'dst', ['mem-gone']);
+    expect(out.pruned).toBe(1);
+    const parsed = JSON.parse(out.value!);
+    expect(parsed.teamMembers).toEqual({ '1:12': 'mem-kept' });
+  });
+
+  it('writes when only a prune is needed', () => {
+    const out = retargetRegistry(registry, 'nobody', 'dst', ['mem-gone']);
+    expect(out.legacyIds).toEqual([]);
+    expect(out.pruned).toBe(1);
+    expect(out.value).not.toBeNull();
+  });
+
   it('reports no change when the profile is absent or the value unusable', () => {
-    expect(retargetRegistryPlayers(registry, 'nobody', 'dst')).toEqual({
+    expect(retargetRegistry(registry, 'nobody', 'dst')).toEqual({
       value: null,
       legacyIds: [],
+      pruned: 0,
     });
-    expect(retargetRegistryPlayers(null, 'src', 'dst')).toEqual({ value: null, legacyIds: [] });
-    expect(retargetRegistryPlayers('{broken', 'src', 'dst')).toEqual({
-      value: null,
-      legacyIds: [],
-    });
-    expect(retargetRegistryPlayers('[]', 'src', 'dst')).toEqual({ value: null, legacyIds: [] });
-    expect(retargetRegistryPlayers('{"players":[]}', 'src', 'dst')).toEqual({
-      value: null,
-      legacyIds: [],
-    });
+    expect(retargetRegistry(null, 'src', 'dst').value).toBeNull();
+    expect(retargetRegistry('{broken', 'src', 'dst').value).toBeNull();
+    expect(retargetRegistry('[]', 'src', 'dst').value).toBeNull();
+    expect(retargetRegistry('{"players":[]}', 'src', 'dst').value).toBeNull();
   });
 
   it('is idempotent', () => {
-    const once = retargetRegistryPlayers(registry, 'src', 'dst');
-    expect(retargetRegistryPlayers(once.value, 'src', 'dst').legacyIds).toEqual([]);
+    const once = retargetRegistry(registry, 'src', 'dst');
+    expect(retargetRegistry(once.value, 'src', 'dst').legacyIds).toEqual([]);
+  });
+});
+
+describe('retargetSeasonSummary', () => {
+  const summary = JSON.stringify({
+    standings: [{ teamId: 'tA', points: 9 }],
+    legacy: {
+      rosters: [
+        { teamId: 'tA', userId: 'src', role: 'jungle' },
+        { teamId: 'tB', userId: 'other', role: 'mid' },
+      ],
+      bracket: [{ round: 1, order: 1 }],
+    },
+  });
+
+  it('repoints the archived roster and keeps everything else', () => {
+    const out = retargetSeasonSummary(summary, 'src', 'dst');
+    expect(out).toMatchObject({ changed: 1, dropped: 0 });
+    const parsed = JSON.parse(out.value!);
+    expect(parsed.legacy.rosters).toEqual([
+      { teamId: 'tA', userId: 'dst', role: 'jungle' },
+      { teamId: 'tB', userId: 'other', role: 'mid' },
+    ]);
+    expect(parsed.standings).toEqual([{ teamId: 'tA', points: 9 }]);
+    expect(parsed.legacy.bracket).toEqual([{ round: 1, order: 1 }]);
+  });
+
+  it('drops the line instead of listing the target twice on one team', () => {
+    const both = JSON.stringify({
+      legacy: {
+        rosters: [
+          { teamId: 'tA', userId: 'src', role: 'jungle' },
+          { teamId: 'tA', userId: 'dst', role: 'jungle' },
+        ],
+      },
+    });
+    const out = retargetSeasonSummary(both, 'src', 'dst');
+    expect(out).toMatchObject({ changed: 0, dropped: 1 });
+    expect(JSON.parse(out.value!).legacy.rosters).toEqual([
+      { teamId: 'tA', userId: 'dst', role: 'jungle' },
+    ]);
+  });
+
+  it('ignores summaries without a legacy archive and unusable values', () => {
+    expect(retargetSeasonSummary('{"standings":[]}', 'src', 'dst').value).toBeNull();
+    expect(retargetSeasonSummary(null, 'src', 'dst').value).toBeNull();
+    expect(retargetSeasonSummary('{oops', 'src', 'dst').value).toBeNull();
+    expect(retargetSeasonSummary(summary, 'nobody', 'dst').value).toBeNull();
+  });
+
+  it('is idempotent', () => {
+    const once = retargetSeasonSummary(summary, 'src', 'dst');
+    expect(retargetSeasonSummary(once.value, 'src', 'dst').value).toBeNull();
+  });
+});
+
+describe('mergeReasons', () => {
+  it('returns translatable codes, never sentences', () => {
+    expect(mergeReasons(['m1', 'm2'], ['g1'], [{ model: 'post', count: 3 }])).toEqual([
+      { code: 'match_conflict', count: 2 },
+      { code: 'game_duplicate', count: 1 },
+      { code: 'blocking', model: 'post', count: 3 },
+    ]);
+    expect(mergeReasons([], [], [])).toEqual([]);
+  });
+});
+
+describe('suggestion floor', () => {
+  it('keeps noise out by default', () => {
+    const rows = [{ id: 'far', username: 'zenithpro' }];
+    expect(similarity('kyle', 'zenithpro')).toBeLessThan(MIN_SUGGESTION_SCORE);
+    expect(suggestTargets({ username: 'kyle', gameNickname: null }, rows)).toEqual([]);
   });
 });

@@ -2,7 +2,11 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { ImportedService } from './imported.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlayerStatsService } from '../stats/player-stats.service';
-import { IMPORTED_EMAIL_DOMAIN, LEGACY_REGISTRY_KEY } from './imported-merge.logic';
+import {
+  IMPORTED_EMAIL_DOMAIN,
+  LEGACY_REGISTRY_BACKUP_KEY,
+  LEGACY_REGISTRY_KEY,
+} from './imported-merge.logic';
 
 /**
  * In-memory Prisma stand-in: a tiny document store with the handful of
@@ -20,11 +24,21 @@ function matches(row: Row, where: any): boolean {
       if (!(cond as any[]).some((c) => matches(row, c))) return false;
       continue;
     }
+    if (key === 'NOT') {
+      if (matches(row, cond)) return false;
+      continue;
+    }
     if (cond && typeof cond === 'object' && !Array.isArray(cond)) {
       const c = cond as any;
       if ('in' in c && !c.in.includes(row[key])) return false;
       if ('not' in c && row[key] === c.not) return false;
       if ('contains' in c && !String(row[key] ?? '').includes(c.contains)) return false;
+      continue;
+    }
+    // Prisma reads a missing boolean column as its default (false), not as
+    // undefined: `isBanned: false` must still match a row that never set it.
+    if (typeof cond === 'boolean') {
+      if (!!row[key] !== cond) return false;
       continue;
     }
     if (row[key] !== cond) return false;
@@ -60,6 +74,10 @@ function makeDb(seed: Record<string, Row[]>) {
           .filter((r) => matches(r, where))
           .map((r) => ({ ...r })),
       findUnique: async ({ where }: any) => {
+        const row = rows().find((r) => matches(r, where));
+        return row ? { ...row } : null;
+      },
+      findFirst: async ({ where }: any = {}) => {
         const row = rows().find((r) => matches(r, where));
         return row ? { ...row } : null;
       },
@@ -165,7 +183,16 @@ const baseSeed = () => ({
     },
   ],
   esportTeam: [{ id: 't1', name: 'ETERNUM ALPHA' }],
-  esportSeason: [{ id: 's1', name: 'Saison 1' }],
+  esportSeason: [
+    {
+      id: 's1',
+      name: 'Saison 1',
+      summary: JSON.stringify({
+        standings: [{ teamId: 't1', points: 9 }],
+        legacy: { rosters: [{ teamId: 't1', userId: SRC, role: 'jungle' }] },
+      }),
+    },
+  ],
   esportTeamMember: [{ id: 'mem1', teamId: 't1', userId: SRC, isCaptain: true }],
   esportMatchPlayer: [{ id: 'mp1', matchId: 'm1', userId: SRC, teamId: 't1' }],
   esportMatch: [
@@ -187,6 +214,16 @@ const baseSeed = () => ({
     {
       id: 'set1',
       key: LEGACY_REGISTRY_KEY,
+      value: JSON.stringify({
+        version: 1,
+        players: { '11': SRC },
+        teamMembers: { '1:11': 'mem1' },
+        matches: { '1': 'm1' },
+      }),
+    },
+    {
+      id: 'set2',
+      key: LEGACY_REGISTRY_BACKUP_KEY,
       value: JSON.stringify({ version: 1, players: { '11': SRC }, matches: { '1': 'm1' } }),
     },
   ],
@@ -221,6 +258,7 @@ describe('ImportedService.preview', () => {
     expect(plan.moves.gamePicks).toBe(2);
     expect(plan.moves.matchMvp).toBe(1);
     expect(plan.moves.registryEntries).toEqual(['11']);
+    expect(plan.moves.seasonArchives).toBe(1);
   });
 
   it('drops a membership the target already holds', async () => {
@@ -239,6 +277,7 @@ describe('ImportedService.preview', () => {
     const { service } = makeService(seed);
     const plan = await service.preview(SRC, DST);
     expect(plan.canMerge).toBe(false);
+    expect(plan.reasons).toEqual([{ code: 'match_conflict', count: 1 }]);
     expect(plan.conflicts).toEqual([{ matchId: 'm1', seasonName: 'Saison 1' }]);
     await expect(service.merge(SRC, DST, actor)).rejects.toThrow(ConflictException);
   });
@@ -249,7 +288,9 @@ describe('ImportedService.preview', () => {
     const { service } = makeService(seed);
     const plan = await service.preview(SRC, DST);
     expect(plan.canMerge).toBe(false);
-    expect(plan.blocking).toEqual([{ model: 'post', label: 'publications', count: 1 }]);
+    expect(plan.blocking).toEqual([{ model: 'post', count: 1 }]);
+    // Codes, never sentences: the admin interface is bilingual.
+    expect(plan.reasons).toEqual([{ code: 'blocking', model: 'post', count: 1 }]);
   });
 
   it('refuses a target that is itself an unclaimed imported profile', async () => {
@@ -289,8 +330,17 @@ describe('ImportedService.merge', () => {
     expect(games[0].mvpUserId).toBe(DST);
     expect(games[0].picks[0].userId).toBe(DST);
     expect(games[0].picks[0].hero).toBe('Lancelot');
-    expect(JSON.parse(s.appSetting[0].value).players).toEqual({ '11': DST });
-    expect(JSON.parse(s.appSetting[0].value).matches).toEqual({ '1': 'm1' });
+    const reg = JSON.parse(s.appSetting[0].value);
+    expect(reg.players).toEqual({ '11': DST });
+    expect(reg.matches).toEqual({ '1': 'm1' });
+    // The membership row moved, so its registry entry still points at it.
+    expect(reg.teamMembers).toEqual({ '1:11': 'mem1' });
+    // The backup follows: restoring it must never resurrect the placeholder.
+    expect(JSON.parse(s.appSetting[1].value).players).toEqual({ '11': DST });
+
+    const summary = JSON.parse(s.esportSeason[0].summary);
+    expect(summary.legacy.rosters).toEqual([{ teamId: 't1', userId: DST, role: 'jungle' }]);
+    expect(summary.standings).toEqual([{ teamId: 't1', points: 9 }]);
 
     expect(stats.recomputeUsers).toHaveBeenCalledWith([DST]);
     expect(s.adminLog).toHaveLength(1);
@@ -316,10 +366,49 @@ describe('ImportedService.merge', () => {
     ]);
   });
 
-  it('is not replayable once the placeholder is gone', async () => {
+  it('prunes the registry entry of a membership it drops', async () => {
+    const seed = baseSeed();
+    seed.esportTeamMember.push({ id: 'mem2', teamId: 't1', userId: DST, isCaptain: false });
+    const { service, prisma } = makeService(seed);
+    await service.merge(SRC, DST, actor);
+    // `mem1` was dropped (the target already held t1), so nothing may still map to it.
+    expect(JSON.parse(prisma.__store.appSetting[0].value).teamMembers).toEqual({});
+    expect(prisma.__store.esportTeamMember.map((m: any) => m.id)).toEqual(['mem2']);
+  });
+
+  it('answers 409 when a concurrent merge takes a row away, and 404 when the source is gone', async () => {
+    const raced = makeService();
+    const boom: any = new Error('record not found');
+    boom.code = 'P2025';
+    raced.prisma.$transaction = async () => {
+      throw boom;
+    };
+    await expect(raced.service.merge(SRC, DST, actor)).rejects.toThrow(ConflictException);
+    // The source really went away in the meantime: 404, not 409.
+    const gone = makeService();
+    gone.prisma.$transaction = async () => {
+      gone.prisma.__store.user = gone.prisma.__store.user.filter((u: any) => u.id !== SRC);
+      throw boom;
+    };
+    await expect(gone.service.merge(SRC, DST, actor)).rejects.toThrow(NotFoundException);
+  });
+
+  it('replays into a counter recompute once the placeholder is gone', async () => {
+    const { service, prisma, stats } = makeService();
+    await service.merge(SRC, DST, actor);
+    stats.recomputeUsers.mockClear();
+
+    const again = await service.merge(SRC, DST, actor);
+    expect(again.alreadyMerged).toBe(true);
+    expect(again.target.id).toBe(DST);
+    expect(stats.recomputeUsers).toHaveBeenCalledWith([DST]);
+    expect(prisma.__store.adminLog.map((l: any) => l.action)).toContain('imported.merge.replay');
+  });
+
+  it('still refuses a replay whose target does not exist either', async () => {
     const { service } = makeService();
     await service.merge(SRC, DST, actor);
-    await expect(service.merge(SRC, DST, actor)).rejects.toThrow(NotFoundException);
+    await expect(service.merge(SRC, 'c'.repeat(24), actor)).rejects.toThrow(NotFoundException);
   });
 });
 
@@ -353,6 +442,12 @@ describe('ImportedService.setExpectedEmail', () => {
     await expect(service.setExpectedEmail(SRC, 'kyle@gmail.com', actor)).rejects.toThrow(
       ConflictException,
     );
+    // Held as somebody's `googleEmail`: Google login would never adopt it here.
+    const withGoogleEmail = baseSeed();
+    (withGoogleEmail.user[1] as any).googleEmail = 'other.person@gmail.com';
+    await expect(
+      makeService(withGoogleEmail).service.setExpectedEmail(SRC, 'other.person@gmail.com', actor),
+    ).rejects.toThrow(ConflictException);
     await expect(service.setExpectedEmail(SRC, 'nope', actor)).rejects.toThrow(BadRequestException);
 
     const seed = baseSeed();

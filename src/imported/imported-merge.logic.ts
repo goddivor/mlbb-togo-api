@@ -33,6 +33,14 @@ export const IMPORTED_EMAIL_DOMAIN = '@imported.mlbbtogo.local';
  */
 export const LEGACY_REGISTRY_KEY = 'legacy.import';
 
+/**
+ * Backup copy the import writes before every run. It holds the same
+ * `legacy id -> our id` mapping, so it must follow the merge: restoring a
+ * backup that still names the deleted placeholder would make the next run
+ * recreate it and take the history back off the real account.
+ */
+export const LEGACY_REGISTRY_BACKUP_KEY = 'legacy.import.backup';
+
 // ---------------------------------------------------------------------------
 // Identity of an imported profile
 // ---------------------------------------------------------------------------
@@ -159,6 +167,15 @@ export type CandidateLike = {
 export type ScoredCandidate = { id: string; score: number; matchedOn: string };
 
 /**
+ * Below this, a name match is noise (`kyle` against `zenith` scores 0.17 by
+ * sheer letter overlap), so it is never offered as a suggestion.
+ */
+export const MIN_SUGGESTION_SCORE = 0.4;
+
+/** Above this the two names are close enough for the UI to stop hedging. */
+export const STRONG_SUGGESTION_SCORE = 0.6;
+
+/**
  * Rank real accounts against an imported profile. The profile's pseudo lives
  * in `gameNickname` (the import writes it there) and in `username`; both are
  * compared with both fields of every candidate, and the best pair wins.
@@ -167,7 +184,7 @@ export function suggestTargets(
   profile: Pick<ProfileLike, 'username' | 'gameNickname'>,
   candidates: CandidateLike[],
   limit = 5,
-  minScore = 0.45,
+  minScore = MIN_SUGGESTION_SCORE,
 ): ScoredCandidate[] {
   const left = [profile.gameNickname, profile.username].filter(Boolean) as string[];
   const scored = candidates.map((c) => {
@@ -319,38 +336,112 @@ export function gamesWouldDuplicate(
 // ---------------------------------------------------------------------------
 
 /**
- * Point every legacy player id that resolved to the placeholder at the target
- * account. The document is rewritten field by field so anything this branch
- * does not know about (other maps, a future `version`) survives untouched.
+ * Rewrite the import registry around a merge.
+ *
+ * Two things change: every legacy player id that resolved to the placeholder
+ * now resolves to the target account (so a later import run adopts the real
+ * account instead of recreating the placeholder), and the entries pointing at
+ * rows the merge deleted are pruned (a duplicate `EsportTeamMember` the target
+ * already had) so no mapping survives its row.
+ *
+ * The document is rewritten field by field so anything this branch does not
+ * know about — other maps, a future `version` — survives untouched, and every
+ * map is walked, not just the ones listed today.
  *
  * `value` is `null` when nothing changed, so the caller can skip the write.
  */
-export function retargetRegistryPlayers(
+export function retargetRegistry(
   raw: string | null | undefined,
   fromUserId: string,
   toUserId: string,
-): { value: string | null; legacyIds: string[] } {
-  if (!raw) return { value: null, legacyIds: [] };
+  deletedIds: Iterable<string> = [],
+): { value: string | null; legacyIds: string[]; pruned: number } {
+  const none = { value: null, legacyIds: [] as string[], pruned: 0 };
+  if (!raw) return none;
   let doc: any;
   try {
     doc = JSON.parse(raw);
   } catch {
-    return { value: null, legacyIds: [] };
+    return none;
   }
-  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { value: null, legacyIds: [] };
-  const players = doc.players;
-  if (!players || typeof players !== 'object' || Array.isArray(players)) {
-    return { value: null, legacyIds: [] };
-  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return none;
+
+  const gone = new Set(Array.from(deletedIds).filter(Boolean));
   const legacyIds: string[] = [];
-  for (const [legacyId, mapped] of Object.entries(players as Record<string, unknown>)) {
-    if (mapped === fromUserId) {
-      players[legacyId] = toUserId;
-      legacyIds.push(legacyId);
+  let pruned = 0;
+
+  for (const [name, map] of Object.entries(doc)) {
+    if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
+    for (const [legacyId, mapped] of Object.entries(map as Record<string, unknown>)) {
+      if (typeof mapped !== 'string') continue;
+      if (name === 'players' && mapped === fromUserId) {
+        (map as any)[legacyId] = toUserId;
+        legacyIds.push(legacyId);
+      } else if (gone.has(mapped)) {
+        delete (map as any)[legacyId];
+        pruned++;
+      }
     }
   }
-  if (!legacyIds.length) return { value: null, legacyIds: [] };
-  return { value: JSON.stringify(doc), legacyIds };
+  if (!legacyIds.length && !pruned) return none;
+  return { value: JSON.stringify(doc), legacyIds, pruned };
+}
+
+// ---------------------------------------------------------------------------
+// Season archives (`EsportSeason.summary.legacy.rosters`, written by #153)
+// ---------------------------------------------------------------------------
+
+/**
+ * Repoint the archived rosters of a season summary. The import stores the
+ * historical roster of every season under `summary.legacy.rosters` as
+ * `{ teamId, userId, role }`, which no foreign key protects: left alone, those
+ * lines would keep naming the deleted placeholder.
+ *
+ * A line is dropped instead of moved when the target is already on the same
+ * team in the same roster, so the archive never lists him twice. Everything
+ * else in the summary is preserved byte for byte.
+ */
+export function retargetSeasonSummary(
+  raw: string | null | undefined,
+  fromUserId: string,
+  toUserId: string,
+): { value: string | null; changed: number; dropped: number } {
+  const none = { value: null, changed: 0, dropped: 0 };
+  if (!raw) return none;
+  let doc: any;
+  try {
+    doc = JSON.parse(raw);
+  } catch {
+    return none;
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return none;
+  const rosters = doc?.legacy?.rosters;
+  if (!Array.isArray(rosters)) return none;
+
+  const held = new Set(
+    rosters
+      .filter((r: any) => r && r.userId === toUserId)
+      .map((r: any) => String(r.teamId ?? '')),
+  );
+  const kept: any[] = [];
+  let changed = 0;
+  let dropped = 0;
+  for (const line of rosters) {
+    if (!line || typeof line !== 'object' || line.userId !== fromUserId) {
+      kept.push(line);
+      continue;
+    }
+    if (held.has(String(line.teamId ?? ''))) {
+      dropped++;
+      continue;
+    }
+    held.add(String(line.teamId ?? ''));
+    kept.push({ ...line, userId: toUserId });
+    changed++;
+  }
+  if (!changed && !dropped) return none;
+  doc.legacy.rosters = kept;
+  return { value: JSON.stringify(doc), changed, dropped };
 }
 
 // ---------------------------------------------------------------------------
@@ -368,17 +459,17 @@ export function retargetRegistryPlayers(
  * Keyed by the Prisma model, valued by the `where` used to count.
  */
 export const BLOCKING_COLLECTIONS = [
-  { model: 'post', label: 'publications', field: 'authorId' },
-  { model: 'comment', label: 'commentaires', field: 'authorId' },
-  { model: 'postLike', label: 'mentions j’aime', field: 'userId' },
-  { model: 'communityBuild', label: 'builds communautaires', field: 'authorId' },
-  { model: 'communityBuildLike', label: 'j’aime de builds', field: 'userId' },
-  { model: 'message', label: 'messages', field: 'senderId' },
-  { model: 'teamRequest', label: 'demandes d’équipe', field: 'requesterId' },
-  { model: 'recruitmentApplication', label: 'candidatures', field: 'userId' },
-  { model: 'draftRegistration', label: 'inscriptions draft', field: 'userId' },
-  { model: 'draftTeamMember', label: 'équipes de draft', field: 'userId' },
-  { model: 'pickBanDraft', label: 'drafts Pick & Ban', field: 'ownerId' },
+  { model: 'post', field: 'authorId' },
+  { model: 'comment', field: 'authorId' },
+  { model: 'postLike', field: 'userId' },
+  { model: 'communityBuild', field: 'authorId' },
+  { model: 'communityBuildLike', field: 'userId' },
+  { model: 'message', field: 'senderId' },
+  { model: 'teamRequest', field: 'requesterId' },
+  { model: 'recruitmentApplication', field: 'userId' },
+  { model: 'draftRegistration', field: 'userId' },
+  { model: 'draftTeamMember', field: 'userId' },
+  { model: 'pickBanDraft', field: 'ownerId' },
 ] as const;
 
 /**
@@ -401,3 +492,32 @@ export const DROPPED_COLLECTIONS = [
   { model: 'gameMatch', field: 'userId' },
   { model: 'communityBuildQuota', field: 'userId' },
 ] as const;
+
+// ---------------------------------------------------------------------------
+// Refusal reasons
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a merge is refused, as a code the UI translates. The API never returns a
+ * ready-made sentence here: the admin interface is bilingual, and a French
+ * string baked in the backend leaks into the English UI.
+ */
+export type MergeReason =
+  /** The target already has a match sheet on `count` of the source's matches. */
+  | { code: 'match_conflict'; count: number }
+  /** `count` games already list both accounts. */
+  | { code: 'game_duplicate'; count: number }
+  /** The placeholder holds `count` rows of authored content in `model`. */
+  | { code: 'blocking'; model: string; count: number };
+
+export function mergeReasons(
+  conflicts: readonly unknown[],
+  duplicatedGames: readonly unknown[],
+  blocking: readonly { model: string; count: number }[],
+): MergeReason[] {
+  const out: MergeReason[] = [];
+  if (conflicts.length) out.push({ code: 'match_conflict', count: conflicts.length });
+  if (duplicatedGames.length) out.push({ code: 'game_duplicate', count: duplicatedGames.length });
+  for (const b of blocking) out.push({ code: 'blocking', model: b.model, count: b.count });
+  return out;
+}
