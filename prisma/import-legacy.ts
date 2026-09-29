@@ -84,6 +84,8 @@ type Options = {
   report: string | null;
   allowMissingRegistry: boolean;
   forceUnlock: boolean;
+  /** Explicit opt-in to run against the production (non-local) database. */
+  allowRemote: boolean;
 };
 
 function parseArgs(argv: string[]): Options {
@@ -93,6 +95,7 @@ function parseArgs(argv: string[]): Options {
     report: null,
     allowMissingRegistry: false,
     forceUnlock: false,
+    allowRemote: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -101,10 +104,12 @@ function parseArgs(argv: string[]): Options {
     else if (arg === '--dry-run') opts.dryRun = true;
     else if (arg === '--allow-missing-registry') opts.allowMissingRegistry = true;
     else if (arg === '--force-unlock') opts.forceUnlock = true;
+    else if (arg === '--allow-remote-database') opts.allowRemote = true;
     else if (arg === '--help' || arg === '-h') {
       console.log(
         'usage: npm run import:legacy -- [--dump <dir>] [--report <file.md>] [--dry-run]\n' +
-          '                               [--allow-missing-registry] [--force-unlock]',
+          '                               [--allow-missing-registry] [--force-unlock]\n' +
+          '                               [--allow-remote-database]  (production, deliberate)',
       );
       process.exit(0);
     } else throw new Error(`Unknown option: ${arg}`);
@@ -118,15 +123,18 @@ function parseArgs(argv: string[]): Options {
  * escape hatch (the release manager imports production by hand, after the
  * owner has read the report).
  */
-function assertLocalDatabase() {
+function assertLocalDatabase(allowRemote: boolean) {
   const url = process.env.DATABASE_URL || '';
   const host = (url.match(/^mongodb(?:\+srv)?:\/\/(?:[^@/]*@)?([^/:?,]+)/) || [])[1] || '';
-  if (!['localhost', '127.0.0.1', '::1', 'mongo', 'mongodb'].includes(host)) {
+  if (['localhost', '127.0.0.1', '::1', 'mongo', 'mongodb'].includes(host)) return;
+  if (!allowRemote) {
     console.error(
-      `Refusing to import into "${host || 'unknown host'}": this command only runs against a local database.`,
+      `Refusing to import into "${host || 'unknown host'}": this command only runs against a local ` +
+        'database. Pass --allow-remote-database to run the production import deliberately.',
     );
     process.exit(1);
   }
+  console.warn(`⚠ Remote database allowed on purpose: ${host || 'unknown host'}`);
 }
 
 function readTable<T>(dir: string, name: string): T[] {
@@ -359,7 +367,7 @@ const date = (v: string | null | undefined): Date | null => {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  assertLocalDatabase();
+  assertLocalDatabase(opts.allowRemote);
   const report = new Report();
 
   // ---- Read the dump -----------------------------------------------------
