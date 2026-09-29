@@ -163,7 +163,7 @@ class Report {
   }[] = [];
   readonly counts = new Map<string, Counter>();
   readonly notes: string[] = [];
-  readonly merges: { key: string; variants: string[]; username: string }[] = [];
+  readonly merges: { key: string; variants: string[]; username: string; source: string }[] = [];
   readonly collisions: {
     pseudo: string;
     username: string;
@@ -215,10 +215,17 @@ class Report {
     lines.push('');
     if (!this.merges.length) lines.push('Aucune variante détectée.');
     else {
-      lines.push('| Variantes | Profil créé |');
-      lines.push('| --- | --- |');
+      lines.push('| Variantes | Profil créé | Origine de la fusion |');
+      lines.push('| --- | --- | --- |');
+      const origin: Record<string, string> = {
+        normalization: 'normalisation',
+        owner: 'arbitrage du propriétaire',
+        both: 'normalisation + arbitrage du propriétaire',
+      };
       for (const m of this.merges) {
-        lines.push(`| ${m.variants.map((v) => `\`${v}\``).join(' + ')} | \`${m.username}\` |`);
+        lines.push(
+          `| ${m.variants.map((v) => `\`${v}\``).join(' + ')} | \`${m.username}\` | ${origin[m.source] ?? m.source} |`,
+        );
       }
     }
     lines.push('');
@@ -702,7 +709,12 @@ async function main() {
   for (const person of people) {
     const a = assignments.get(person.key)!;
     if (person.variants.length > 1) {
-      report.merges.push({ key: person.key, variants: person.variants, username: a.username });
+      report.merges.push({
+        key: person.key,
+        variants: person.variants,
+        username: a.username,
+        source: person.mergeSource ?? 'normalization',
+      });
     }
     let found = findProfile(person);
     if (!found) {
@@ -1317,15 +1329,13 @@ async function main() {
     'likes et commentaires anonymes (colonne `actor` libre) : aucun compte à rattacher',
   );
   const spellings = new Set(playersSrc.map((p) => p.name.trim()));
+  const byOwner = report.merges.filter((m) => m.source !== 'normalization').length;
   report.note(
     `${playersSrc.length} lignes \`players\` (une par joueur et par saison), ${spellings.size} orthographes ` +
-      `distinctes, ${people.length} personnes après normalisation. Le brief annonçait 55 personnes : ` +
-      'la règle « une personne par pseudo normalisé » en donne 51, car 9 groupes de variantes sont fusionnés.',
-  );
-  report.note(
-    'Pseudos que la normalisation ne fusionne pas alors qu’il s’agit peut-être des mêmes personnes, ' +
-      'à arbitrer à la main : `Gabrielle` / `Gabrielle~555` / `Gabriellle~555`, `Moon` / `MOON@4215`, ' +
-      '`Cresus` / `It is Cresus`, `Atomic Weight` / `TheAtomicWeight`, `PIERRO SMK` / `Pierrosmoke`.',
+      `distinctes, ${people.length} personnes. Le brief annonçait 55 personnes : la normalisation du pseudo en donne 51, ` +
+      `et les ${byOwner} groupes de pseudos voisins que le propriétaire a arbitrés (\`PLAYER_ALIAS_GROUPS\` dans ` +
+      '`legacy-import.logic.ts`) ramènent le total à ' +
+      `${people.length}.`,
   );
   report.note(
     'Portée du script : il n’insère que des lignes neuves et ne modifie ou ne supprime que celles dont il ' +

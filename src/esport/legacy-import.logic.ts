@@ -129,6 +129,33 @@ export function laneOf(role: string | null | undefined): string | null {
   return LANE_BY_SOURCE_ROLE[normalizeKey(role)] ?? null;
 }
 
+/**
+ * Look-alike pseudos that the normalization cannot merge but that are the same
+ * player. The owner arbitrated these groups by hand (same lane, coherent team
+ * path across seasons). The first entry of each group is the canonical pseudo
+ * shown on the profile. An alias only ever matches the exact spellings listed
+ * here, after the usual normalization: it never swallows an unrelated pseudo.
+ */
+export const PLAYER_ALIAS_GROUPS: readonly (readonly string[])[] = [
+  ['Gabrielle', 'Gabrielle~555', 'Gabriellle~555'],
+  ['Moon', 'MOON@4215'],
+  ['Cresus', 'It is Cresus'],
+  ['Atomic Weight', 'TheAtomicWeight'],
+  ['PIERRO SMK', 'Pierrosmoke'],
+];
+
+/** Normalized spelling -> canonical pseudo, built from the alias groups. */
+const ALIAS_CANONICAL: ReadonlyMap<string, string> = new Map(
+  PLAYER_ALIAS_GROUPS.flatMap((group) => group.map((name) => [normalizeKey(name), group[0]] as const)),
+);
+
+/** The canonical pseudo the owner assigned to `name`, or null when it is not an alias. */
+export function canonicalAlias(name: string | null | undefined): string | null {
+  return ALIAS_CANONICAL.get(normalizeKey(name)) ?? null;
+}
+
+export type MergeSource = 'normalization' | 'owner' | 'both';
+
 export type ImportedPerson = {
   /** Normalized dedupe key. */
   key: string;
@@ -142,19 +169,24 @@ export type ImportedPerson = {
   /** Lane of the most recent row. */
   lane: string | null;
   title: string | null;
+  /** Why several spellings were merged (null for a single spelling). */
+  mergeSource: MergeSource | null;
 };
 
 /**
- * One person per normalized pseudo. Their table holds one row per player and
+ * One person per normalized pseudo, plus the owner's alias groups. Their table holds one row per player and
  * per season, and the spelling drifts between seasons (`Kyle_Ghost` /
  * `Kyle_ghost`), so the latest row wins for the display fields.
  */
 export function dedupePlayers(rows: LegacyPlayer[]): ImportedPerson[] {
   const byKey = new Map<string, ImportedPerson>();
+  const aliased = new Set<string>();
   const ordered = [...rows].sort((a, b) => a.id - b.id);
   for (const row of ordered) {
-    const key = normalizeKey(row.name);
-    if (!key) continue;
+    const ownKey = normalizeKey(row.name);
+    if (!ownKey) continue;
+    const canonical = canonicalAlias(row.name);
+    const key = canonical ? normalizeKey(canonical) : ownKey;
     const person = byKey.get(key) ?? {
       key,
       displayName: row.name.trim(),
@@ -163,17 +195,29 @@ export function dedupePlayers(rows: LegacyPlayer[]): ImportedPerson[] {
       avatar: null,
       lane: null,
       title: null,
+      mergeSource: null,
     };
     // Variants keep the raw spelling (trailing space included): the report
     // must show exactly what was merged.
     if (!person.variants.includes(row.name)) person.variants.push(row.name);
     person.sourceIds.push(row.id);
-    // Latest row wins: it reflects the current roster.
-    person.displayName = row.name.trim();
+    // Latest row wins for the display name, except for an arbitrated group
+    // whose canonical pseudo is fixed by the owner.
+    person.displayName = canonical ?? row.name.trim();
+    // `aliasOnly` = spellings that the normalization alone would keep apart.
+    if (canonical && ownKey !== key) aliased.add(key);
     person.avatar = row.avatar_url || person.avatar;
     person.lane = laneOf(row.role) ?? person.lane;
     person.title = row.custom_title || person.title;
     byKey.set(key, person);
+  }
+  for (const [key, person] of byKey) {
+    if (person.variants.length < 2) continue;
+    // Spellings sharing a normalized form were merged by the normalization.
+    const forms = new Set(person.variants.map((v) => normalizeKey(v)));
+    const byNormalization = forms.size < person.variants.length;
+    const byOwner = aliased.has(key);
+    person.mergeSource = byOwner && byNormalization ? 'both' : byOwner ? 'owner' : 'normalization';
   }
   return Array.from(byKey.values());
 }

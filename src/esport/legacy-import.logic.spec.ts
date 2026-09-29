@@ -6,6 +6,8 @@ import {
   buildHeroIndex,
   buildMatchPlayers,
   dedupePlayers,
+  canonicalAlias,
+  PLAYER_ALIAS_GROUPS,
   dedupeTeams,
   formatOf,
   IMPORTED_EMAIL_DOMAIN,
@@ -380,5 +382,63 @@ describe('idempotence of the mapping', () => {
     ];
     expect(buildGames(games)).toEqual(buildGames(games));
     expect(buildMatchPlayers(buildGames(games))).toEqual(buildMatchPlayers(buildGames(games)));
+  });
+});
+
+describe('owner alias table', () => {
+  const row = (id: number, name: string, role = 'Roam') =>
+    ({ id, name, role, avatar_url: null, custom_title: null }) as any;
+
+  it('merges each arbitrated group into its canonical pseudo', () => {
+    const people = dedupePlayers([
+      row(1, 'Gabriellle~555'),
+      row(2, 'Gabrielle~555'),
+      row(3, 'Gabrielle'),
+      row(4, 'MOON@4215'),
+      row(5, 'Moon'),
+      row(6, 'It is Cresus'),
+      row(7, 'Cresus'),
+      row(8, 'TheAtomicWeight'),
+      row(9, 'Atomic Weight'),
+      row(10, 'Pierrosmoke'),
+      row(11, 'PIERRO SMK'),
+    ]);
+    expect(people.map((p) => p.displayName).sort()).toEqual(
+      ['Atomic Weight', 'Cresus', 'Gabrielle', 'Moon', 'PIERRO SMK'].sort(),
+    );
+    expect(people.every((p) => p.mergeSource === 'owner')).toBe(true);
+    expect(people.find((p) => p.displayName === 'Gabrielle')?.sourceIds).toEqual([1, 2, 3]);
+  });
+
+  it('never swallows an unrelated pseudo', () => {
+    const people = dedupePlayers([
+      row(1, 'Gabrielle'),
+      row(2, 'Gabriel'),
+      row(3, 'Moonlight'),
+      row(4, 'Moon'),
+      row(5, 'Cresus2'),
+      row(6, 'Cresus'),
+      row(7, 'Atomic'),
+      row(8, 'Pierro'),
+    ]);
+    expect(people).toHaveLength(8);
+    expect(canonicalAlias('Gabriel')).toBeNull();
+    expect(canonicalAlias('Moonlight')).toBeNull();
+    expect(canonicalAlias('Pierro')).toBeNull();
+  });
+
+  it('tells a normalization merge from an owner merge, and both', () => {
+    const [plain] = dedupePlayers([row(1, 'Kyle_Ghost'), row(2, 'Kyle_ghost')]);
+    expect(plain.mergeSource).toBe('normalization');
+    const [both] = dedupePlayers([row(1, 'moon'), row(2, 'Moon'), row(3, 'MOON@4215')]);
+    expect(both.mergeSource).toBe('both');
+    const [single] = dedupePlayers([row(1, 'Solo')]);
+    expect(single.mergeSource).toBeNull();
+  });
+
+  it('keeps every spelling unique across the groups', () => {
+    const all = PLAYER_ALIAS_GROUPS.flat().map((n) => n.toLowerCase());
+    expect(new Set(all).size).toBe(all.length);
+    expect(PLAYER_ALIAS_GROUPS).toHaveLength(5);
   });
 });
