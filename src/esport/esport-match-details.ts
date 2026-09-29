@@ -281,14 +281,26 @@ export function carryOverPicks(
     const sent = rows[i];
     return !!sent && typeof sent === 'object' && (sent as Record<string, unknown>).picks !== undefined;
   };
-  // A different length means games were added or removed: positions no longer
-  // line up with the stored series, so nothing may be carried over.
-  const alignable = rows.length === stored.length && games.length === stored.length;
   return games.map((g, i) => {
-    if (mentionsPicks(i) || !alignable) return g;
-    const previous = stored[i]?.picks;
-    return previous?.length ? { ...g, picks: previous } : g;
+    if (mentionsPicks(i)) return g;
+    const previous = stored[i];
+    // The position alone proves nothing: a reordered series has the same
+    // length and would hand game 1 the draft of game 3. The stored game must
+    // be identical on every field the caller did send, otherwise it is a
+    // different game and its draft stays where it was.
+    if (!previous?.picks?.length || !sameGame(g, previous)) return g;
+    return { ...g, picks: previous.picks };
   });
+}
+
+/** Two games at the same position describing the same played game. */
+function sameGame(a: MatchGame, b: MatchGame): boolean {
+  return (
+    a.winnerTeamId === b.winnerTeamId &&
+    a.duration === b.duration &&
+    a.screenshot === b.screenshot &&
+    a.mvpUserId === b.mvpUserId
+  );
 }
 
 /**
