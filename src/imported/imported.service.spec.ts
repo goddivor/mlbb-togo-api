@@ -124,8 +124,8 @@ function makeDb(seed: Record<string, Row[]>) {
   return prisma;
 }
 
-const SRC = 'src-id';
-const DST = 'dst-id';
+const SRC = 'a'.repeat(24);
+const DST = 'b'.repeat(24);
 
 const baseSeed = () => ({
   user: [
@@ -267,9 +267,9 @@ describe('ImportedService.preview', () => {
   it('refuses a source that is not an imported profile, a missing target and self-merge', async () => {
     const { service } = makeService();
     await expect(service.preview(DST, SRC)).rejects.toThrow(BadRequestException);
-    await expect(service.preview(SRC, 'ghost')).rejects.toThrow(NotFoundException);
+    await expect(service.preview(SRC, 'c'.repeat(24))).rejects.toThrow(NotFoundException);
     await expect(service.preview(SRC, SRC)).rejects.toThrow(BadRequestException);
-    await expect(service.preview('ghost', DST)).rejects.toThrow(NotFoundException);
+    await expect(service.preview('c'.repeat(24), DST)).rejects.toThrow(NotFoundException);
   });
 });
 
@@ -389,5 +389,25 @@ describe('ImportedService.list and candidates', () => {
     const out = await service.candidates(SRC, '');
     expect(out.map((c: any) => c.id)).toEqual([DST]);
     expect(out[0].score).toBeGreaterThan(0.8);
+  });
+});
+
+describe('ImportedService guards (review)', () => {
+  it('refuses a claimed source (Google or game account) and a banned or malformed target', async () => {
+    const claimed = baseSeed();
+    claimed.user[0].googleId = 'g-9';
+    await expect(makeService(claimed).service.preview(SRC, DST)).rejects.toThrow(BadRequestException);
+
+    const game = baseSeed();
+    game.user[0].mlbbRoleId = 42 as any;
+    await expect(makeService(game).service.merge(SRC, DST, actor)).rejects.toThrow(BadRequestException);
+
+    const banned = baseSeed();
+    (banned.user[1] as any).isBanned = true;
+    await expect(makeService(banned).service.preview(SRC, DST)).rejects.toThrow(BadRequestException);
+
+    const { service } = makeService();
+    await expect(service.preview(SRC, 'x')).rejects.toThrow(BadRequestException);
+    await expect(service.candidates('zzz', '')).rejects.toThrow(BadRequestException);
   });
 });

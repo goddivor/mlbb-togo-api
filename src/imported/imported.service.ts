@@ -44,6 +44,7 @@ const PROFILE_SELECT = {
   losses: true,
   mvpCount: true,
   isSystemAccount: true,
+  isBanned: true,
   createdAt: true,
 };
 
@@ -432,6 +433,13 @@ export class ImportedService {
   // Internals
   // -------------------------------------------------------------------------
 
+  /** Malformed ids would make Prisma throw (500) instead of answering 400. */
+  private assertObjectId(id: string) {
+    if (!/^[0-9a-f]{24}$/i.test(String(id ?? ''))) {
+      throw new BadRequestException('Identifiant invalide.');
+    }
+  }
+
   private publicProfile(u: any) {
     return {
       id: u.id,
@@ -453,6 +461,7 @@ export class ImportedService {
   }
 
   private async loadImported(id: string): Promise<ProfileLike & Record<string, any>> {
+    this.assertObjectId(id);
     const user = await this.prisma.user.findUnique({ where: { id }, select: PROFILE_SELECT });
     if (!user) throw new NotFoundException('Profil introuvable.');
     if (!isImportedProfile(user)) {
@@ -463,10 +472,19 @@ export class ImportedService {
 
   private async loadPair(profileId: string, targetId: string) {
     if (!targetId) throw new BadRequestException('Compte cible manquant.');
+    this.assertObjectId(targetId);
     if (profileId === targetId) {
       throw new BadRequestException('Le profil importé et le compte cible sont le même compte.');
     }
     const source = await this.loadImported(profileId);
+    // A Google or game account means somebody already signed in with this
+    // profile: the merge would delete his identity, his XP and his progression
+    // (the dropped collections are only residue for an unclaimed placeholder).
+    if (source.googleId || source.mlbbRoleId) {
+      throw new BadRequestException(
+        'Ce profil a déjà été réclamé (compte Google ou compte de jeu) : sa fusion supprimerait la connexion et la progression de son propriétaire.',
+      );
+    }
     const target = await this.prisma.user.findUnique({
       where: { id: targetId },
       select: PROFILE_SELECT,
@@ -474,6 +492,9 @@ export class ImportedService {
     if (!target) throw new NotFoundException('Compte cible introuvable.');
     if (target.isSystemAccount) {
       throw new BadRequestException('Un compte technique ne peut pas recevoir un profil importé.');
+    }
+    if (target.isBanned) {
+      throw new BadRequestException('Un compte banni ne peut pas recevoir un profil importé.');
     }
     if (isImportedProfile(target as any) && !isAdoptedProfile(target as any)) {
       throw new BadRequestException(
