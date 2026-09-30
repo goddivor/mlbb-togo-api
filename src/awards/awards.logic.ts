@@ -430,3 +430,15 @@ export function seasonRosterTeams(summary: unknown): Map<string, string> {
   }
   return out;
 }
+
+/**
+ * Awards whose winner has no `teamId` (the legacy import never wrote one) get
+ * the team he played for in that season, from the season roster archive.
+ */
+export function creditArchivedTeams<T extends { userId?: string | null; teamId?: string | null }>(
+  awards: T[],
+  summary: unknown,
+): T[] {
+  const archived = seasonRosterTeams(summary);
+  return awards.map((a) => (a.teamId || !a.userId ? a : { ...a, teamId: archived.get(a.userId) ?? null }));
+}

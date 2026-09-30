@@ -25,6 +25,7 @@ import {
   isFixedCategory,
   normalizePodium,
   parsePodiums,
+  creditArchivedTeams,
   seasonRosterTeams,
   serializeAward,
   suggestAwards,
@@ -310,10 +311,7 @@ export class AwardsService {
     // A winner may have no `teamId` (the legacy import never wrote one) or have
     // left his team since: the season archive holds the roster of THAT season,
     // which is the team to credit (#164).
-    const archived = seasonRosterTeams(season.summary);
-    const resolved = awards.map((a) =>
-      a.teamId || !a.userId ? a : { ...a, teamId: archived.get(a.userId) ?? null },
-    );
+    const resolved = creditArchivedTeams(awards, season.summary);
     const [users, teams] = await Promise.all([
       this.userRefs(resolved.map((a) => a.userId)),
       this.teamRefs(resolved.map((a) => a.teamId)),
@@ -340,16 +338,18 @@ export class AwardsService {
       this.prisma.sponsor.findMany({ where: { seasonIds: { hasSome: ids }, isActive: true }, orderBy: { sort: 'asc' } }),
     ]);
     const byId = new Map(rows.map((r) => [r.id, r]));
+    // Same as the ceremony: credit the team of THAT season to winners without one (#164).
+    const credited = awards.map((a) => creditArchivedTeams([a], byId.get(a.seasonId)?.summary)[0]);
     const [users, teams] = await Promise.all([
-      this.userRefs(awards.map((a) => a.userId)),
-      this.teamRefs(awards.map((a) => a.teamId)),
+      this.userRefs(credited.map((a) => a.userId)),
+      this.teamRefs(credited.map((a) => a.teamId)),
     ]);
     const seasons = [];
     for (const s of closed) {
       const raw = byId.get(s.id);
       if (!raw) continue;
       const podiums = await this.podiumsOf(raw);
-      const own = awards.filter((a) => a.seasonId === s.id).sort(compareAwards).map((a) => serializeAward(a, users, teams));
+      const own = credited.filter((a) => a.seasonId === s.id).sort(compareAwards).map((a) => serializeAward(a, users, teams));
       seasons.push({
         season: s,
         podiums,

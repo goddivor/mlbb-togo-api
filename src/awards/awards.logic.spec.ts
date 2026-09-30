@@ -1,4 +1,5 @@
 import {
+  creditArchivedTeams,
   compareAwards,
   derivePlayoffsPodium,
   derivePodiumFromBracket,
@@ -254,5 +255,22 @@ describe('seasonRosterTeams', () => {
     for (const input of [null, undefined, '', '{bad', '{}', JSON.stringify({ legacy: {} }), JSON.stringify({ legacy: { rosters: 'x' } })]) {
       expect(seasonRosterTeams(input).size).toBe(0);
     }
+  });
+});
+
+describe('creditArchivedTeams', () => {
+  const summary = { legacy: { rosters: [{ teamId: T1, userId: 'u1' }] } };
+
+  it('fills only the awards that have a winner and no team', () => {
+    const out = creditArchivedTeams(
+      [
+        { userId: 'u1', teamId: null },
+        { userId: 'u1', teamId: T2 },
+        { userId: 'zz', teamId: null },
+        { userId: null, teamId: null },
+      ],
+      summary,
+    );
+    expect(out.map((a) => a.teamId)).toEqual([T1, T2, null, null]);
   });
 });
