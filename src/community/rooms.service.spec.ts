@@ -108,7 +108,11 @@ describe('RoomsService', () => {
       prisma.esportTeamMember.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u3' }]);
       const scope = await service.resolveScope('tournament', TOURNAMENT);
       expect(prisma.esportTeamMember.findMany).toHaveBeenCalledWith({
-        where: { teamId: { in: [TEAM, 'other'] } },
+        // Live memberships only, not the archived season rosters (#162).
+        where: {
+          teamId: { in: [TEAM, 'other'] },
+          AND: [{ OR: [{ seasonId: null }, { seasonId: { isSet: false } }] }],
+        },
         select: { userId: true },
       });
       expect(scope?.memberIds).toEqual(['u1', 'u3']);

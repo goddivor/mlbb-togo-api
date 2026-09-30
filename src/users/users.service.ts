@@ -9,6 +9,7 @@ import {
 import { PUBLIC_USER_WHERE, isHiddenAccount } from './public-user.filter';
 import { resolveEquippedFrame } from '../rewards/rewards.logic';
 import { isUploadedAvatarUrl } from '../media/media.logic';
+import { seasonMembershipWhere } from '../esport/rosters.logic';
 
 export function decodeRank(level?: number | null): string | null {
   if (level == null) return null;
@@ -268,7 +269,9 @@ export class UsersService {
       ...new Set(matches.flatMap((m) => [m.teamAId, m.teamBId]).filter(Boolean)),
     ];
     const members = await this.prisma.esportTeamMember.findMany({
-      where: { teamId: { in: teamIds } },
+      // The roster archived on that season, plus the live roster of the teams
+      // that played it (#162).
+      where: seasonMembershipWhere(seasonId, { teamId: { in: teamIds } }),
       select: { userId: true },
     });
     return [...new Set(members.map((m) => m.userId))];

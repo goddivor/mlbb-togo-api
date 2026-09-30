@@ -9,6 +9,7 @@ import { parseJson } from '../common/utils/json.util';
 import { GamificationService } from './gamification.service';
 import { SEASON_PODIUM_XP, seasonAwardXp } from './gamification.rules';
 import { stageOf } from './achievement-facts';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 type Placement = 1 | 2 | 3;
 
@@ -261,7 +262,7 @@ export class SeasonRewardsService {
 
   private async roster(teamId: string) {
     const members = await this.prisma.esportTeamMember.findMany({
-      where: { teamId, isSubstitute: false },
+      where: liveMembershipWhere({ teamId, isSubstitute: false }),
       select: { userId: true },
     });
     const ids = await this.publicIds(members.map((m) => m.userId));

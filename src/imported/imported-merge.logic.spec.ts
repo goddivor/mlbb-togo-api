@@ -109,12 +109,12 @@ describe('planTeamMemberships', () => {
         { id: 'm1', teamId: 't1' },
         { id: 'm2', teamId: 't2' },
       ],
-      ['t2'],
+      [{ teamId: 't2' }],
     );
     expect(plan).toEqual({ move: ['m1'], drop: ['m2'] });
   });
 
-  it('never moves two rows onto the same team', () => {
+  it('never moves two rows onto the same team and season', () => {
     const plan = planTeamMemberships(
       [
         { id: 'm1', teamId: 't1' },
@@ -125,8 +125,19 @@ describe('planTeamMemberships', () => {
     expect(plan).toEqual({ move: ['m1'], drop: ['m2'] });
   });
 
+  it('keeps a stint the target only holds on another season', () => {
+    const plan = planTeamMemberships(
+      [
+        { id: 'm1', teamId: 't1', seasonId: 's1' },
+        { id: 'm2', teamId: 't1', seasonId: 's2' },
+      ],
+      [{ teamId: 't1', seasonId: 's2' }],
+    );
+    expect(plan).toEqual({ move: ['m1'], drop: ['m2'] });
+  });
+
   it('is empty when there is nothing to move', () => {
-    expect(planTeamMemberships([], ['t1'])).toEqual({ move: [], drop: [] });
+    expect(planTeamMemberships([], [{ teamId: 't1' }])).toEqual({ move: [], drop: [] });
   });
 });
 

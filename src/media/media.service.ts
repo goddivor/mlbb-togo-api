@@ -40,6 +40,7 @@ import {
 } from './media.logic';
 import { CloudinaryClient, DEFAULT_CLOUDINARY_API_BASE, createCloudinaryClient } from './media.cloudinary';
 import { TargetAdapter, createTargetAdapters } from './media.targets';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 export interface MediaActor extends UploadActor {
   username?: string | null;
@@ -164,7 +165,7 @@ export class MediaService {
     const [team, captain] = await Promise.all([
       this.db.esportTeam.findUnique({ where: { id: targetId }, select: { type: true } }),
       this.db.esportTeamMember.findFirst({
-        where: { teamId: targetId, userId: actor.id, isCaptain: true },
+        where: liveMembershipWhere({ teamId: targetId, userId: actor.id, isCaptain: true }),
         select: { id: true },
       }),
     ]);

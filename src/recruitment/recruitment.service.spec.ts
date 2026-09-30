@@ -339,12 +339,13 @@ describe('RecruitmentService', () => {
       });
 
       expect(prisma.esportTeamMember.create).toHaveBeenCalledWith({
-        data: { teamId: 'team-1', userId: 'u-candidate', role: 'jungle' },
+        // Live membership: `seasonId` is written as an explicit null (#162).
+        data: { teamId: 'team-1', userId: 'u-candidate', role: 'jungle', seasonId: null },
       });
     });
 
     it('does not duplicate an existing roster entry', async () => {
-      prisma.esportTeamMember.findUnique.mockResolvedValue({ id: 'm-9' });
+      prisma.esportTeamMember.findFirst.mockResolvedValue({ id: 'm-9' });
 
       await service.updateApplicationStatus('app-1', CAPTAIN, {
         status: 'accepted',

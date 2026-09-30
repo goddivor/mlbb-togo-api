@@ -15,6 +15,7 @@ import {
   ROOM_KINDS,
   TtlCache,
 } from './rooms.util';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 /** A group chat scope (esport team, tournament, draft team) and its members. */
 export interface RoomScope {
@@ -127,7 +128,9 @@ export class RoomsService {
       );
       const members = teamIds.length
         ? await this.prisma.esportTeamMember.findMany({
-            where: { teamId: { in: teamIds } },
+            // Live memberships only: an archived roster of a past season does
+            // not give access to the room today (#162).
+            where: liveMembershipWhere({ teamId: { in: teamIds } }),
             select: { userId: true },
           })
         : [];
@@ -157,7 +160,10 @@ export class RoomsService {
   /** Every scope the user currently belongs to (teams, tournaments, drafts). */
   async scopesOf(userId: string): Promise<RoomScope[]> {
     const [memberships, draftRegs, draftMemberships] = await Promise.all([
-      this.prisma.esportTeamMember.findMany({ where: { userId }, select: { teamId: true } }),
+      this.prisma.esportTeamMember.findMany({
+        where: liveMembershipWhere({ userId }),
+        select: { teamId: true },
+      }),
       this.prisma.draftRegistration.findMany({
         where: { userId },
         select: { tournamentId: true },
