@@ -209,7 +209,10 @@ export class CatalogStatsService {
   }
 
   private heroViews(list: HeroUsage[], index: Map<number, HeroIndexEntry>): HeroUsageView[] {
-    return list.map((h) => ({ ...h, name: index.get(h.heroId)?.name ?? null, image: index.get(h.heroId)?.image ?? null }));
+    // Unreleased heroes (absent from Moonton's public list) have no name: drop them.
+    return list
+      .filter((h) => !!index.get(h.heroId)?.name)
+      .map((h) => ({ ...h, name: index.get(h.heroId)!.name, image: index.get(h.heroId)?.image ?? null }));
   }
 
   private meta(ctx: StatsContext) {
