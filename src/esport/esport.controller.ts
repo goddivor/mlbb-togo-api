@@ -37,8 +37,14 @@ export class EsportController {
   }
 
   @Get('teams')
-  getTeams(@Query('type') type?: string, @Query('seasonId') seasonId?: string) {
-    return this.esport.getTeams(type, seasonId);
+  getTeams(
+    @Query('type') type?: string,
+    @Query('seasonId') seasonId?: string,
+    // `roster=live` forces the roster of today (administration): it never
+    // answers with a season archive, whatever the team looks like.
+    @Query('roster') roster?: string,
+  ) {
+    return this.esport.getTeams(type, seasonId, roster === 'live');
   }
 
   /** Teams a player played for, with the seasons of each stint (#162). */
@@ -48,8 +54,12 @@ export class EsportController {
   }
 
   @Get('teams/:id')
-  async getTeam(@Param('id') id: string, @Query('seasonId') seasonId?: string) {
-    const team = await this.esport.getTeam(id, seasonId);
+  async getTeam(
+    @Param('id') id: string,
+    @Query('seasonId') seasonId?: string,
+    @Query('roster') roster?: string,
+  ) {
+    const team = await this.esport.getTeam(id, seasonId, roster === 'live');
     const [staff, honours] = await Promise.all([
       this.staff.listStaff(id),
       this.stats.getHonours(id),

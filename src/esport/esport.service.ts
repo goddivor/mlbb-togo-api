@@ -35,6 +35,7 @@ import {
   typeFromStage,
 } from './esport-match-details';
 import { hasAnyPermission, hasPermission } from '../access/permissions';
+import { RoomsService } from '../community/rooms.service';
 import {
   LIVE_SEASON_BRANCHES,
   liveMembershipWhere,
@@ -83,22 +84,35 @@ export type RosterView = {
   currentSeasonId?: string | null;
   /** Site seasons, newest first, used to fall back on an abandoned team. */
   seasonOrder?: string[];
+  /**
+   * Force the roster of today: no season archive, no fallback on an abandoned
+   * team. This is what the administration asks for, since it only ever acts on
+   * the live rows (an archived row has no endpoint to update or delete it).
+   */
+  live?: boolean;
 };
 
 function serializeTeam(team: any, view: RosterView = {}) {
   if (!team) return team;
   const all = team.members ?? [];
   const currentSeasonId = view.currentSeasonId ?? null;
-  const seasonId = resolveRosterSeasonId(all, {
-    seasonId: view.seasonId ?? null,
-    currentSeasonId,
-    seasonOrder: view.seasonOrder,
-  });
+  const seasonId = view.live
+    ? currentSeasonId
+    : resolveRosterSeasonId(all, {
+        seasonId: view.seasonId ?? null,
+        currentSeasonId,
+        seasonOrder: view.seasonOrder,
+      });
   const members = selectSeasonRoster(all, { seasonId, currentSeasonId }).map(serializeMember);
   const captain = members.find((m) => m.isCaptain) ?? null;
-  // Size of the roster of today, whatever season is displayed: the page tells
-  // an abandoned team from one you are simply browsing the past of.
-  const currentMemberCount = selectSeasonRoster(all, { seasonId: currentSeasonId, currentSeasonId }).length;
+  // The roster of TODAY, whatever season is displayed: the page tells an
+  // abandoned team from one you are simply browsing the past of, and the rights
+  // (captain, member) are read from here and never from the rows on display —
+  // an archived season has no captain, browsing it must not demote anybody.
+  const current = selectSeasonRoster(all, { seasonId: currentSeasonId, currentSeasonId });
+  const currentMemberCount = current.length;
+  const currentCaptainId = current.find((m: any) => m.isCaptain)?.userId ?? null;
+  const currentMemberIds = current.map((m: any) => m.userId);
   return {
     id: team.id,
     name: team.name,
@@ -117,6 +131,8 @@ function serializeTeam(team: any, view: RosterView = {}) {
     rosterSeasonIds: rosterSeasonIds(all).filter((id) => id !== currentSeasonId),
     currentSeasonId,
     currentMemberCount,
+    currentCaptainId,
+    currentMemberIds,
     captain,
     members,
   };
@@ -133,7 +149,20 @@ export class EsportService {
     private playerStats: PlayerStatsService,
     private seasons: EsportSeasonsService,
     @Optional() private gamification?: GamificationService,
+    @Optional() private rooms?: RoomsService,
   ) {}
+
+  /**
+   * The room membership is cached for a few seconds: a player added to (or
+   * removed from) a team must not wait for the TTL to get or lose the chat.
+   */
+  private refreshTeamRoom(teamId: string) {
+    try {
+      this.rooms?.invalidateScope('team', teamId);
+    } catch {
+      /* the cache is best effort */
+    }
+  }
 
   private async attachStats(teams: any[]) {
     const completed = await this.prisma.esportMatch.findMany({
@@ -177,7 +206,7 @@ export class EsportService {
     return { ...org, teams };
   }
 
-  async getTeams(type?: string, seasonId?: string) {
+  async getTeams(type?: string, seasonId?: string, live = false) {
     const teams = await this.prisma.esportTeam.findMany({
       where: type ? { type } : {},
       orderBy: { sort: 'asc' },
@@ -185,11 +214,11 @@ export class EsportService {
     });
     const view = await this.seasonContext();
     return this.attachStats(
-      teams.map((t) => serializeTeam(t, { ...view, seasonId: seasonId ?? null })),
+      teams.map((t) => serializeTeam(t, { ...view, seasonId: seasonId ?? null, live })),
     );
   }
 
-  async getTeam(id: string, seasonId?: string) {
+  async getTeam(id: string, seasonId?: string, live = false) {
     const team = await this.prisma.esportTeam.findUnique({
       where: { id },
       include: teamInclude,
@@ -197,7 +226,7 @@ export class EsportService {
     if (!team) throw new NotFoundException('Équipe introuvable.');
     const view = await this.seasonContext();
     const [withStats] = await this.attachStats([
-      serializeTeam(team, { ...view, seasonId: seasonId ?? null }),
+      serializeTeam(team, { ...view, seasonId: seasonId ?? null, live }),
     ]);
     const matches = await this.getTeamMatches(id, 10);
     return { ...withStats, currentSeasonId: view.currentSeasonId, matches };
@@ -344,6 +373,7 @@ export class EsportService {
           await this.prisma.esportTeamMember.create({
             data: { teamId: team.id, userId: req.requesterId, isCaptain: true, seasonId: null, leftAt: null },
           });
+          this.refreshTeamRoom(team.id);
         }
         void this.gamification?.checkSafe(req.requesterId, ['team']);
       }
@@ -437,6 +467,7 @@ export class EsportService {
         data: { teamId, userId: data.userId, seasonId: null, leftAt: null, ...payload },
       });
     }
+    this.refreshTeamRoom(teamId);
     if (data.isCaptain) void this.gamification?.checkSafe(data.userId, ['team']);
     return this.getTeam(teamId);
   }
@@ -486,6 +517,7 @@ export class EsportService {
       where: { id: member.id },
       data: { leftAt: new Date(), isCaptain: false },
     });
+    this.refreshTeamRoom(teamId);
     return this.getTeam(teamId);
   }
 
@@ -988,6 +1020,11 @@ export class EsportService {
    * An MVP (match or game) must be a player of the match: a member of one of
    * the two rosters, or someone already listed in the match player stats
    * (players who left the team since keep their record).
+   *
+   * These lookups read EVERY membership row on purpose (#162): a match belongs
+   * to the season it was played in, so the player named MVP is often listed in
+   * the archived roster of that season and no longer in the live one. Narrowing
+   * them to the live roster would make past matches unrecordable.
    */
   /**
    * Values a submitted draft may reference: the players of the two teams
