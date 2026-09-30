@@ -32,3 +32,28 @@ describe('StreamService.updateConfig channel changes', () => {
     expect(prisma.streamSeasonVideo.deleteMany).toHaveBeenCalled();
   });
 });
+
+describe('StreamService.setSeasonVideos', () => {
+  it('keeps the id of rows that stay selected (legacy registry relies on it)', async () => {
+    const prisma: any = {
+      esportSeason: { findUnique: jest.fn(async () => ({ id: 's1' })) },
+      streamSeasonVideo: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([
+            { id: 'r1', videoId: 'aaaaaaaaaaa', seasonId: 's1' },
+            { id: 'r2', videoId: 'bbbbbbbbbbb', seasonId: 's1' },
+          ])
+          .mockResolvedValue([]),
+        update: jest.fn(async () => ({})),
+        deleteMany: jest.fn(async () => ({ count: 1 })),
+        createMany: jest.fn(async () => ({ count: 1 })),
+      },
+    };
+    const service = new StreamService(prisma, {} as any);
+    await service.setSeasonVideos('s1', [{ id: 'aaaaaaaaaaa', title: 'A' }, { id: 'ccccccccccc', title: 'C' }]);
+    expect(prisma.streamSeasonVideo.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'r1' } }));
+    expect(prisma.streamSeasonVideo.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['r2'] } } });
+    expect(prisma.streamSeasonVideo.createMany).toHaveBeenCalledWith({ data: [expect.objectContaining({ videoId: 'ccccccccccc' })] });
+  });
+});

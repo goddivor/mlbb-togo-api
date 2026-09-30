@@ -1,8 +1,13 @@
 import { clearChannelFeed, importedVideoIds, sameChannel } from './stream-feed.util';
 
-function fakePrisma(registryValue: string | null) {
+function fakePrisma(registryValue: string | null, backupValue: string | null = registryValue) {
   return {
-    appSetting: { findUnique: jest.fn(async () => (registryValue ? { value: registryValue } : null)) },
+    appSetting: {
+      findUnique: jest.fn(async ({ where }: any) => {
+        const value = where.key === 'legacy.import' ? registryValue : backupValue;
+        return value ? { value } : null;
+      }),
+    },
     streamSeasonVideo: { deleteMany: jest.fn(async () => ({ count: 0 })) },
     streamConfig: { updateMany: jest.fn(async () => ({ count: 1 })) },
   };
@@ -20,6 +25,19 @@ describe('stream feed cleanup', () => {
     const p = fakePrisma(null);
     await clearChannelFeed(p as any);
     expect(p.streamSeasonVideo.deleteMany).toHaveBeenCalledWith({ where: {} });
+  });
+
+  it('keeps every video when the registry is unreadable and has no readable backup', async () => {
+    const p = fakePrisma('{garbage');
+    await clearChannelFeed(p as any);
+    expect(p.streamSeasonVideo.deleteMany).not.toHaveBeenCalled();
+    expect(p.streamConfig.updateMany).toHaveBeenCalled();
+  });
+
+  it('falls back to the registry backup when the live registry is unreadable', async () => {
+    const p = fakePrisma('{garbage', JSON.stringify({ version: 1, streamVideos: { '22': 'aaaaaaaaaaaaaaaaaaaaaaa1' } }));
+    await clearChannelFeed(p as any);
+    expect(p.streamSeasonVideo.deleteMany).toHaveBeenCalledWith({ where: { id: { notIn: ['aaaaaaaaaaaaaaaaaaaaaaa1'] } } });
   });
 
   it('reads ids from a broken registry without throwing', () => {

@@ -439,9 +439,32 @@ export class StreamService {
       }))
       .filter((v) => v.videoId);
 
-    await this.prisma.streamSeasonVideo.deleteMany({ where: { seasonId } });
-    if (cleaned.length > 0) {
-      await this.prisma.streamSeasonVideo.createMany({ data: cleaned });
+    // Update rows in place (matched by YouTube id) instead of recreating them:
+    // a row keeps its id, which is how the legacy registry recognises the
+    // videos it imported. Only the rows that left the selection are deleted.
+    const existing = await this.prisma.streamSeasonVideo.findMany({ where: { seasonId } });
+    const pool = new Map<string, any[]>();
+    for (const row of existing) pool.set(row.videoId, [...(pool.get(row.videoId) ?? []), row]);
+    const kept = new Set<string>();
+    const created: typeof cleaned = [];
+    for (const v of cleaned) {
+      const row = pool.get(v.videoId)?.shift();
+      if (!row) {
+        created.push(v);
+        continue;
+      }
+      kept.add(row.id);
+      await this.prisma.streamSeasonVideo.update({
+        where: { id: row.id },
+        data: { title: v.title, thumbnail: v.thumbnail, duration: v.duration, date: v.date, sort: v.sort },
+      });
+    }
+    const removed = existing.filter((r) => !kept.has(r.id)).map((r) => r.id);
+    if (removed.length > 0) {
+      await this.prisma.streamSeasonVideo.deleteMany({ where: { id: { in: removed } } });
+    }
+    if (created.length > 0) {
+      await this.prisma.streamSeasonVideo.createMany({ data: created });
     }
     return this.getSeasonVideos(seasonId);
   }
