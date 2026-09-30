@@ -618,3 +618,24 @@ export function postImages(images: unknown, cover: unknown): string[] {
     .filter((v) => /^https?:\/\//.test(v));
   return Array.from(new Set(all)).slice(0, 6);
 }
+
+/** http(s) URL kept as is, anything else (empty, `javascript:`...) dropped. */
+export function safeHttpUrl(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!/^https?:\/\/\S+$/i.test(raw)) return null;
+  return raw;
+}
+
+/** Link fields of a communication (call-to-action button of the post). */
+export function postLinkFields(c: {
+  link_url?: unknown;
+  platform?: unknown;
+  embed_url?: unknown;
+}): { linkUrl: string | null; linkPlatform: string | null; embedUrl: string | null } {
+  const platform = typeof c.platform === 'string' ? c.platform.trim() : '';
+  return {
+    linkUrl: safeHttpUrl(c.link_url),
+    linkPlatform: platform || null,
+    embedUrl: safeHttpUrl(c.embed_url),
+  };
+}

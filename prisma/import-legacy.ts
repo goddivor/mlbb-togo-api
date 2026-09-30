@@ -51,6 +51,7 @@ import {
   typeOf,
   winnerOf,
   youtubeIdFrom,
+  postLinkFields,
 } from '../src/esport/legacy-import.logic';
 import { serializeGames } from '../src/esport/esport-match-details';
 import { resetLegacyCache } from '../src/esport/legacy-import.guard';
@@ -1233,6 +1234,7 @@ async function main() {
       content: (c.content || '').trim(),
       images: JSON.stringify(images),
       isSponsored: c.is_sponsored === true,
+      ...postLinkFields(c),
       createdAt,
     };
     const mappedPost = previous.posts[String(c.id)];
@@ -1257,7 +1259,11 @@ async function main() {
           ? await prisma.streamSeasonVideo.findUnique({ where: { id: mappedVideo } })
           : null;
         const videoData = { seasonId, videoId, title, date: (c.event_date || '').trim() };
-        if (!existingVideo) {
+        if (!existingVideo && mappedVideo) {
+          // Imported once, then deleted by an admin: never bring it back.
+          registry.streamVideos[String(c.id)] = mappedVideo;
+          report.skip('communications (stream)', 1, `la vidéo ${videoId} a été retirée par l’administration après l’import`);
+        } else if (!existingVideo) {
           let createdId: string | null = null;
           try {
             createdId = dry

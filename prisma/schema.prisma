@@ -133,6 +133,11 @@ model Post {
   images        String     @default("[]")
   isSponsored   Boolean    @default(false)
   sponsorId     String?    @db.ObjectId
+  // Call-to-action of the post (Discord / WhatsApp invite, video...). Imported
+  // from the legacy `communications.link_url / platform / embed_url`.
+  linkUrl       String?
+  linkPlatform  String?
+  embedUrl      String?
   postLikes     PostLike[]
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
@@ -824,7 +829,7 @@ model ContactMessage {
 
 model StreamConfig {
   id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  youtubeChannel String   @default("eternumesports")
+  youtubeChannel String   @default("")
   channelId      String   @default("")
   channelTitle   String   @default("")
   channelAvatar  String   @default("")
