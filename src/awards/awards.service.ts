@@ -25,6 +25,7 @@ import {
   isFixedCategory,
   normalizePodium,
   parsePodiums,
+  seasonRosterTeams,
   serializeAward,
   suggestAwards,
 } from './awards.logic';
@@ -257,6 +258,11 @@ export class AwardsService {
       });
       if (row) return row.teamId;
     }
+    // Then the roster archived with the season: the current membership is the
+    // one of today, not of that season (#164).
+    const season = await this.prisma.esportSeason.findUnique({ where: { id: seasonId }, select: { summary: true } });
+    const archived = seasonRosterTeams(season?.summary).get(userId);
+    if (archived) return archived;
     const member = await this.prisma.esportTeamMember.findFirst({ where: { userId }, select: { teamId: true } });
     return member?.teamId ?? null;
   }
@@ -301,11 +307,18 @@ export class AwardsService {
       this.prisma.sponsor.findMany({ where: { seasonIds: { has: season.id }, isActive: true }, orderBy: { sort: 'asc' } }),
     ]);
     const podiums = await this.podiumsOf(season, matches);
+    // A winner may have no `teamId` (the legacy import never wrote one) or have
+    // left his team since: the season archive holds the roster of THAT season,
+    // which is the team to credit (#164).
+    const archived = seasonRosterTeams(season.summary);
+    const resolved = awards.map((a) =>
+      a.teamId || !a.userId ? a : { ...a, teamId: archived.get(a.userId) ?? null },
+    );
     const [users, teams] = await Promise.all([
-      this.userRefs(awards.map((a) => a.userId)),
-      this.teamRefs(awards.map((a) => a.teamId)),
+      this.userRefs(resolved.map((a) => a.userId)),
+      this.teamRefs(resolved.map((a) => a.teamId)),
     ]);
-    const items = awards.map((a) => serializeAward(a, users, teams));
+    const items = resolved.map((a) => serializeAward(a, users, teams));
     return {
       season: serializeSeason(season),
       awards: items,

@@ -393,3 +393,40 @@ export function serializeAward(a: AwardRecord, users: Map<string, UserRef>, team
 }
 
 export type SerializedAward = ReturnType<typeof serializeAward>;
+
+// ---------------------------------------------------------------------------
+// Season roster archive (#164)
+// ---------------------------------------------------------------------------
+
+/**
+ * Team every player belonged to DURING a season, read from the archive the
+ * legacy import writes under `EsportSeason.summary.legacy.rosters` as
+ * `{ teamId, userId, role }`.
+ *
+ * A winner of season 1 who left his team afterwards has no current membership,
+ * so the award showed « Sans équipe ». The archive is the only record of the
+ * roster of that season, and it is per season, so it never attributes the team
+ * of a later season. The first line wins: a player listed twice (a transfer
+ * inside the season) keeps the team the archive lists first.
+ */
+export function seasonRosterTeams(summary: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  let doc: any = summary;
+  if (typeof doc === 'string') {
+    try {
+      doc = JSON.parse(doc);
+    } catch {
+      return out;
+    }
+  }
+  const rosters = doc?.legacy?.rosters;
+  if (!Array.isArray(rosters)) return out;
+  for (const line of rosters) {
+    if (!line || typeof line !== 'object') continue;
+    const userId = typeof line.userId === 'string' ? line.userId : null;
+    const teamId = typeof line.teamId === 'string' ? line.teamId : null;
+    if (!userId || !teamId || out.has(userId)) continue;
+    out.set(userId, teamId);
+  }
+  return out;
+}
