@@ -1,9 +1,11 @@
 import {
+  creditArchivedTeams,
   compareAwards,
   derivePlayoffsPodium,
   derivePodiumFromBracket,
   normalizePodium,
   parsePodiums,
+  seasonRosterTeams,
   serializeAward,
   suggestAwards,
 } from './awards.logic';
@@ -220,5 +222,55 @@ describe('awards serialization', () => {
     const unknown = serializeAward({ id: 'b', seasonId: 's', category: 'mvp', userId: 'zz', criteria: '{bad' }, users, teams);
     expect(unknown.user?.username).toBe('?');
     expect(unknown.criteria).toBeNull();
+  });
+});
+
+describe('seasonRosterTeams', () => {
+  const summary = JSON.stringify({
+    legacy: {
+      rosters: [
+        { teamId: T1, userId: 'u1', role: 'jungle' },
+        { teamId: T2, userId: 'u2', role: 'mid' },
+        // A transfer inside the season: the first line wins.
+        { teamId: T3, userId: 'u1', role: 'jungle' },
+        null,
+        { teamId: T3 },
+        { userId: 'u3' },
+      ],
+    },
+  });
+
+  it('maps every archived player to the team he played for that season', () => {
+    const map = seasonRosterTeams(summary);
+    expect(map.get('u1')).toBe(T1);
+    expect(map.get('u2')).toBe(T2);
+    expect(map.size).toBe(2);
+  });
+
+  it('accepts an already parsed summary', () => {
+    expect(seasonRosterTeams(JSON.parse(summary)).get('u2')).toBe(T2);
+  });
+
+  it('returns an empty map on anything else', () => {
+    for (const input of [null, undefined, '', '{bad', '{}', JSON.stringify({ legacy: {} }), JSON.stringify({ legacy: { rosters: 'x' } })]) {
+      expect(seasonRosterTeams(input).size).toBe(0);
+    }
+  });
+});
+
+describe('creditArchivedTeams', () => {
+  const summary = { legacy: { rosters: [{ teamId: T1, userId: 'u1' }] } };
+
+  it('fills only the awards that have a winner and no team', () => {
+    const out = creditArchivedTeams(
+      [
+        { userId: 'u1', teamId: null },
+        { userId: 'u1', teamId: T2 },
+        { userId: 'zz', teamId: null },
+        { userId: null, teamId: null },
+      ],
+      summary,
+    );
+    expect(out.map((a) => a.teamId)).toEqual([T1, T2, null, null]);
   });
 });
