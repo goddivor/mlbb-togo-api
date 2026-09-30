@@ -121,7 +121,8 @@ export function mapHeroRef(hid: any, e: any): HeroRef {
   const heroId = num(hid ?? e?.id);
   return {
     heroId,
-    name: e?.n || `#${heroId}`,
+    // Never a raw id: an unresolved hero gets a neutral label.
+    name: e?.n || '—',
     image: e?.ix || null,
     image2x: e?.i2x || null,
   };

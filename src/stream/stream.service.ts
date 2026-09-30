@@ -9,7 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import { UpdateStreamConfigDto } from './dto/update-stream-config.dto';
 import { YoutubeOAuthService } from './youtube-oauth.service';
-import { clearChannelFeed } from './stream-feed.util';
+import { clearChannelFeed, sameChannel } from './stream-feed.util';
 import { orderPublicVideos, uploadsPlaylistId } from './stream-videos.logic';
 
 export interface StreamVideo {
@@ -103,7 +103,8 @@ export class StreamService {
     if (dto.youtubeChannel !== undefined) {
       const normalized = this.normalizeChannel(dto.youtubeChannel);
       data.youtubeChannel = normalized;
-      channelChanged = normalized !== current.youtubeChannel;
+      // First configuration (empty previous handle) feeds nothing, so nothing to wipe.
+      channelChanged = !!current.youtubeChannel && !sameChannel(normalized, current.youtubeChannel);
     }
     if (dto.liveTitle !== undefined) data.liveTitle = dto.liveTitle.trim();
     if (dto.liveDesc !== undefined) data.liveDesc = dto.liveDesc.trim();
@@ -135,7 +136,7 @@ export class StreamService {
 
     // When the channel changes (or has no metadata yet), fetch banner/avatar.
     const handle = data.youtubeChannel ?? current.youtubeChannel;
-    if (handle && (channelChanged || !current.channelId)) {
+    if (handle && (channelChanged || !current.channelId || !sameChannel(handle, current.youtubeChannel))) {
       const meta = await this.fetchChannelMeta(handle);
       if (meta) {
         data.channelId = meta.channelId;
