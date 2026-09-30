@@ -342,7 +342,7 @@ const mockFormResponses: any[] = [
 
 // ---- Game catalog reference data (official MLBB names) ----
 // Only names, categories and shop prices: no hero-specific recommendation is
-// seeded, builds are curated by admins from the catalog admin page.
+// seeded.
 const GAME_ITEMS: Array<{ name: string; type: string; gold: number; sort: number }> = [
   { name: 'Warrior Boots', type: 'movement', gold: 710, sort: 0 },
   { name: 'Magic Shoes', type: 'movement', gold: 710, sort: 1 },

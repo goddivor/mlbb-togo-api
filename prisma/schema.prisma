@@ -308,7 +308,7 @@ model BattleSpell {
   updatedAt   DateTime @updatedAt
 }
 
-// ---- Hero Builds (recommended by admin per hero) ----
+// ---- Hero Builds: legacy admin-curated builds, no longer read or written (#167) ----
 model HeroBuild {
   id            String   @id @default(auto()) @map("_id") @db.ObjectId
   heroId        String   @db.ObjectId
@@ -342,7 +342,6 @@ model EmblemTalent {
 }
 
 // ---- Community builds (#129): hero builds created by players ----
-// Admin-curated builds stay in HeroBuild ("recommended by MLBB Togo").
 model CommunityBuild {
   id            String    @id @default(auto()) @map("_id") @db.ObjectId
   authorId      String    @db.ObjectId
