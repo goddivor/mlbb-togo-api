@@ -69,8 +69,7 @@ type BuildRow = NonNullable<Awaited<ReturnType<PrismaService['communityBuild']['
 /**
  * Community builds (#129): players create hero builds from the game catalog,
  * keep them as drafts, publish them; others like and report them; holders of
- * `builds.moderate` hide, unhide or delete them. Admin-curated builds stay in
- * the `builds` module (HeroBuild).
+ * `builds.moderate` hide, unhide or delete them.
  */
 @Injectable()
 export class CommunityBuildsService {
