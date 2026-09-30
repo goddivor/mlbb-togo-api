@@ -111,7 +111,10 @@ describe('RoomsService', () => {
         // Live memberships only, not the archived season rosters (#162).
         where: {
           teamId: { in: [TEAM, 'other'] },
-          AND: [{ OR: [{ seasonId: null }, { seasonId: { isSet: false } }] }],
+          AND: [
+            { OR: [{ seasonId: null }, { seasonId: { isSet: false } }] },
+            { OR: [{ leftAt: null }, { leftAt: { isSet: false } }] },
+          ],
         },
         select: { userId: true },
       });

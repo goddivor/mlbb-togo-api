@@ -21,12 +21,28 @@
  */
 export const LIVE_SEASON_BRANCHES = [{ seasonId: null }, { seasonId: { isSet: false } }] as const;
 
-/** `where` of the live memberships, combinable with any other condition. */
+/**
+ * Same story for `leftAt`: a row written before the field existed does not
+ * hold an explicit null, so "still in the team" needs both branches.
+ */
+export const NOT_LEFT_BRANCHES = [{ leftAt: null }, { leftAt: { isSet: false } }] as const;
+
+/**
+ * `where` of the memberships that count today: not tied to a season, and not
+ * closed by a departure. Combinable with any other condition.
+ */
 export function liveMembershipWhere<T extends Record<string, unknown>>(where: T = {} as T) {
-  return { ...where, AND: [{ OR: [...LIVE_SEASON_BRANCHES] }] };
+  return {
+    ...where,
+    AND: [{ OR: [...LIVE_SEASON_BRANCHES] }, { OR: [...NOT_LEFT_BRANCHES] }],
+  };
 }
 
-/** `where` of the rows that count for a season: its archive plus the live rows. */
+/**
+ * `where` of the rows that count for a season: its archive plus the live rows.
+ * A player who left since still played that season, so `leftAt` is not
+ * filtered here.
+ */
 export function seasonMembershipWhere<T extends Record<string, unknown>>(
   seasonId: string,
   where: T = {} as T,
@@ -61,18 +77,12 @@ export function isActiveStint(row: RosterRow, now: Date = new Date()): boolean {
 }
 
 /**
- * Is that player still in the team TODAY? Only an open, untagged stint (the
- * live roster) or an open stint of the current season answers yes: a roster
- * archived on a past season says where he played, not where he plays.
+ * Is that player still in the team TODAY? Only an open, untagged stint answers
+ * yes: the live roster is the one the team manages, while a season-tagged row
+ * says where he played that season, not where he plays.
  */
-export function isCurrentMember(
-  row: RosterRow,
-  currentSeasonId: string | null | undefined,
-  now: Date = new Date(),
-): boolean {
-  if (!isActiveStint(row, now)) return false;
-  if (!row.seasonId) return true;
-  return !!currentSeasonId && row.seasonId === currentSeasonId;
+export function isCurrentMember(row: RosterRow, now: Date = new Date()): boolean {
+  return !row.seasonId && isActiveStint(row, now);
 }
 
 /** Captain first, substitutes last, then the manual `sort`. */
@@ -87,14 +97,16 @@ export function orderRoster<T extends RosterRow>(rows: T[]): T[] {
 /**
  * Roster of a team for one season.
  *
- * - a row tagged with that season always counts (that is the archive);
- * - an untagged row counts only when the season asked for is the current one
- *   (or when no season is given at all, e.g. a community team): it is the live
- *   roster, it says nothing about a past season;
- * - a player who left (`leftAt`) is dropped unless `includeLeft`;
- * - the same player can hold two rows for one season (the archived one and the
- *   live one): he is listed once, the season-tagged row winning because it
- *   carries the role he had that season.
+ * Exactly one source per season, never a mix:
+ * - the CURRENT season (and a team with no season at all, e.g. a community
+ *   team) is served by the live rows. They are the ones the admin and the
+ *   captains manage, so an add, a role change, a captain promotion or a removal
+ *   shows up immediately. A roster archived on the season that is currently
+ *   the reference would otherwise shadow them and freeze the page (#162).
+ * - a PAST season is served by its archived rows, the only record of who
+ *   played it.
+ *
+ * A player who left (`leftAt`) is dropped unless `includeLeft`.
  */
 export function selectSeasonRoster<T extends RosterRow>(
   rows: T[],
@@ -112,22 +124,19 @@ export function selectSeasonRoster<T extends RosterRow>(
   for (const row of rows ?? []) {
     if (!row) continue;
     if (!options.includeLeft && !isActiveStint(row, now)) continue;
-    if (row.seasonId) {
-      if (row.seasonId !== seasonId) continue;
-    } else if (!isCurrent) {
-      continue;
-    }
+    if (row.seasonId ? isCurrent || row.seasonId !== seasonId : !isCurrent) continue;
     kept.push(row);
   }
   const byUser = new Map<string, T>();
-  for (const row of kept) {
-    const previous = byUser.get(row.userId);
-    if (!previous || (!previous.seasonId && row.seasonId)) byUser.set(row.userId, row);
-  }
+  for (const row of kept) if (!byUser.has(row.userId)) byUser.set(row.userId, row);
   return orderRoster([...byUser.values()]);
 }
 
-/** Ids of the seasons a team has an archived roster for, newest order kept. */
+/**
+ * Ids of the seasons a team has an ARCHIVED roster for, in the order the rows
+ * come in; the caller sorts them against the site season list and drops the
+ * current season, whose roster is the live one.
+ */
 export function rosterSeasonIds(rows: RosterRow[]): string[] {
   const out: string[] = [];
   for (const row of rows ?? []) {
@@ -159,7 +168,9 @@ export function resolveRosterSeasonId(
   const currentSeasonId = options.currentSeasonId ?? null;
   if (selectSeasonRoster(rows, { seasonId: currentSeasonId, currentSeasonId, now: options.now }).length)
     return currentSeasonId;
-  const archived = rosterSeasonIds(rows);
+  // Only a PAST season can take over: falling back to an archive of the current
+  // season would hide the fact that the admin emptied the team.
+  const archived = rosterSeasonIds(rows).filter((id) => id !== currentSeasonId);
   if (!archived.length) return currentSeasonId;
   const order = options.seasonOrder ?? [];
   return order.find((id) => archived.includes(id)) ?? archived[archived.length - 1];
@@ -183,11 +194,7 @@ export type TeamHistoryEntry = {
  * played for in season 1 is listed with `isCurrent: false`, which is the
  * question the owner wants answered ("is he still in the team now?").
  */
-export function playerTeamHistory(
-  rows: RosterRow[],
-  currentSeasonId: string | null | undefined,
-  now: Date = new Date(),
-): TeamHistoryEntry[] {
+export function playerTeamHistory(rows: RosterRow[], now: Date = new Date()): TeamHistoryEntry[] {
   const byTeam = new Map<string, TeamHistoryEntry>();
   for (const row of rows ?? []) {
     if (!row?.teamId) continue;
@@ -207,7 +214,7 @@ export function playerTeamHistory(
     if (row.role && !entry.roles.includes(row.role)) entry.roles.push(row.role);
     if (row.isCaptain) entry.isCaptain = true;
     if (row.isSubstitute) entry.wasSubstitute = true;
-    if (isCurrentMember(row, currentSeasonId, now)) entry.isCurrent = true;
+    if (isCurrentMember(row, now)) entry.isCurrent = true;
     const joined = time(row.joinedAt);
     if (joined !== null && (entry.joinedAt === null || joined < (time(entry.joinedAt) ?? Infinity)))
       entry.joinedAt = row.joinedAt ?? null;

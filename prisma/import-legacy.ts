@@ -909,6 +909,11 @@ async function main() {
   // the team page can show the roster of each season and a player can be listed
   // in several teams over time. Registry key `<team>:<player>:<season>`, which
   // never collides with the live key `<team>:<player>`.
+  //
+  // No `isCaptain`: the dump has no captain column, an archived roster only
+  // knows who played and in which lane. And the archive of the season the site
+  // currently points at stays dormant: the team page serves the live rows for
+  // it, so nothing shadows what the admin manages.
   for (const s of seasons) {
     const seasonId = seasonIdBySource.get(s.sourceId);
     if (!seasonId) continue;

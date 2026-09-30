@@ -17,6 +17,18 @@
  *
  * Databases where the import runs again do not need it: the import writes the
  * per-season rows itself from now on.
+ *
+ * Two things the archive cannot give, by design:
+ * - no captain: the legacy dump has no captain column at all (`players` holds
+ *   id, name, role, team_id, custom_title, avatar_url), so an archived roster
+ *   lists players without designating one;
+ * - no departure date: a season roster is a snapshot, `leftAt` only makes sense
+ *   on the live rows.
+ *
+ * The roster of the season the site currently points at is archived too, but
+ * it stays dormant: while that season is the current one, the team page serves
+ * the live rows, so admin changes are never shadowed. It becomes the readable
+ * history of that season as soon as a newer one takes over.
  */
 
 import 'dotenv/config';

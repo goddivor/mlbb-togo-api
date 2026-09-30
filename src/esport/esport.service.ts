@@ -9,6 +9,7 @@ import {
 import { normalizeSponsorInput, serializeSponsor } from '../sponsors/sponsors.logic';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUserCard } from '../users/users.service';
+import { PUBLIC_USER_WHERE } from '../users/public-user.filter';
 import { PlayerStatsService } from '../stats/player-stats.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { kdaOf } from '../stats/player-stats.util';
@@ -35,6 +36,7 @@ import {
 } from './esport-match-details';
 import { hasAnyPermission, hasPermission } from '../access/permissions';
 import {
+  LIVE_SEASON_BRANCHES,
   liveMembershipWhere,
   playerTeamHistory,
   resolveRosterSeasonId,
@@ -94,6 +96,9 @@ function serializeTeam(team: any, view: RosterView = {}) {
   });
   const members = selectSeasonRoster(all, { seasonId, currentSeasonId }).map(serializeMember);
   const captain = members.find((m) => m.isCaptain) ?? null;
+  // Size of the roster of today, whatever season is displayed: the page tells
+  // an abandoned team from one you are simply browsing the past of.
+  const currentMemberCount = selectSeasonRoster(all, { seasonId: currentSeasonId, currentSeasonId }).length;
   return {
     id: team.id,
     name: team.name,
@@ -108,7 +113,10 @@ function serializeTeam(team: any, view: RosterView = {}) {
     starterCount: members.filter((m) => !m.isSubstitute).length,
     substituteCount: members.filter((m) => m.isSubstitute).length,
     rosterSeasonId: seasonId ?? null,
-    rosterSeasonIds: rosterSeasonIds(all),
+    // Seasons with an archived roster; the current one is served live.
+    rosterSeasonIds: rosterSeasonIds(all).filter((id) => id !== currentSeasonId),
+    currentSeasonId,
+    currentMemberCount,
     captain,
     members,
   };
@@ -200,11 +208,16 @@ export class EsportService {
    * he is still in it today (#162).
    */
   async getPlayerTeams(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    // Public route: a banned or system account has no public history, exactly
+    // like the public directory.
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, ...PUBLIC_USER_WHERE },
+      select: { id: true },
+    });
     if (!user) throw new NotFoundException('Joueur introuvable.');
     const rows = await this.prisma.esportTeamMember.findMany({ where: { userId } });
     const currentSeasonId = await this.currentSeasonId();
-    const history = playerTeamHistory(rows, currentSeasonId);
+    const history = playerTeamHistory(rows);
     if (!history.length) return { currentSeasonId, teams: [] };
     const [teams, seasons] = await Promise.all([
       this.prisma.esportTeam.findMany({
@@ -329,7 +342,7 @@ export class EsportService {
         });
         if (!existing) {
           await this.prisma.esportTeamMember.create({
-            data: { teamId: team.id, userId: req.requesterId, isCaptain: true, seasonId: null },
+            data: { teamId: team.id, userId: req.requesterId, isCaptain: true, seasonId: null, leftAt: null },
           });
         }
         void this.gamification?.checkSafe(req.requesterId, ['team']);
@@ -401,19 +414,29 @@ export class EsportService {
     });
     if (existing)
       throw new ConflictException("Ce joueur est déjà membre de l'équipe.");
+    // A stint closed by a departure is reopened rather than duplicated: the
+    // unique key allows a single live row per player and per team.
+    const closed = await this.prisma.esportTeamMember.findFirst({
+      where: { teamId, userId: data.userId, AND: [{ OR: [...LIVE_SEASON_BRANCHES] }] },
+    });
 
     if (data.isCaptain) await this.clearCaptain(teamId);
-    await this.prisma.esportTeamMember.create({
-      data: {
-        teamId,
-        userId: data.userId,
-        seasonId: null,
-        role,
-        isCaptain: !!data.isCaptain,
-        isSubstitute: !!data.isSubstitute,
-        sort: typeof data.sort === 'number' ? data.sort : 0,
-      },
-    });
+    const payload = {
+      role,
+      isCaptain: !!data.isCaptain,
+      isSubstitute: !!data.isSubstitute,
+      sort: typeof data.sort === 'number' ? data.sort : 0,
+    };
+    if (closed) {
+      await this.prisma.esportTeamMember.update({
+        where: { id: closed.id },
+        data: { ...payload, leftAt: null, joinedAt: new Date() },
+      });
+    } else {
+      await this.prisma.esportTeamMember.create({
+        data: { teamId, userId: data.userId, seasonId: null, leftAt: null, ...payload },
+      });
+    }
     if (data.isCaptain) void this.gamification?.checkSafe(data.userId, ['team']);
     return this.getTeam(teamId);
   }
@@ -455,7 +478,14 @@ export class EsportService {
     // The captain cannot remove himself (the captain).
     if (!hasPermission(user, 'admin.esport') && member.isCaptain)
       throw new ForbiddenException('Le capitaine ne peut pas être retiré.');
-    await this.prisma.esportTeamMember.delete({ where: { id: member.id } });
+    // Soft leave (#162): the stint is closed, not erased, so the profile can
+    // still say he played for this team. Every "member today" query filters
+    // `leftAt` out, so he loses his slot, the chat and the notifications at
+    // once, and re-adding him simply reopens the row.
+    await this.prisma.esportTeamMember.update({
+      where: { id: member.id },
+      data: { leftAt: new Date(), isCaptain: false },
+    });
     return this.getTeam(teamId);
   }
 
@@ -475,7 +505,8 @@ export class EsportService {
 
   private async clearCaptain(teamId: string) {
     await this.prisma.esportTeamMember.updateMany({
-      where: { teamId, isCaptain: true },
+      // Live rows only: the captain of an archived season is history.
+      where: liveMembershipWhere({ teamId, isCaptain: true }),
       data: { isCaptain: false },
     });
   }

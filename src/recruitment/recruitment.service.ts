@@ -464,7 +464,7 @@ export class RecruitmentService {
       });
       if (!already) {
         await this.prisma.esportTeamMember.create({
-          data: { teamId: app.teamId, userId: app.userId, role: app.role ?? null, seasonId: null },
+          data: { teamId: app.teamId, userId: app.userId, role: app.role ?? null, seasonId: null, leftAt: null },
         });
       }
     }

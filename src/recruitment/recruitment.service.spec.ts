@@ -339,8 +339,9 @@ describe('RecruitmentService', () => {
       });
 
       expect(prisma.esportTeamMember.create).toHaveBeenCalledWith({
-        // Live membership: `seasonId` is written as an explicit null (#162).
-        data: { teamId: 'team-1', userId: 'u-candidate', role: 'jungle', seasonId: null },
+        // Live membership: `seasonId` and `leftAt` are written as explicit
+        // nulls so the Mongo filters match them (#162).
+        data: { teamId: 'team-1', userId: 'u-candidate', role: 'jungle', seasonId: null, leftAt: null },
       });
     });
 
