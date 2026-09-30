@@ -29,7 +29,7 @@ import { ListCampaignsQueryDto } from './dto/list-campaigns-query.dto';
 import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
 import { UpdateApplicationStatusDto } from './dto/update-application-status.dto';
 import { ApplyRecruitmentDto } from './dto/apply-recruitment.dto';
-import { liveMembershipWhere } from '../esport/rosters.logic';
+import { LIVE_SEASON_BRANCHES, liveMembershipWhere } from '../esport/rosters.logic';
 
 @Injectable()
 export class RecruitmentService {
@@ -463,9 +463,27 @@ export class RecruitmentService {
         where: liveMembershipWhere({ teamId: app.teamId, userId: app.userId }),
       });
       if (!already) {
-        await this.prisma.esportTeamMember.create({
-          data: { teamId: app.teamId, userId: app.userId, role: app.role ?? null, seasonId: null, leftAt: null },
+        // A player who left keeps his closed live row (soft leave): reopen it,
+        // the unique key allows a single live row per player and per team.
+        const closed = await this.prisma.esportTeamMember.findFirst({
+          where: { teamId: app.teamId, userId: app.userId, AND: [{ OR: [...LIVE_SEASON_BRANCHES] }] },
         });
+        if (closed) {
+          await this.prisma.esportTeamMember.update({
+            where: { id: closed.id },
+            data: {
+              role: app.role ?? null,
+              isCaptain: false,
+              isSubstitute: false,
+              leftAt: null,
+              joinedAt: new Date(),
+            },
+          });
+        } else {
+          await this.prisma.esportTeamMember.create({
+            data: { teamId: app.teamId, userId: app.userId, role: app.role ?? null, seasonId: null, leftAt: null },
+          });
+        }
       }
     }
 
