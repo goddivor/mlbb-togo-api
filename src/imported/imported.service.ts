@@ -208,11 +208,11 @@ export class ImportedService {
     const [srcMembers, tgtMembers, srcPlayers, tgtPlayers, awards, staff] = await Promise.all([
       this.prisma.esportTeamMember.findMany({
         where: { userId: source.id },
-        select: { id: true, teamId: true, isCaptain: true },
+        select: { id: true, teamId: true, seasonId: true, isCaptain: true },
       }),
       this.prisma.esportTeamMember.findMany({
         where: { userId: target.id },
-        select: { teamId: true },
+        select: { teamId: true, seasonId: true },
       }),
       this.prisma.esportMatchPlayer.findMany({
         where: { userId: source.id },
@@ -232,7 +232,7 @@ export class ImportedService {
       }),
     ]);
 
-    const memberships = planTeamMemberships(srcMembers, tgtMembers.map((m) => m.teamId));
+    const memberships = planTeamMemberships(srcMembers, tgtMembers);
     const conflicts = matchPlayerConflicts(srcPlayers, tgtPlayers.map((p) => p.matchId));
 
     const matches = await this.matchesReferencing(source.id);

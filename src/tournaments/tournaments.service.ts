@@ -25,6 +25,7 @@ import {
   isFinal,
   totalRounds,
 } from './bracket.util';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 const JSON_KEYS = ['registeredTeams', 'brackets'] as const;
 
@@ -156,7 +157,7 @@ export class TournamentsService {
     if (!this.gamification) return;
     try {
       const members = await this.prisma.esportTeamMember.findMany({
-        where: { teamId },
+        where: liveMembershipWhere({ teamId }),
         select: { userId: true },
       });
       for (const m of members)
@@ -206,6 +207,9 @@ export class TournamentsService {
             where: { id: { in: teamIds } },
             include: {
               members: {
+                // Live roster only: neither archived season rosters nor
+                // players who left count as participants today (#162).
+                where: liveMembershipWhere(),
                 orderBy: { sort: 'asc' },
                 include: {
                   user: {
@@ -349,7 +353,7 @@ export class TournamentsService {
     try {
       const loser = match.winnerTeamId === match.teamAId ? match.teamBId : match.teamAId;
       const members = await this.prisma.esportTeamMember.findMany({
-        where: { teamId: { in: [match.winnerTeamId, loser] } },
+        where: liveMembershipWhere({ teamId: { in: [match.winnerTeamId, loser] } }),
         select: { teamId: true, userId: true },
       });
       await this.gamification.trackBracketResult({

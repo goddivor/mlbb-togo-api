@@ -31,6 +31,7 @@ import {
   suggestAwards,
 } from './awards.logic';
 import { CreateAwardDto, SetPodiumDto, SuggestAwardsDto, UpdateAwardDto } from './dto/award.dto';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 type SeasonRow = SeasonRecord & { podiums?: string | null; settings?: string | null };
 
@@ -264,7 +265,10 @@ export class AwardsService {
     const season = await this.prisma.esportSeason.findUnique({ where: { id: seasonId }, select: { summary: true } });
     const archived = seasonRosterTeams(season?.summary).get(userId);
     if (archived) return archived;
-    const member = await this.prisma.esportTeamMember.findFirst({ where: { userId }, select: { teamId: true } });
+    const member = await this.prisma.esportTeamMember.findFirst({
+      where: liveMembershipWhere({ userId }),
+      select: { teamId: true },
+    });
     return member?.teamId ?? null;
   }
 

@@ -15,6 +15,7 @@ import {
   ROOM_KINDS,
   TtlCache,
 } from './rooms.util';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 /** A group chat scope (esport team, tournament, draft team) and its members. */
 export interface RoomScope {
@@ -87,17 +88,20 @@ export class RoomsService {
 
   private async loadScope(kind: RoomKind, scopeId: string): Promise<RoomScope | null> {
     if (kind === 'team') {
-      const team = await this.prisma.esportTeam.findUnique({
-        where: { id: scopeId },
-        include: { members: { select: { userId: true } } },
-      });
+      const team = await this.prisma.esportTeam.findUnique({ where: { id: scopeId } });
       if (!team) return null;
+      // Live memberships only: a player who left, or who only appears in an
+      // archived season roster, must not keep access to the room (#162).
+      const members = await this.prisma.esportTeamMember.findMany({
+        where: liveMembershipWhere({ teamId: scopeId }),
+        select: { userId: true },
+      });
       return {
         kind,
         scopeId,
         title: team.name,
         avatar: team.image ?? null,
-        memberIds: uniq(team.members.map((m) => m.userId)),
+        memberIds: uniq(members.map((m) => m.userId)),
       };
     }
     if (kind === 'draft_team') {
@@ -127,7 +131,9 @@ export class RoomsService {
       );
       const members = teamIds.length
         ? await this.prisma.esportTeamMember.findMany({
-            where: { teamId: { in: teamIds } },
+            // Live memberships only: an archived roster of a past season does
+            // not give access to the room today (#162).
+            where: liveMembershipWhere({ teamId: { in: teamIds } }),
             select: { userId: true },
           })
         : [];
@@ -157,7 +163,10 @@ export class RoomsService {
   /** Every scope the user currently belongs to (teams, tournaments, drafts). */
   async scopesOf(userId: string): Promise<RoomScope[]> {
     const [memberships, draftRegs, draftMemberships] = await Promise.all([
-      this.prisma.esportTeamMember.findMany({ where: { userId }, select: { teamId: true } }),
+      this.prisma.esportTeamMember.findMany({
+        where: liveMembershipWhere({ userId }),
+        select: { teamId: true },
+      }),
       this.prisma.draftRegistration.findMany({
         where: { userId },
         select: { tournamentId: true },

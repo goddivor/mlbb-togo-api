@@ -216,7 +216,7 @@ export function suggestTargets(
 // Merge plan
 // ---------------------------------------------------------------------------
 
-export type TeamMemberRow = { id: string; teamId: string };
+export type TeamMemberRow = { id: string; teamId: string; seasonId?: string | null };
 export type MatchPlayerRow = { id: string; matchId: string };
 
 export type MembershipPlan = {
@@ -232,18 +232,28 @@ export type MembershipPlan = {
  * is dropped (the target's own row is the real one, with its captain flag,
  * role and join date).
  */
+/**
+ * A membership is unique per team AND per season (#162): the same player may
+ * hold a live row and one archived row per season on the same team, so the
+ * merge must compare team + season, not team alone.
+ */
+export function membershipKey(row: { teamId: string; seasonId?: string | null }): string {
+  return `${row.teamId}:${row.seasonId ?? ''}`;
+}
+
 export function planTeamMemberships(
   source: TeamMemberRow[],
-  targetTeamIds: Iterable<string>,
+  target: Iterable<{ teamId: string; seasonId?: string | null }>,
 ): MembershipPlan {
-  const taken = new Set(targetTeamIds);
+  const taken = new Set([...target].map(membershipKey));
   const plan: MembershipPlan = { move: [], drop: [] };
   const seen = new Set<string>();
   for (const row of source) {
-    // Two placeholder rows on the same team cannot both move either.
-    if (taken.has(row.teamId) || seen.has(row.teamId)) plan.drop.push(row.id);
+    const key = membershipKey(row);
+    // Two placeholder rows on the same team and season cannot both move either.
+    if (taken.has(key) || seen.has(key)) plan.drop.push(row.id);
     else {
-      seen.add(row.teamId);
+      seen.add(key);
       plan.move.push(row.id);
     }
   }

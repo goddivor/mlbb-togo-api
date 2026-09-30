@@ -902,6 +902,58 @@ async function main() {
     report.bump('EsportTeamMember', 'created');
   }
 
+  // ---- Per-season rosters (#162) -----------------------------------------
+  // The loop above only writes the LIVE roster (the last season): a team built
+  // for season 1 and abandoned since ended up with 19 matches and no member.
+  // Here every season gets its own membership rows, tagged with `seasonId`, so
+  // the team page can show the roster of each season and a player can be listed
+  // in several teams over time. Registry key `<team>:<player>:<season>`, which
+  // never collides with the live key `<team>:<player>`.
+  //
+  // No `isCaptain`: the dump has no captain column, an archived roster only
+  // knows who played and in which lane. And the archive of the season the site
+  // currently points at stays dormant: the team page serves the live rows for
+  // it, so nothing shadows what the admin manages.
+  for (const s of seasons) {
+    const seasonId = seasonIdBySource.get(s.sourceId);
+    if (!seasonId) continue;
+    for (const m of rosterBySeason.get(s.sourceId) ?? []) {
+      const key = `${m.sourceTeamId}:${m.sourcePlayerId}:${s.sourceId}`;
+      const mapped = previous.teamMembers[key];
+      const own = mapped
+        ? await prisma.esportTeamMember.findUnique({ where: { id: mapped } })
+        : null;
+      if (own) {
+        await remember('teamMembers', key, own.id);
+        const patch = diff(own, { role: m.role });
+        if (patch && !dry) await prisma.esportTeamMember.update({ where: { id: own.id }, data: patch });
+        report.bump('EsportTeamMember (saison)', patch ? 'updated' : 'unchanged');
+        continue;
+      }
+      const other = await prisma.esportTeamMember.findFirst({
+        where: { teamId: m.teamId, userId: m.userId, seasonId },
+        select: { id: true },
+      });
+      if (other) {
+        report.bump('EsportTeamMember (saison)', 'unchanged');
+        continue;
+      }
+      const created = dry
+        ? { id: fakeId(`member-${key}`) }
+        : await prisma.esportTeamMember.create({
+            data: { teamId: m.teamId, userId: m.userId, role: m.role, seasonId },
+          });
+      await remember('teamMembers', key, created.id);
+      report.created.push({
+        entity: 'EsportTeamMember (saison)',
+        legacyId: key,
+        id: created.id,
+        label: `${names.get(m.userId) ?? m.userId} dans ${names.get(m.teamId) ?? m.teamId} (${s.name})`,
+      });
+      report.bump('EsportTeamMember (saison)', 'created');
+    }
+  }
+
   // ---- Matches, games and picks ------------------------------------------
   const gamesByMatch = new Map<number, LegacyGame[]>();
   for (const g of gamesSrc) {
