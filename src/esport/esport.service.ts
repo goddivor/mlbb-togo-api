@@ -34,6 +34,13 @@ import {
   typeFromStage,
 } from './esport-match-details';
 import { hasAnyPermission, hasPermission } from '../access/permissions';
+import {
+  liveMembershipWhere,
+  playerTeamHistory,
+  resolveRosterSeasonId,
+  rosterSeasonIds,
+  selectSeasonRoster,
+} from './rosters.logic';
 
 export const ESPORT_ROLES = ['roam', 'jungle', 'mid', 'exp', 'gold'] as const;
 export const MATCH_TYPES = ['friendly', 'training', 'official'];
@@ -57,22 +64,35 @@ function serializeMember(m: any) {
     isCaptain: !!m.isCaptain,
     isSubstitute: !!m.isSubstitute,
     sort: m.sort ?? 0,
+    seasonId: m.seasonId ?? null,
     joinedAt: m.joinedAt,
+    leftAt: m.leftAt ?? null,
     user: m.user ? serializeUserCard(m.user) : null,
   };
 }
 
-function orderMembers(members: any[]) {
-  return [...members].sort((a, b) => {
-    if (a.isCaptain !== b.isCaptain) return a.isCaptain ? -1 : 1;
-    if (a.isSubstitute !== b.isSubstitute) return a.isSubstitute ? 1 : -1;
-    return (a.sort ?? 0) - (b.sort ?? 0);
-  });
-}
+/**
+ * `seasonId` selects the roster shown (default: the current season), while
+ * `seasonIds` lists every season the team has an archived roster for, so the
+ * page can offer a season switcher (#162).
+ */
+export type RosterView = {
+  seasonId?: string | null;
+  currentSeasonId?: string | null;
+  /** Site seasons, newest first, used to fall back on an abandoned team. */
+  seasonOrder?: string[];
+};
 
-function serializeTeam(team: any) {
+function serializeTeam(team: any, view: RosterView = {}) {
   if (!team) return team;
-  const members = orderMembers(team.members ?? []).map(serializeMember);
+  const all = team.members ?? [];
+  const currentSeasonId = view.currentSeasonId ?? null;
+  const seasonId = resolveRosterSeasonId(all, {
+    seasonId: view.seasonId ?? null,
+    currentSeasonId,
+    seasonOrder: view.seasonOrder,
+  });
+  const members = selectSeasonRoster(all, { seasonId, currentSeasonId }).map(serializeMember);
   const captain = members.find((m) => m.isCaptain) ?? null;
   return {
     id: team.id,
@@ -87,6 +107,8 @@ function serializeTeam(team: any) {
     memberCount: members.length,
     starterCount: members.filter((m) => !m.isSubstitute).length,
     substituteCount: members.filter((m) => m.isSubstitute).length,
+    rosterSeasonId: seasonId ?? null,
+    rosterSeasonIds: rosterSeasonIds(all),
     captain,
     members,
   };
@@ -113,33 +135,103 @@ export class EsportService {
     return teams.map((tm) => ({ ...tm, stats: this.computeTeamStats(tm.id, completed) }));
   }
 
+  /**
+   * Id of the season the rosters default to. Never throws: a database with no
+   * season at all simply has no current roster season, and every team then
+   * falls back to its untagged (live) members.
+   */
+  private async currentSeasonId(): Promise<string | null> {
+    return (await this.seasonContext()).currentSeasonId;
+  }
+
+  /** Current season + every season id, newest first (empty when there is none). */
+  private async seasonContext(): Promise<{ currentSeasonId: string | null; seasonOrder: string[] }> {
+    try {
+      const [current, all] = await Promise.all([this.seasons.current(), this.seasons.list()]);
+      return {
+        currentSeasonId: current?.id ?? null,
+        seasonOrder: (all ?? []).map((s: any) => s.id),
+      };
+    } catch {
+      return { currentSeasonId: null, seasonOrder: [] };
+    }
+  }
+
   async getOrg() {
     const org = await this.prisma.esport.findFirst({
       include: { teams: { orderBy: { sort: 'asc' }, include: teamInclude } },
     });
     if (!org) return null;
-    const teams = await this.attachStats((org.teams ?? []).map(serializeTeam));
+    const view = await this.seasonContext();
+    const teams = await this.attachStats(
+      (org.teams ?? []).map((t) => serializeTeam(t, view)),
+    );
     return { ...org, teams };
   }
 
-  async getTeams(type?: string) {
+  async getTeams(type?: string, seasonId?: string) {
     const teams = await this.prisma.esportTeam.findMany({
       where: type ? { type } : {},
       orderBy: { sort: 'asc' },
       include: teamInclude,
     });
-    return this.attachStats(teams.map(serializeTeam));
+    const view = await this.seasonContext();
+    return this.attachStats(
+      teams.map((t) => serializeTeam(t, { ...view, seasonId: seasonId ?? null })),
+    );
   }
 
-  async getTeam(id: string) {
+  async getTeam(id: string, seasonId?: string) {
     const team = await this.prisma.esportTeam.findUnique({
       where: { id },
       include: teamInclude,
     });
     if (!team) throw new NotFoundException('Équipe introuvable.');
-    const [withStats] = await this.attachStats([serializeTeam(team)]);
+    const view = await this.seasonContext();
+    const [withStats] = await this.attachStats([
+      serializeTeam(team, { ...view, seasonId: seasonId ?? null }),
+    ]);
     const matches = await this.getTeamMatches(id, 10);
-    return { ...withStats, matches };
+    return { ...withStats, currentSeasonId: view.currentSeasonId, matches };
+  }
+
+  /**
+   * Every team a player played for, with the seasons of each stint and whether
+   * he is still in it today (#162).
+   */
+  async getPlayerTeams(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!user) throw new NotFoundException('Joueur introuvable.');
+    const rows = await this.prisma.esportTeamMember.findMany({ where: { userId } });
+    const currentSeasonId = await this.currentSeasonId();
+    const history = playerTeamHistory(rows, currentSeasonId);
+    if (!history.length) return { currentSeasonId, teams: [] };
+    const [teams, seasons] = await Promise.all([
+      this.prisma.esportTeam.findMany({
+        where: { id: { in: history.map((h) => h.teamId) } },
+        select: { id: true, name: true, image: true, type: true },
+      }),
+      this.seasons.list(),
+    ]);
+    const teamById = new Map(teams.map((t) => [t.id, t]));
+    const seasonById = new Map(seasons.map((s: any) => [s.id, s]));
+    const entries = history
+      .filter((h) => teamById.has(h.teamId))
+      .map((h) => ({
+        ...h,
+        team: teamById.get(h.teamId) ?? null,
+        seasons: h.seasonIds
+          .map((id) => seasonById.get(id))
+          .filter(Boolean)
+          .map((s: any) => ({ id: s.id, name: s.name, slug: s.slug, number: s.number })),
+      }))
+      .sort((a, b) => {
+        if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+        const an = Math.max(0, ...a.seasons.map((s: any) => s.number ?? 0));
+        const bn = Math.max(0, ...b.seasons.map((s: any) => s.number ?? 0));
+        return bn - an;
+      });
+    return { currentSeasonId, teams: entries };
   }
 
   async getSponsors() {
@@ -232,12 +324,12 @@ export class EsportService {
           where: { id: req.id },
           data: { status: 'approved', createdTeamId: team.id },
         });
-        const existing = await this.prisma.esportTeamMember.findUnique({
-          where: { teamId_userId: { teamId: team.id, userId: req.requesterId } },
+        const existing = await this.prisma.esportTeamMember.findFirst({
+          where: liveMembershipWhere({ teamId: team.id, userId: req.requesterId }),
         });
         if (!existing) {
           await this.prisma.esportTeamMember.create({
-            data: { teamId: team.id, userId: req.requesterId, isCaptain: true },
+            data: { teamId: team.id, userId: req.requesterId, isCaptain: true, seasonId: null },
           });
         }
         void this.gamification?.checkSafe(req.requesterId, ['team']);
@@ -302,8 +394,10 @@ export class EsportService {
     });
     if (!user) throw new NotFoundException('Joueur introuvable.');
     const role = assertRole(data.role);
-    const existing = await this.prisma.esportTeamMember.findUnique({
-      where: { teamId_userId: { teamId, userId: data.userId } },
+    // Only the live roster is looked up: the same player may already hold an
+    // archived membership on a past season, that must not block him (#162).
+    const existing = await this.prisma.esportTeamMember.findFirst({
+      where: liveMembershipWhere({ teamId, userId: data.userId }),
     });
     if (existing)
       throw new ConflictException("Ce joueur est déjà membre de l'équipe.");
@@ -313,6 +407,7 @@ export class EsportService {
       data: {
         teamId,
         userId: data.userId,
+        seasonId: null,
         role,
         isCaptain: !!data.isCaptain,
         isSubstitute: !!data.isSubstitute,
@@ -325,8 +420,8 @@ export class EsportService {
 
   async updateMember(teamId: string, userId: string, data: any, user?: any) {
     await this.assertTeamManager(teamId, user);
-    const member = await this.prisma.esportTeamMember.findUnique({
-      where: { teamId_userId: { teamId, userId } },
+    const member = await this.prisma.esportTeamMember.findFirst({
+      where: liveMembershipWhere({ teamId, userId }),
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
     const isAdmin = hasPermission(user, 'admin.esport');
@@ -335,7 +430,7 @@ export class EsportService {
     // Only the admin can change the captain status.
     if (isAdmin && data.isCaptain === true) await this.clearCaptain(teamId);
     await this.prisma.esportTeamMember.update({
-      where: { teamId_userId: { teamId, userId } },
+      where: { id: member.id },
       data: {
         role,
         isCaptain:
@@ -353,27 +448,25 @@ export class EsportService {
 
   async removeMember(teamId: string, userId: string, user?: any) {
     await this.assertTeamManager(teamId, user);
-    const member = await this.prisma.esportTeamMember.findUnique({
-      where: { teamId_userId: { teamId, userId } },
+    const member = await this.prisma.esportTeamMember.findFirst({
+      where: liveMembershipWhere({ teamId, userId }),
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
     // The captain cannot remove himself (the captain).
     if (!hasPermission(user, 'admin.esport') && member.isCaptain)
       throw new ForbiddenException('Le capitaine ne peut pas être retiré.');
-    await this.prisma.esportTeamMember.delete({
-      where: { teamId_userId: { teamId, userId } },
-    });
+    await this.prisma.esportTeamMember.delete({ where: { id: member.id } });
     return this.getTeam(teamId);
   }
 
   async setCaptain(teamId: string, userId: string) {
-    const member = await this.prisma.esportTeamMember.findUnique({
-      where: { teamId_userId: { teamId, userId } },
+    const member = await this.prisma.esportTeamMember.findFirst({
+      where: liveMembershipWhere({ teamId, userId }),
     });
     if (!member) throw new NotFoundException("Membre introuvable dans l'équipe.");
     await this.clearCaptain(teamId);
     await this.prisma.esportTeamMember.update({
-      where: { teamId_userId: { teamId, userId } },
+      where: { id: member.id },
       data: { isCaptain: true },
     });
     void this.gamification?.checkSafe(userId, ['team']);
@@ -1181,7 +1274,7 @@ export class EsportService {
 
   private async isCaptain(teamId: string, userId: string) {
     const cap = await this.prisma.esportTeamMember.findFirst({
-      where: { teamId, userId, isCaptain: true },
+      where: liveMembershipWhere({ teamId, userId, isCaptain: true }),
     });
     return !!cap;
   }
