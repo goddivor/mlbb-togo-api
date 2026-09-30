@@ -88,17 +88,20 @@ export class RoomsService {
 
   private async loadScope(kind: RoomKind, scopeId: string): Promise<RoomScope | null> {
     if (kind === 'team') {
-      const team = await this.prisma.esportTeam.findUnique({
-        where: { id: scopeId },
-        include: { members: { select: { userId: true } } },
-      });
+      const team = await this.prisma.esportTeam.findUnique({ where: { id: scopeId } });
       if (!team) return null;
+      // Live memberships only: a player who left, or who only appears in an
+      // archived season roster, must not keep access to the room (#162).
+      const members = await this.prisma.esportTeamMember.findMany({
+        where: liveMembershipWhere({ teamId: scopeId }),
+        select: { userId: true },
+      });
       return {
         kind,
         scopeId,
         title: team.name,
         avatar: team.image ?? null,
-        memberIds: uniq(team.members.map((m) => m.userId)),
+        memberIds: uniq(members.map((m) => m.userId)),
       };
     }
     if (kind === 'draft_team') {
