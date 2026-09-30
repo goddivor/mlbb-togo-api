@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, ServiceUnavailableException } 
 import { google } from 'googleapis';
 import { PrismaService } from '../prisma/prisma.service';
 import { encrypt, decrypt, isEncryptionConfigured } from '../common/utils/crypto.util';
+import { clearChannelFeed } from './stream-feed.util';
 import { ENCRYPTION_KEY_MISSING_MESSAGE } from '../common/filters/encryption-key-missing.filter';
 
 const CLIENT_ID = process.env.YOUTUBE_OAUTH_CLIENT_ID;
@@ -73,6 +74,16 @@ export class YoutubeOAuthService {
     const banner =
       channel.brandingSettings?.image?.bannerExternalUrl || '';
 
+    // Connecting a different channel than the previous one: drop the old
+    // connection and whatever it fed.
+    const others = await this.prisma.youtubeAccount.findMany({
+      where: { channelId: { not: channel.id } },
+    });
+    if (others.length > 0) {
+      await this.prisma.youtubeAccount.deleteMany({ where: { channelId: { not: channel.id } } });
+      await clearChannelFeed(this.prisma);
+    }
+
     const existing = await this.prisma.youtubeAccount.findUnique({
       where: { channelId: channel.id },
     });
@@ -137,6 +148,8 @@ export class YoutubeOAuthService {
       /* best effort */
     }
     await this.prisma.youtubeAccount.delete({ where: { id: acc.id } });
+    // Everything this channel fed (season videos, metadata) goes with it.
+    await clearChannelFeed(this.prisma);
     return { connected: false };
   }
 

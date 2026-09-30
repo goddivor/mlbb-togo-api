@@ -340,8 +340,13 @@ export class HeroMetaService {
     }
   }
 
+  /**
+   * Moonton's Academy stats reference heroes that are absent from its public
+   * hero list (unreleased ones, ids > 133). Without a name there is nothing
+   * honest to show, so those entries are dropped rather than printed as `#id`.
+   */
   private toRefs(list: Array<SubHeroStat | { heroId: number; winRate: number | null; increaseWinRate: number; image?: string | null }>, index: Map<number, HeroIndexEntry>): HeroRef[] {
-    return (list ?? []).map((s) => {
+    return (list ?? []).filter((s) => !!index.get(s.heroId)?.name).map((s) => {
       const info = index.get(s.heroId);
       return {
         heroId: s.heroId,
@@ -382,7 +387,7 @@ export class HeroMetaService {
 
     const [rows, index] = await Promise.all([this.rankingRows(rank, days, lang), this.index(lang)]);
     const heroes = rows
-      .filter((r) => r.heroId != null)
+      .filter((r) => r.heroId != null && !!(r.name ?? index.get(r.heroId)?.name))
       .map((r) => {
         const info = index.get(r.heroId!);
         return {
@@ -410,7 +415,11 @@ export class HeroMetaService {
   async getHeroRanking(
     opts: { rank?: string; days?: number; limit?: number; sort?: RankingSort; order?: 'asc' | 'desc'; lang?: string } = {},
   ): Promise<{ total: number; ranking: RankingRow[] }> {
-    const rows = await this.rankingRows(normalizeRank(opts.rank), normalizeDays(opts.days), opts.lang || 'en');
+    const [allRows, index] = await Promise.all([
+      this.rankingRows(normalizeRank(opts.rank), normalizeDays(opts.days), opts.lang || 'en'),
+      this.index(opts.lang || 'en'),
+    ]);
+    const rows = allRows.filter((r) => !!(r.name ?? (r.heroId != null ? index.get(r.heroId)?.name : null)));
     const sort = opts.sort ?? 'winRate';
     const dir = opts.order === 'asc' ? 1 : -1;
     const ranking = [...rows].sort((a, b) => dir * ((a[sort] ?? -1) - (b[sort] ?? -1)));
@@ -480,12 +489,14 @@ export class HeroMetaService {
       source = 'academy';
     }
 
-    const [rows, series, index] = await Promise.all([
+    const [allRows, series, index] = await Promise.all([
       this.rankingRows(rank, days, lang).catch(() => [] as RankingRow[]),
       this.trendSeries(heroId, rank, 30).catch(() => [] as TrendPoint[]),
       this.index(lang),
     ]);
 
+    // Positions only count heroes the public list knows (no unreleased ids).
+    const rows = allRows.filter((r) => !!(r.name ?? (r.heroId != null ? index.get(r.heroId)?.name : null)));
     const position = (field: 'winRate' | 'pickRate' | 'banRate') => {
       const sorted = rows.filter((r) => r[field] != null).sort((a, b) => (b[field] as number) - (a[field] as number));
       const i = sorted.findIndex((r) => r.heroId === heroId);

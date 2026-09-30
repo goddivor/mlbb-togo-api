@@ -221,7 +221,7 @@ const mockTournaments: any[] = [
     prizePool: '500 000 FCFA', maxTeams: 16,
     registeredTeams: ['t1', 't2', 't3'], format: 'Double Elimination',
     rules: 'Standard MLBB tournament rules', banner: null, brackets: [],
-    streamUrl: 'https://twitch.tv/mlbbtogo',
+    streamUrl: null,
   },
   {
     id: 'tour2', name: 'Weekly Scrim Cup',
@@ -240,7 +240,7 @@ const mockTournaments: any[] = [
     prizePool: '2 000 000 FCFA', maxTeams: 32,
     registeredTeams: ['t1', 't2'], format: 'Group Stage + Knockout',
     rules: 'International rules', banner: null, brackets: [],
-    streamUrl: 'https://youtube.com/mlbbafrica',
+    streamUrl: null,
   },
 ];
 
@@ -797,14 +797,7 @@ async function main() {
     });
   }
 
-  // Stream config: a single document holding the connected YouTube channel.
-  // Videos are attached to admin-created seasons (StreamSeasonVideo), not here.
-  const streamExists = await prisma.streamConfig.findFirst();
-  if (!streamExists) {
-    await prisma.streamConfig.create({
-      data: { youtubeChannel: 'eternumesports' },
-    });
-  }
+  // No stream data is seeded: the channel is connected/configured by an admin.
 
   console.log('✅ Seed terminé. Résumé :');
   console.log(`   - Équipes        : ${mockTeams.length}`);
