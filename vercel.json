@@ -19,5 +19,11 @@
       "path": "/api/rewards/cron/daily",
       "schedule": "5 0 * * *"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "dev": false
+    }
+  },
+  "ignoreCommand": "bash -c '[ \"$VERCEL_GIT_COMMIT_REF\" = main ] && exit 1 || exit 0'"
 }
