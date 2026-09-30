@@ -411,7 +411,19 @@ async function main() {
   // ---- Registry (legacy id -> our id) ------------------------------------
   const registryRow = await prisma.appSetting.findUnique({ where: { key: LEGACY_REGISTRY_KEY } });
   const previous: LegacyRegistry = parseRegistry(registryRow?.value);
-  const foreign = foreignMappings(previous);
+  // A legacy player whose account already existed here (he signed up before the
+  // import) is mapped onto that real account on purpose: its row predates the
+  // import and must not be read as a foreign registry.
+  const registryProfileIds = Object.values(previous.players);
+  const adoptedProfileIds = registryProfileIds.length
+    ? (
+        await prisma.user.findMany({
+          where: { id: { in: registryProfileIds }, provider: { not: 'imported' } },
+          select: { id: true },
+        })
+      ).map((u) => u.id)
+    : [];
+  const foreign = foreignMappings(previous, { exempt: adoptedProfileIds });
   if (foreign.length) {
     console.error(
       [
