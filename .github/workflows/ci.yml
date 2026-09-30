@@ -1,0 +1,31 @@
+name: CI
+
+# Replaces the Vercel preview build, which only compiled the branch: a clean
+# install, then lint, build and the whole test suite on every pull request.
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: lint · build · test
+    runs-on: ubuntu-latest
+    env:
+      # Prisma needs a URL to generate its client; nothing connects during CI.
+      DATABASE_URL: mongodb://127.0.0.1:27017/ci?replicaSet=rs0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
