@@ -207,6 +207,9 @@ export class TournamentsService {
             where: { id: { in: teamIds } },
             include: {
               members: {
+                // Live roster only: neither archived season rosters nor
+                // players who left count as participants today (#162).
+                where: liveMembershipWhere(),
                 orderBy: { sort: 'asc' },
                 include: {
                   user: {
