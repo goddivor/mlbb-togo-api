@@ -186,7 +186,11 @@ describe('UsersService.leaderboard', () => {
 
     // Team ids and user ids are both de-duplicated before hitting Prisma.
     expect(prisma.esportTeamMember.findMany).toHaveBeenCalledWith({
-      where: { teamId: { in: ['t1', 't2'] } },
+      // Archived roster of that season, or the live one (#162).
+      where: {
+        teamId: { in: ['t1', 't2'] },
+        AND: [{ OR: [{ seasonId: 's1' }, { seasonId: null }, { seasonId: { isSet: false } }] }],
+      },
       select: { userId: true },
     });
     expect(prisma.user.findMany).toHaveBeenCalledWith({

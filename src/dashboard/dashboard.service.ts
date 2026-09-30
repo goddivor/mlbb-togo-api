@@ -19,6 +19,7 @@ import {
   sortUpcoming,
   startOfDay,
 } from './dashboard.util';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 // Every source is capped so the aggregate stays cheap whatever the account age.
 const SOURCE_TAKE = 10;
@@ -160,7 +161,7 @@ export class DashboardService {
   /** Scheduled esport matches + tournaments of the player's esport teams. */
   private async esportUpcoming(userId: string, now: Date): Promise<UpcomingItem[]> {
     const memberships = await this.prisma.esportTeamMember.findMany({
-      where: { userId },
+      where: liveMembershipWhere({ userId }),
       select: { teamId: true },
     });
     const myTeams = memberships.map((m) => m.teamId);

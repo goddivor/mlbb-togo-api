@@ -7,6 +7,7 @@ import { MISSIONS, MIN_ACCOUNT_AGE_DAYS, dayKey } from './gamification.rules';
 import { AchievementFacts, FactKey, cappedDailyCount } from './achievements.catalog';
 import { parseJson } from '../common/utils/json.util';
 import { legacyAwards, legacySeasons, withoutLegacyMatches } from '../esport/legacy-import.guard';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 const DAY = 86_400_000;
 const MAX_ROWS = 5000;
@@ -101,7 +102,10 @@ export class AchievementFactsLoader {
     });
     run('team', async () => {
       const [captain, requests] = await Promise.all([
-        this.prisma.esportTeamMember.findFirst({ where: { userId, isCaptain: true }, select: { id: true } }),
+        this.prisma.esportTeamMember.findFirst({
+          where: liveMembershipWhere({ userId, isCaptain: true }),
+          select: { id: true },
+        }),
         this.prisma.teamRequest.findMany({ where: { requesterId: userId }, select: { createdTeamId: true } }),
       ]);
       out.team = { captain: !!captain, founder: requests.some((r) => !!r.createdTeamId) };

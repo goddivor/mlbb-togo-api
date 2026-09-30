@@ -4,6 +4,7 @@ import { EsportSeasonsService } from '../esport/esport-seasons.service';
 import { OTHER_CITY_ID, OTHER_CITY_NAME, TOGO_CITIES, TOGO_REGIONS } from './geo.constants';
 import { MapAggregate, SeasonWindow, aggregateMap } from './geo.logic';
 import { PUBLIC_USER_WHERE } from '../users/public-user.filter';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 @Injectable()
 export class GeoService {
@@ -49,7 +50,7 @@ export class GeoService {
       }),
       this.prisma.esportTeam.findMany({
         where: { city: { not: null } },
-        select: { id: true, name: true, image: true, type: true, city: true, _count: { select: { members: true } } },
+        select: { id: true, name: true, image: true, type: true, city: true, _count: { select: { members: { where: liveMembershipWhere() } } } },
         orderBy: { sort: 'asc' },
       }),
       this.prisma.tournament.findMany({

@@ -171,11 +171,19 @@ export function objectIdTime(id: string): number {
  * cannot have created. Empty when the registry carries no `firstRunAt` (written
  * before the fingerprint existed).
  */
-export function foreignMappings(registry: LegacyRegistry, toleranceMs = 60_000): string[] {
+export function foreignMappings(
+  registry: LegacyRegistry,
+  options: { exempt?: Iterable<string>; toleranceMs?: number } = {},
+): string[] {
   if (!registry.firstRunAt) return [];
+  const toleranceMs = options.toleranceMs ?? 60_000;
+  // Rows the import deliberately reused instead of creating (a legacy player
+  // whose account already existed here) are older by design: never flag them.
+  const exempt = new Set(options.exempt ?? []);
   const out: string[] = [];
   for (const name of REGISTRY_MAPS) {
     for (const [legacyId, id] of Object.entries(registry[name])) {
+      if (exempt.has(id)) continue;
       if (objectIdTime(id) < registry.firstRunAt - toleranceMs) out.push(`${name}[${legacyId}] -> ${id}`);
     }
   }

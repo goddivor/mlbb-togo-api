@@ -27,6 +27,7 @@ import {
   TournamentResultKind,
   XpCorrectionDto,
 } from './dto/rewards.dto';
+import { liveMembershipWhere } from '../esport/rosters.logic';
 
 const DAY = 86_400_000;
 const OBJECT_ID = /^[a-f\d]{24}$/i;
@@ -494,7 +495,10 @@ export class RewardsAdminService {
           select: { id: true },
         }),
         ids.length
-          ? this.prisma.esportTeamMember.findMany({ where: { teamId: { in: ids } }, select: { userId: true } })
+          ? this.prisma.esportTeamMember.findMany({
+              where: liveMembershipWhere({ teamId: { in: ids } }),
+              select: { userId: true },
+            })
           : [],
       ]);
       const userIds = new Set([...users.map((u) => u.id), ...members.map((m) => m.userId)]);

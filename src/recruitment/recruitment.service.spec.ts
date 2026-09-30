@@ -119,6 +119,7 @@ describe('RecruitmentService', () => {
         ),
         findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
+        update: jest.fn(),
       },
       user: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -339,12 +340,34 @@ describe('RecruitmentService', () => {
       });
 
       expect(prisma.esportTeamMember.create).toHaveBeenCalledWith({
-        data: { teamId: 'team-1', userId: 'u-candidate', role: 'jungle' },
+        // Live membership: `seasonId` and `leftAt` are written as explicit
+        // nulls so the Mongo filters match them (#162).
+        data: { teamId: 'team-1', userId: 'u-candidate', role: 'jungle', seasonId: null, leftAt: null },
       });
     });
 
+    it('reopens the closed live row of a player who left instead of creating a duplicate', async () => {
+      // Staff account (no captain lookup): no open live row, but a row closed
+      // by a departure (soft leave).
+      prisma.esportTeamMember.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'm-left' });
+
+      await service.updateApplicationStatus('app-1', ADMIN, {
+        status: 'accepted',
+      });
+
+      expect(prisma.esportTeamMember.create).not.toHaveBeenCalled();
+      expect(prisma.esportTeamMember.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'm-left' },
+          data: expect.objectContaining({ leftAt: null, isCaptain: false, role: 'jungle' }),
+        }),
+      );
+    });
+
     it('does not duplicate an existing roster entry', async () => {
-      prisma.esportTeamMember.findUnique.mockResolvedValue({ id: 'm-9' });
+      prisma.esportTeamMember.findFirst.mockResolvedValue({ id: 'm-9' });
 
       await service.updateApplicationStatus('app-1', CAPTAIN, {
         status: 'accepted',

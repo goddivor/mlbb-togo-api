@@ -18,6 +18,7 @@
     "rbac:migrate": "ts-node prisma/migrate-rbac.ts",
     "seed": "ts-node prisma/seed.ts",
     "import:legacy": "ts-node prisma/import-legacy.ts",
+    "backfill:rosters": "ts-node prisma/backfill-season-rosters.ts",
     "db:reset": "prisma migrate reset --force",
     "test": "jest",
     "test:watch": "jest --watch",

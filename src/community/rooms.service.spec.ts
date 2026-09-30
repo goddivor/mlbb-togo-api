@@ -86,8 +86,8 @@ describe('RoomsService', () => {
         id: TEAM,
         name: 'Lions',
         image: 'lions.png',
-        members: [{ userId: 'u1' }, { userId: 'u2' }, { userId: 'u1' }],
       });
+      prisma.esportTeamMember.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }, { userId: 'u1' }]);
       const scope = await service.resolveScope('team', TEAM);
       expect(scope).toEqual({
         kind: 'team',
@@ -95,6 +95,18 @@ describe('RoomsService', () => {
         title: 'Lions',
         avatar: 'lions.png',
         memberIds: ['u1', 'u2'],
+      });
+      // Live memberships only: a player who left or an archived season roster
+      // must not keep access to the room (#162).
+      expect(prisma.esportTeamMember.findMany).toHaveBeenCalledWith({
+        where: {
+          teamId: TEAM,
+          AND: [
+            { OR: [{ seasonId: null }, { seasonId: { isSet: false } }] },
+            { OR: [{ leftAt: null }, { leftAt: { isSet: false } }] },
+          ],
+        },
+        select: { userId: true },
       });
     });
 
@@ -108,7 +120,14 @@ describe('RoomsService', () => {
       prisma.esportTeamMember.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u3' }]);
       const scope = await service.resolveScope('tournament', TOURNAMENT);
       expect(prisma.esportTeamMember.findMany).toHaveBeenCalledWith({
-        where: { teamId: { in: [TEAM, 'other'] } },
+        // Live memberships only, not the archived season rosters (#162).
+        where: {
+          teamId: { in: [TEAM, 'other'] },
+          AND: [
+            { OR: [{ seasonId: null }, { seasonId: { isSet: false } }] },
+            { OR: [{ leftAt: null }, { leftAt: { isSet: false } }] },
+          ],
+        },
         select: { userId: true },
       });
       expect(scope?.memberIds).toEqual(['u1', 'u3']);
@@ -154,8 +173,8 @@ describe('RoomsService', () => {
         id: TEAM,
         name: 'Lions',
         image: null,
-        members: [{ userId: 'u1' }],
       });
+      prisma.esportTeamMember.findMany.mockResolvedValue([{ userId: 'u1' }]);
     });
 
     it('refuses a non-member', async () => {
@@ -227,8 +246,8 @@ describe('RoomsService', () => {
         id: TEAM,
         name: 'Lions',
         image: null,
-        members: [{ userId: 'u1' }, { userId: 'u2' }, { userId: 'u3' }],
       });
+      prisma.esportTeamMember.findMany.mockResolvedValue([{ userId: 'u1' }, { userId: 'u2' }, { userId: 'u3' }]);
       prisma.messageThread.findFirst.mockResolvedValue({ id: THREAD, title: 'Lions', avatar: null });
       prisma.user.findMany.mockResolvedValue([
         user('u1', 'alpha'),
@@ -285,8 +304,8 @@ describe('RoomsService', () => {
         id: TEAM,
         name: 'Lions',
         image: null,
-        members: [{ userId: 'u1' }],
       });
+      prisma.esportTeamMember.findMany.mockResolvedValue([{ userId: 'u1' }]);
       prisma.messageThread.findFirst.mockResolvedValue({ id: THREAD, title: 'Lions', avatar: null });
     });
 
@@ -299,7 +318,9 @@ describe('RoomsService', () => {
     });
 
     it('listRooms counts foreign messages newer than the cursor', async () => {
-      prisma.esportTeamMember.findMany.mockResolvedValue([{ teamId: TEAM }]);
+      prisma.esportTeamMember.findMany.mockImplementation(({ where }: any) =>
+        Promise.resolve(where.userId ? [{ teamId: TEAM }] : [{ userId: 'u1' }]),
+      );
       prisma.threadRead.findUnique.mockResolvedValue({ lastReadAt: new Date(2000) });
       prisma.message.count.mockResolvedValue(4);
       prisma.message.findFirst.mockResolvedValue({
@@ -319,7 +340,9 @@ describe('RoomsService', () => {
     });
 
     it('listRooms counts everything when the user never opened the room', async () => {
-      prisma.esportTeamMember.findMany.mockResolvedValue([{ teamId: TEAM }]);
+      prisma.esportTeamMember.findMany.mockImplementation(({ where }: any) =>
+        Promise.resolve(where.userId ? [{ teamId: TEAM }] : [{ userId: 'u1' }]),
+      );
       await service.listRooms('u1');
       expect(prisma.message.count).toHaveBeenCalledWith({
         where: { threadId: THREAD, senderId: { not: 'u1' } },
@@ -336,7 +359,6 @@ describe('RoomsService', () => {
         id: TEAM,
         name: 'Lions',
         image: null,
-        members: [{ userId: 'u1' }],
       });
       prisma.tournament.findMany.mockResolvedValue([
         { id: TOURNAMENT, registeredTeams: JSON.stringify([{ id: TEAM }]) },
@@ -385,8 +407,8 @@ describe('RoomsService', () => {
         id: TEAM,
         name: 'Lions',
         image: null,
-        members: [{ userId: 'u2' }],
       });
+      prisma.esportTeamMember.findMany.mockResolvedValue([{ userId: 'u2' }]);
       expect(await service.canAccessThread('u1', THREAD)).toBe(false);
       expect(await service.canAccessThread('u1', 'bad')).toBe(false);
     });

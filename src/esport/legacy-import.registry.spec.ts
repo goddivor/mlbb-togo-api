@@ -95,6 +95,15 @@ describe('registry fingerprint', () => {
     expect(foreignMappings(registry)).toEqual([`matches[4] -> ${idAt(1_600_000_000_000)}`]);
   });
 
+  it('accepts an older row the import deliberately reused', () => {
+    const registry = emptyRegistry();
+    registry.firstRunAt = 1_700_000_000_000;
+    const account = idAt(1_600_000_000_000);
+    registry.players['1'] = account;
+    expect(foreignMappings(registry)).toEqual([`players[1] -> ${account}`]);
+    expect(foreignMappings(registry, { exempt: [account] })).toEqual([]);
+  });
+
   it('checks nothing on a registry without fingerprint', () => {
     const registry = emptyRegistry();
     registry.matches['4'] = idAt(1_000_000_000_000);

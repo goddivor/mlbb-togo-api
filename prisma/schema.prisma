@@ -308,7 +308,7 @@ model BattleSpell {
   updatedAt   DateTime @updatedAt
 }
 
-// ---- Hero Builds (recommended by admin per hero) ----
+// ---- Hero Builds: legacy admin-curated builds, no longer read or written (#167) ----
 model HeroBuild {
   id            String   @id @default(auto()) @map("_id") @db.ObjectId
   heroId        String   @db.ObjectId
@@ -342,7 +342,6 @@ model EmblemTalent {
 }
 
 // ---- Community builds (#129): hero builds created by players ----
-// Admin-curated builds stay in HeroBuild ("recommended by MLBB Togo").
 model CommunityBuild {
   id            String    @id @default(auto()) @map("_id") @db.ObjectId
   authorId      String    @db.ObjectId
@@ -506,6 +505,22 @@ model EsportTeam {
   updatedAt    DateTime           @updatedAt
 }
 
+// A membership is a STINT, not a permanent link (#162): a player may play for
+// several teams over time (community teams freely, esport teams season after
+// season, or as a loaned substitute during a season).
+//
+// `seasonId` null keeps the historical meaning: a membership not tied to a
+// season, i.e. the live roster the admin and the captains manage today (and the
+// only kind community teams ever have). A row carrying a `seasonId` is the
+// roster of THAT season (written by the legacy import / the backfill), which is
+// what lets a team hold five past rosters and no current member.
+//
+// The unique key is widened from `[teamId, userId]` to `[teamId, userId,
+// seasonId]`: the old constraint forbade the same player twice in a team, so a
+// player coming back for a later season could not be recorded. Widening keeps
+// exactly the same guarantee on the untagged rows (one live membership per
+// player and per team, existing rows are unaffected since their seasonId is
+// null) while allowing one row per season on top of it.
 model EsportTeamMember {
   id           String     @id @default(auto()) @map("_id") @db.ObjectId
   teamId       String     @db.ObjectId
@@ -516,11 +531,15 @@ model EsportTeamMember {
   isCaptain    Boolean    @default(false)
   isSubstitute Boolean    @default(false)
   sort         Int        @default(0)
+  // Season this stint belongs to. Null = live membership (see above).
+  seasonId     String?    @db.ObjectId
   joinedAt     DateTime   @default(now())
+  // Date the player left the team. Null = still in the team.
+  leftAt       DateTime?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  @@unique([teamId, userId])
+  @@unique([teamId, userId, seasonId])
 }
 
 // Partner / sponsor. `tier` ranks the partnership (title | gold | silver |
