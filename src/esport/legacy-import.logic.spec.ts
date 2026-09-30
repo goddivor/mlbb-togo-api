@@ -16,6 +16,8 @@ import {
   mapSeasons,
   normalizeKey,
   podiumFromBracket,
+  postLinkFields,
+  safeHttpUrl,
   postImages,
   resolveHero,
   resolveHeroTable,
@@ -440,5 +442,30 @@ describe('owner alias table', () => {
     const all = PLAYER_ALIAS_GROUPS.flat().map((n) => n.toLowerCase());
     expect(new Set(all).size).toBe(all.length);
     expect(PLAYER_ALIAS_GROUPS).toHaveLength(5);
+  });
+});
+
+describe('postLinkFields', () => {
+  it('keeps the invite link, the platform and the embed of a communication', () => {
+    expect(
+      postLinkFields({ link_url: 'https://discord.gg/E3yzCt7QhN', platform: '', embed_url: '' }),
+    ).toEqual({ linkUrl: 'https://discord.gg/E3yzCt7QhN', linkPlatform: null, embedUrl: null });
+    expect(
+      postLinkFields({
+        link_url: '',
+        platform: ' Youtube ',
+        embed_url: 'https://www.youtube.com/watch?v=a3ugOyaVVyI',
+      }),
+    ).toEqual({
+      linkUrl: null,
+      linkPlatform: 'Youtube',
+      embedUrl: 'https://www.youtube.com/watch?v=a3ugOyaVVyI',
+    });
+  });
+
+  it('drops empty and non-http(s) values', () => {
+    expect(postLinkFields({})).toEqual({ linkUrl: null, linkPlatform: null, embedUrl: null });
+    expect(safeHttpUrl('javascript:alert(1)')).toBeNull();
+    expect(safeHttpUrl('  https://chat.whatsapp.com/x?mode=wwc ')).toBe('https://chat.whatsapp.com/x?mode=wwc');
   });
 });

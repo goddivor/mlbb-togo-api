@@ -9,7 +9,15 @@ function fixture(name: string): any[] {
   return raw.response.data.records;
 }
 
-const INDEX = new Map<number, any>([
+// Like Moonton's public hero list: every released id (1..133) is known, the
+// named ones below carry their real data, any other id is an unreleased hero.
+class HeroList extends Map<number, any> {
+  get(id: number) {
+    return super.get(id) ?? (id >= 1 && id <= 133 ? { name: `Hero ${id}`, image: null, roles: [], lanes: [] } : undefined);
+  }
+}
+
+const INDEX = new HeroList([
   [14, { name: 'Rafaela', image: 'raf.png', roles: ['support'], lanes: ['roam'] }],
   [132, { name: 'Marcel', image: 'mar.png', roles: ['tank'], lanes: ['roam'] }],
   [19, { name: 'Zilong', image: 'zil.png', roles: ['fighter'], lanes: ['exp'] }],
@@ -54,6 +62,26 @@ describe('HeroMetaService', () => {
     const fighters = await service.getRanking({ rank: 'mythic', days: 30, role: 'fighter' });
     expect(fighters.heroes.map((h) => h.heroId)).toEqual([19, 27]);
     expect(gms.callSource).toHaveBeenCalledTimes(1); // one cached dataset for every filter
+  });
+
+  it('drops unreleased heroes (ids missing from the public hero list) instead of printing an id', async () => {
+    const ghost = (id: number) => ({ data: { main_heroid: id, main_hero_win_rate: 0.6, main_hero_appearance_rate: 0.1, main_hero_ban_rate: 0.1 } });
+    const { service } = make((app, source, body) => {
+      if (source === '2777391') {
+        return [
+          { data: { sub_hero: [{ heroid: 298, hero_win_rate: 0.5, increase_win_rate: 0.03, hero_index: 1 }, { heroid: 93, hero_win_rate: 0.5, increase_win_rate: 0.01, hero_index: 2 }] } },
+        ];
+      }
+      return [...fixture('heroes-rank'), ghost(294), ghost(295), ghost(298)];
+    });
+    const ranking = await service.getRanking({ rank: 'mythic', days: 30 });
+    expect(ranking.total).toBe(5);
+    expect(ranking.heroes.map((h) => h.heroId)).not.toEqual(expect.arrayContaining([294, 295, 298]));
+    const legacy = await service.getHeroRanking({ rank: 'mythic', days: 30 });
+    expect(legacy.total).toBe(5);
+    const m = await service.getMatchups(18, { rank: 'all' });
+    expect(m.counters.every((h) => h.name)).toBe(true);
+    expect(m.counters.map((h) => h.heroId)).not.toContain(298);
   });
 
   it('normalizes unknown rank/days to all/1 day', async () => {

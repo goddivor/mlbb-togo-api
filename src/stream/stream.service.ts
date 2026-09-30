@@ -1,8 +1,16 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseJson, toJson } from '../common/utils/json.util';
 import { UpdateStreamConfigDto } from './dto/update-stream-config.dto';
 import { YoutubeOAuthService } from './youtube-oauth.service';
+import { clearChannelFeed, sameChannel } from './stream-feed.util';
+import { orderPublicVideos, uploadsPlaylistId } from './stream-videos.logic';
 
 export interface StreamVideo {
   id: string;
@@ -22,10 +30,9 @@ interface ChannelMeta {
 
 const YT_BASE = 'https://www.googleapis.com/youtube/v3';
 
-// Default channel used to bootstrap the singleton config on first read.
-// The admin connects the real channel afterwards; videos are attached to
-// admin-created seasons (see StreamSeasonVideo), not seeded here.
-const DEFAULT_CHANNEL = 'eternumesports';
+// No channel is invented: the admin connects or configures the real one.
+// Videos are attached to admin-created seasons (see StreamSeasonVideo).
+const DEFAULT_CHANNEL = '';
 
 @Injectable()
 export class StreamService {
@@ -96,7 +103,8 @@ export class StreamService {
     if (dto.youtubeChannel !== undefined) {
       const normalized = this.normalizeChannel(dto.youtubeChannel);
       data.youtubeChannel = normalized;
-      channelChanged = normalized !== current.youtubeChannel;
+      // First configuration (empty previous handle) feeds nothing, so nothing to wipe.
+      channelChanged = !!current.youtubeChannel && !sameChannel(normalized, current.youtubeChannel);
     }
     if (dto.liveTitle !== undefined) data.liveTitle = dto.liveTitle.trim();
     if (dto.liveDesc !== undefined) data.liveDesc = dto.liveDesc.trim();
@@ -117,16 +125,25 @@ export class StreamService {
       data.videos = toJson(cleaned);
     }
 
+    // Changing the channel wipes everything the previous one fed (selected
+    // season videos, featured video, cached channel metadata).
+    if (channelChanged) {
+      await clearChannelFeed(this.prisma);
+      delete data.s1MainVideoId;
+      delete data.videos;
+      this.liveCache = null;
+    }
+
     // When the channel changes (or has no metadata yet), fetch banner/avatar.
     const handle = data.youtubeChannel ?? current.youtubeChannel;
-    if (channelChanged || !current.channelId) {
+    if (handle && (channelChanged || !current.channelId || !sameChannel(handle, current.youtubeChannel))) {
       const meta = await this.fetchChannelMeta(handle);
       if (meta) {
         data.channelId = meta.channelId;
         data.channelTitle = meta.channelTitle;
         data.channelAvatar = meta.channelAvatar;
         data.channelBanner = meta.channelBanner;
-        this.liveCache = null; // channel changed → invalidate live cache
+        this.liveCache = null;
       }
     }
 
@@ -246,6 +263,112 @@ export class StreamService {
     }
   }
 
+  /* ---------------- Channel videos (admin picker) ---------------- */
+
+  // Where the admin picker gets its videos from, and why it may be unavailable.
+  async getSourceStatus() {
+    const config = await this.getOrCreate();
+    const account = await this.youtube.getAccount();
+    return {
+      oauthConnected: !!account,
+      apiKeyConfigured: !!this.apiKey,
+      configuredChannel: config.youtubeChannel || '',
+      source: account ? 'oauth' : this.apiKey && config.youtubeChannel ? 'apikey' : null,
+    };
+  }
+
+  // List the channel's uploads. Uses the OAuth connection when there is one
+  // (private/unlisted included), else the API key on the configured channel
+  // (public videos only). Errors are surfaced, never swallowed into an empty list.
+  async listChannelVideos(pageToken?: string) {
+    if (await this.youtube.hasAccount()) {
+      try {
+        return { source: 'oauth', ...(await this.youtube.listVideos(pageToken)) };
+      } catch (e) {
+        if (e instanceof BadRequestException) throw e;
+        this.logger.warn(`OAuth video listing failed: ${(e as Error).message}`);
+        throw new BadGatewayException(
+          `YouTube a refusé la requête : ${(e as Error).message}. Reconnectez la chaîne si le problème persiste.`,
+        );
+      }
+    }
+
+    if (!this.apiKey) {
+      throw new BadRequestException(
+        'Aucune chaîne connectée et aucune clé YouTube (YOUTUBE_API_KEY) configurée.',
+      );
+    }
+    const config = await this.getOrCreate();
+    if (!config.youtubeChannel) {
+      throw new BadRequestException('Aucune chaîne YouTube configurée : renseignez-la ou connectez-la.');
+    }
+
+    let channelId = config.channelId;
+    if (!channelId) {
+      const meta = await this.fetchChannelMeta(config.youtubeChannel);
+      if (!meta?.channelId) {
+        throw new BadRequestException(`Chaîne YouTube introuvable : @${config.youtubeChannel}.`);
+      }
+      channelId = meta.channelId;
+      await this.prisma.streamConfig.update({
+        where: { id: config.id },
+        data: {
+          channelId: meta.channelId,
+          channelTitle: meta.channelTitle,
+          channelAvatar: meta.channelAvatar,
+          channelBanner: meta.channelBanner,
+        },
+      });
+    }
+    const uploads = uploadsPlaylistId(channelId);
+    if (!uploads) throw new BadRequestException('Identifiant de chaîne YouTube invalide.');
+
+    const playlist = await this.ytGet('playlistItems', {
+      part: 'contentDetails',
+      playlistId: uploads,
+      maxResults: '50',
+      ...(pageToken ? { pageToken } : {}),
+    });
+    const ids: string[] = (playlist.items || [])
+      .map((i: any) => i.contentDetails?.videoId)
+      .filter((v: unknown): v is string => !!v);
+    const nextPageToken = playlist.nextPageToken || null;
+    const total = playlist.pageInfo?.totalResults || 0;
+    if (ids.length === 0) return { source: 'apikey', videos: [], nextPageToken, total };
+
+    const details = await this.ytGet('videos', {
+      part: 'snippet,status,statistics,contentDetails',
+      id: ids.join(','),
+    });
+    return {
+      source: 'apikey',
+      videos: orderPublicVideos(ids, details.items || []),
+      nextPageToken,
+      total,
+    };
+  }
+
+  // GET a YouTube Data API endpoint with the API key; failures become a 502
+  // carrying YouTube's own reason (quota, invalid key, ...).
+  private async ytGet(path: string, params: Record<string, string>): Promise<any> {
+    const url = new URL(`${YT_BASE}/${path}`);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+    url.searchParams.set('key', this.apiKey);
+    let res: Response;
+    try {
+      res = await fetch(url.toString());
+    } catch (e) {
+      throw new BadGatewayException(`YouTube est injoignable : ${(e as Error).message}`);
+    }
+    const json: any = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const reason = json?.error?.message || `HTTP ${res.status}`;
+      this.logger.warn(`YouTube ${path} failed: ${reason}`);
+      throw new BadGatewayException(`YouTube a refusé la requête : ${reason}`);
+    }
+    return json;
+  }
+
   /* ---------------- Seasons ↔ videos ---------------- */
 
   // Public: seasons (created by the admin in the esport module) that have at
@@ -316,9 +439,32 @@ export class StreamService {
       }))
       .filter((v) => v.videoId);
 
-    await this.prisma.streamSeasonVideo.deleteMany({ where: { seasonId } });
-    if (cleaned.length > 0) {
-      await this.prisma.streamSeasonVideo.createMany({ data: cleaned });
+    // Update rows in place (matched by YouTube id) instead of recreating them:
+    // a row keeps its id, which is how the legacy registry recognises the
+    // videos it imported. Only the rows that left the selection are deleted.
+    const existing = await this.prisma.streamSeasonVideo.findMany({ where: { seasonId } });
+    const pool = new Map<string, any[]>();
+    for (const row of existing) pool.set(row.videoId, [...(pool.get(row.videoId) ?? []), row]);
+    const kept = new Set<string>();
+    const created: typeof cleaned = [];
+    for (const v of cleaned) {
+      const row = pool.get(v.videoId)?.shift();
+      if (!row) {
+        created.push(v);
+        continue;
+      }
+      kept.add(row.id);
+      await this.prisma.streamSeasonVideo.update({
+        where: { id: row.id },
+        data: { title: v.title, thumbnail: v.thumbnail, duration: v.duration, date: v.date, sort: v.sort },
+      });
+    }
+    const removed = existing.filter((r) => !kept.has(r.id)).map((r) => r.id);
+    if (removed.length > 0) {
+      await this.prisma.streamSeasonVideo.deleteMany({ where: { id: { in: removed } } });
+    }
+    if (created.length > 0) {
+      await this.prisma.streamSeasonVideo.createMany({ data: created });
     }
     return this.getSeasonVideos(seasonId);
   }

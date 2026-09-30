@@ -120,8 +120,11 @@ export class StreamController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('admin.stream')
   @Get('youtube/status')
-  status() {
-    return this.youtube.getStatus();
+  async status() {
+    return {
+      ...(await this.youtube.getStatus()),
+      ...(await this.streamService.getSourceStatus()),
+    };
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -135,7 +138,7 @@ export class StreamController {
   @RequirePermissions('admin.stream')
   @Get('youtube/videos')
   videos(@Query('pageToken') pageToken?: string) {
-    return this.youtube.listVideos(pageToken);
+    return this.streamService.listChannelVideos(pageToken);
   }
 
   /* ---------------- Admin: live control ---------------- */
